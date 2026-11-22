@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 from field_core.authn import install as install_authn
 from field_core.http_errors import install_validation_handler
+from field_core.startup import warn_open
 from field_core.buildinfo import build_sha
 from fastapi.responses import PlainTextResponse
 
 from field_core.clients import ManifestResolver, RegistryClient
 from incident_replay import __version__
 from incident_replay.engine import (
+    LedgerBusyError,
     LedgerQueryClient,
     PostMortem,
     ReplayEngine,
@@ -29,6 +32,11 @@ def create_app(engine: ReplayEngine | None = None) -> FastAPI:
     )
     install_authn(app)
     install_validation_handler(app)
+    @app.exception_handler(LedgerBusyError)
+    async def _ledger_busy(_request: Request, exc: LedgerBusyError) -> JSONResponse:
+        # The ledger kept refusing inside the replay's retry budget: say so, and when to ask again.
+        return JSONResponse({"detail": str(exc)}, status_code=503, headers={"Retry-After": str(exc.retry_after)})
+
     app.state.engine = engine or ReplayEngine(
         ledger=LedgerQueryClient(),
         registry=RegistryClient(),
@@ -49,4 +57,5 @@ def create_app(engine: ReplayEngine | None = None) -> FastAPI:
     def replay_markdown(req: ReplayRequest) -> str:
         return render_markdown(app.state.engine.replay(req))
 
+    warn_open("incident-replay")
     return app

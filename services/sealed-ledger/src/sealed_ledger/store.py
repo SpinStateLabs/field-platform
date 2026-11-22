@@ -64,6 +64,7 @@ from field_core.ledger import (
     GENESIS_HASH,
     ChainVerification,
     LedgerEvent,
+    ReadOnlyLedgerEvent,
     compute_event_hash,
     make_event,
     verify_chain,
@@ -114,6 +115,8 @@ JOURNAL_FORMAT = "field-ledger-segments/1"
 SIDECAR_FORMAT = "field-ledger-segment-sidecar/1"
 ROTATION_EVENT_TYPE = "ledger.segment.rotated"
 RETENTION_EVENT_TYPE = "ledger.retention.applied"
+#: `retention apply --days` ceiling (100 years). Above timedelta's range `now - timedelta(days=N)` raises OverflowError.
+MAX_RETENTION_DAYS = 36500
 HOLD_FILE = "legal_hold.json"
 CRASH_ENV = "FIELD_LEDGER_CRASH_AT"
 READ_CONCURRENCY_ENV = "FIELD_LEDGER_READ_CONCURRENCY"
@@ -297,7 +300,7 @@ class CallerKeyring:
 
     def path_for(self, caller_id: str) -> Path | None:
         """The keyring file for an id, or None for an id outside the name rule."""
-        if not isinstance(caller_id, str) or not _CALLER_ID.match(caller_id):
+        if not isinstance(caller_id, str) or not _CALLER_ID.fullmatch(caller_id):
             return None
         return self.directory / f"{caller_id}.pub.pem"
 
@@ -1046,11 +1049,15 @@ class Snapshot:
     """One consistent read of every live segment (or only the open one)."""
 
     def __init__(self, layout: Layout, datas: list[bytes | None], attempts: int,
-                 parse: bool = True, tolerant: bool = False):
+                 parse: bool = True, tolerant: bool = False,
+                 parsed: Callable[[Path, bytes, bool], tuple[list[LedgerEvent],
+                                                              tuple[int, str] | None]] | None = None):
         """``tolerant``: a line that does not parse keeps the events before it
         and is recorded in ``bad`` (segment number -> local index, reason)
         instead of raising — for verification and recovery only; every other
-        reader still raises on it."""
+        reader still raises on it. ``parsed`` (T7): the store's cached parser,
+        ``(path, bytes, tolerant) -> (events, bad)``; it returns exactly what
+        ``_parse_events`` / ``_parse_events_located`` return for those bytes."""
         self.layout = layout
         self.attempts = attempts
         self.raw = datas
@@ -1060,6 +1067,11 @@ class Snapshot:
             for seg, data in zip(layout.segs, datas):
                 if data is None:
                     self.segments.append((seg, None))
+                elif parsed is not None:
+                    events, bad = parsed(seg.path, data, tolerant)
+                    if bad is not None:
+                        self.bad[seg.number] = bad
+                    self.segments.append((seg, events))
                 elif tolerant:
                     events, bad = _parse_events_located(data)
                     if bad is not None:
@@ -1479,6 +1491,13 @@ def read_concurrency() -> int:
         return 1
 
 
+#: T7: the most raw segment bytes one store keeps parsed between reads (the parsed events cost about 4x the
+#: raw bytes; measured 29 MB for 7.3 MB / 11.2k events). 32 MiB of raw is about 50k events at ~650 B and
+#: at most ~160 MB resident (raw + parsed). A ledger whose live segments exceed it parses on every read,
+#: exactly as before T7.
+PARSE_CACHE_MAX_BYTES = 32 * 1024 * 1024
+
+
 def _read_gate() -> threading.BoundedSemaphore | None:
     n = read_concurrency()
     return threading.BoundedSemaphore(n) if n > 0 else None
@@ -1513,6 +1532,15 @@ class LedgerStore:
         # the disk key this store's own in-flight append will produce: /health
         # must not mistake it for another process's write (C2 J16)
         self._inflight_key: tuple | None = None
+        # T7: the last parse of each segment path, keyed by its exact bytes: path -> (raw, events). A read
+        # whose bytes are equal reuses the events; one whose bytes extend them at a line boundary (an
+        # append) parses only the new lines. Never keyed on stat: a same-size in-place edit is a miss.
+        # The third item is the read-only twin list handed to callers (``_parsed_ro``): built lazily, once
+        # per event, and only for events a caller actually asked for; ``events`` itself is never handed out.
+        self._parse_cache: dict[Path, tuple[bytes, tuple[LedgerEvent, ...], list[ReadOnlyLedgerEvent]]] = {}
+        # T7: the last verification and the exact read it came from: (layout, raw bytes, result).
+        self._verify_cache: tuple[Layout, list[bytes | None], ChainVerification] | None = None
+        self._cache_lock = threading.Lock()
         with self._lock:
             self._recover_locked()  # read-only: opening a store never writes
 
@@ -1589,7 +1617,8 @@ class LedgerStore:
         return js
 
     def _take_snapshot(self, parse: bool = True, open_only: bool = False,
-                       tolerant: bool = False) -> Snapshot:
+                       tolerant: bool = False, readonly: bool = False,
+                       tail_bytes: int | None = None) -> Snapshot:
         """The reader protocol (lock-free). Consistent because:
 
         1. the journal is append-only, so equal bytes before and after mean no
@@ -1602,6 +1631,11 @@ class LedgerStore:
            FILE_SHARE_DELETE on Windows);
         4. committed closed files never change; archival journals first;
         5. appends only extend ``P``; a half-copied last line is re-read.
+
+        ``tail_bytes`` (B-GL-events-limit-cheap; with ``open_only``): read only the last ``tail_bytes`` of the open
+        segment, starting at its first complete line; ``snapshot.tail_cut`` says whether anything before the window was
+        left unread. Everything else of the protocol, the torn-last-line check included, is unchanged: it looks only at
+        the END of the file, which the window always contains.
         """
         deadline = time.monotonic() + self.SNAPSHOT_TIMEOUT_S
         delay = 0.0005
@@ -1637,7 +1671,19 @@ class LedgerStore:
                 after = [exists_strict(p) for p in layout.watch]
                 if raw2 != raw1 or after != before:
                     raise _Retry("layout changed while opening")
-                data_open = handle.read() if handle is not None else None
+                tail_cut = False
+                if handle is not None and tail_bytes is not None:
+                    size = os.fstat(handle.fileno()).st_size
+                    if size > tail_bytes:
+                        handle.seek(size - tail_bytes)
+                        data_open = handle.read()
+                        first_newline = data_open.find(b"\n")
+                        data_open = data_open[first_newline + 1:] if first_newline >= 0 else b""
+                        tail_cut = True
+                    else:
+                        data_open = handle.read()
+                else:
+                    data_open = handle.read() if handle is not None else None
                 if data_open and not data_open.endswith(b"\n"):
                     # Linux extends i_size page by page: an append may be half
                     # copied. Believe a torn last line only after >= 3 identical
@@ -1662,7 +1708,10 @@ class LedgerStore:
                         if data is None and read_shared(journal) != raw1:
                             raise _Retry("closed segment moved and the journal changed")
                         datas[k] = data
-                return Snapshot(layout, datas, attempts, parse=parse, tolerant=tolerant)
+                snap = Snapshot(layout, datas, attempts, parse=parse, tolerant=tolerant,
+                                parsed=self._parsed_ro if readonly else self._parsed)
+                snap.tail_cut = tail_cut
+                return snap
             except (_Retry, PermissionError) as exc:
                 if isinstance(exc, PermissionError) and not _transient_refusal(exc):
                     denied = exc
@@ -1687,10 +1736,121 @@ class LedgerStore:
                 if handle is not None:
                     handle.close()
 
+    # ------------------------------------------------------- T7 parse cache
+
+    def _parsed(self, path: Path, data: bytes, tolerant: bool
+                ) -> tuple[list[LedgerEvent], tuple[int, str] | None]:
+        """``_parse_events`` (or ``_parse_events_located`` when ``tolerant``) of ``data``, reusing the last
+        clean parse of ``path`` when ``data`` equals its bytes or extends them past a newline. Parsing is a
+        pure function of each line and a line never spans that newline, so the result is the same events.
+        A new tail that does not parse cleanly falls back to the full parse, which raises (or locates the
+        bad line) exactly as before. Only clean parses are kept; every caller gets its own list.
+
+        PRIVATE EVENTS (B-GL-ledger-cache-immutable): the ``LedgerEvent`` objects this returns are the cached
+        ones, plain and mutable, and are for this module's own readers only (``verify()``, recovery,
+        retention, ``export()``, ``hash_at()``): none of them hands one to a caller. Everything a caller
+        receives (``events()``, ``iter_events()``, ``snapshot()``) comes from ``_parsed_ro``, which returns
+        read-only copies, so a caller cannot corrupt the cache and cannot make this process's ``verify()``
+        differ from a fresh store's. Validation is unchanged: a cache miss pays no freeze."""
+        events, _ro, bad = self._parsed_entry(path, data, tolerant)
+        return (list(events) if isinstance(events, tuple) else events), bad
+
+    def _parsed_ro(self, path: Path, data: bytes, tolerant: bool
+                   ) -> tuple[list[ReadOnlyLedgerEvent], tuple[int, str] | None]:
+        """``_parsed`` as READ-ONLY copies (what callers of ``events()`` / ``iter_events()`` / ``snapshot()``
+        receive). The copies are built lazily, once per cached event, and kept beside the cache entry: the
+        first hand-out of a segment pays one copy per event, a later one (and the new tail after an append)
+        pays only a list copy. The cached ``LedgerEvent`` objects themselves are never returned. A parse
+        that is not kept (a segment over ``PARSE_CACHE_MAX_BYTES``, a tolerant parse with a bad line) has no
+        twin list: it is copied on each call, like the parse it came from."""
+        events, ro, bad = self._parsed_entry(path, data, tolerant)
+        if ro is None:
+            return [ReadOnlyLedgerEvent.of(e) for e in events], bad
+        have = len(ro)
+        if have < len(events):
+            made = [ReadOnlyLedgerEvent.of(e) for e in events[have:]]      # outside the lock
+            with self._cache_lock:
+                cur = len(ro)              # another reader may have extended it first: keep its copies
+                if have <= cur < have + len(made):
+                    ro.extend(made[cur - have:])
+        with self._cache_lock:
+            return ro[:len(events)], bad
+
+    def _parsed_entry(self, path: Path, data: bytes, tolerant: bool):
+        """The parse behind ``_parsed`` / ``_parsed_ro``: ``(events, ro, bad)``. ``ro`` is the cache entry's
+        read-only twin list (a prefix of the copies of ``events``, shared by growth) or None when the parse
+        was not kept."""
+        with self._cache_lock:
+            hit = self._parse_cache.get(path)
+        if hit is not None:
+            raw, events, ro = hit
+            if raw == data:
+                return events, ro, None
+            if raw.endswith(b"\n") and data.startswith(raw):
+                try:
+                    tail = _parse_events(data[len(raw):])
+                except ValueError:  # JSONDecodeError, ValidationError, UnicodeDecodeError
+                    tail = None
+                if tail is not None:
+                    grown = events + tuple(tail)
+                    return grown, self._remember(path, data, grown, ro), None
+        if tolerant:
+            # Only a STRICT clean parse is kept: the tolerant decoder replaces invalid UTF-8 that a strict
+            # reader must still raise on. On clean bytes the two parses are the same events.
+            try:
+                out = _parse_events(data)
+            except ValueError:
+                events, bad = _parse_events_located(data)
+                return events, None, bad
+        else:
+            out = _parse_events(data)
+        return out, self._remember(path, data, tuple(out)), None
+
+    def _remember(self, path: Path, data: bytes, events: tuple[LedgerEvent, ...],
+                  ro: list[ReadOnlyLedgerEvent] | None = None) -> list[ReadOnlyLedgerEvent] | None:
+        """Keep ``path``'s parse (most recent last); evict the oldest other paths while the kept raw bytes
+        exceed PARSE_CACHE_MAX_BYTES, and keep nothing for a segment that alone exceeds it. ``ro`` carries
+        the read-only twins of an unchanged prefix of ``events`` across an append; a new parse starts empty.
+        Returns the entry's twin list, or None when nothing was kept."""
+        with self._cache_lock:
+            self._parse_cache.pop(path, None)
+            if len(data) > PARSE_CACHE_MAX_BYTES:
+                return None
+            ro = [] if ro is None else ro
+            self._parse_cache[path] = (data, events, ro)
+            total = sum(len(entry[0]) for entry in self._parse_cache.values())
+            for other in list(self._parse_cache):
+                if total <= PARSE_CACHE_MAX_BYTES or other == path:
+                    break
+                total -= len(self._parse_cache.pop(other)[0])
+            return ro
+
+    def _verified(self, snap: Snapshot) -> ChainVerification:
+        """``snap.verify()``, reused while the layout and every segment's bytes are exactly those of the
+        last verification AND no segment is archived. For a ledger with only live segments the result is a
+        function of that layout and those bytes (and the parse of them). Once a segment is archived it is not:
+        ``Snapshot._verify_archived`` also reads files that are not in the key (the archived segment's file in
+        the ledger directory, and its archive copy at ``archived_to``), so a flipped byte in or the deletion
+        of an archive copy would be answered ok from the cache. An archived ledger is verified on every call
+        (T8); the parse cache still applies to it."""
+        if snap.layout.archived:
+            return snap.verify()
+        with self._cache_lock:
+            cached = self._verify_cache
+        if (cached is not None and cached[0] == snap.layout and len(cached[1]) == len(snap.raw)
+                and all(a == b for a, b in zip(cached[1], snap.raw))):
+            return cached[2].model_copy()
+        result = snap.verify()
+        if sum(len(d) for d in snap.raw if d is not None) <= PARSE_CACHE_MAX_BYTES:
+            with self._cache_lock:
+                self._verify_cache = (snap.layout, list(snap.raw), result.model_copy())
+        return result
+
     def snapshot(self) -> Snapshot:
-        """A consistent read of every live segment, behind the heavy-read gate."""
+        """A consistent read of every live segment, behind the heavy-read gate. Its events are read-only
+        copies (``_parsed_ro``): the caller gets the Snapshot object, so it must not reach a cached event."""
         with self._gate():
-            return self._take_snapshot()
+            return self._take_snapshot(readonly=True)
 
     # ------------------------------------------------------------- recovery
 
@@ -1933,7 +2093,7 @@ class LedgerStore:
         """Every live event, materialised first: no file handle is held while
         the caller is suspended in the loop."""
         with self._gate():
-            events = list(self._take_snapshot().all_events())
+            events = list(self._take_snapshot(readonly=True).all_events())
         yield from events
 
     # -------------------------------------------------- F2 signing policy
@@ -2001,6 +2161,8 @@ class LedgerStore:
         agent_id: str | None,
         stamp: dict[str, Any],
     ) -> LedgerEvent:
+        if not isinstance(event_type, str) or not event_type.strip():
+            raise ValueError("event_type must not be blank")  # S6-10: no writer seals an event with a blank type
         self._require_appendable(event_type)  # before the writer lock: nothing to undo
         with self._writer():
             self._ensure_fresh_locked()
@@ -2147,6 +2309,60 @@ class LedgerStore:
             return {"n": n, "start": start, "end": glen - 1, "head": head, "closed": closed,
                     "anchor": anchor, "rot": rot, "intent": intent}
 
+    #: B-GL-events-limit-cheap: the window (bytes from the end of the open segment) that ONE cold tail scan looks
+    #: at. A class attribute so a test can shrink it.
+    EVENTS_TAIL_WINDOW_BYTES = 256 * 1024
+
+    def _events_tail(self, event_filter: EventFilter, limit: int) -> list[ReadOnlyLedgerEvent] | None:
+        """The last ``limit`` matches, found without walking the whole chain; None when this path cannot answer and the
+        caller must read in full. Same events, same order as the full read for a chain whose records all parse.
+
+        WARM (the T7 parse cache holds the open segment, which it does for every ledger whose live bytes fit
+        ``PARSE_CACHE_MAX_BYTES``, from the moment the store is opened): the cached parse is extended by the bytes
+        appended since (``_parsed_ro``, exactly what the full read does, so no line is parsed twice) and scanned from the
+        newest event backwards, stopping at ``limit`` matches: no copy of the chain and no filter pass over the older
+        events. A rare filter scans no more than the full read's filter pass does.
+
+        COLD (a ledger larger than the cache, where the full read parses every line every time): ONE window from the
+        end of the open segment, parsed from its last line backwards. Not widened: if the window holds fewer than
+        ``limit`` matches the caller does the full read (which also fills the cache), so the wasted work is bounded by
+        the window.
+
+        When the open segment is the only live one, a scan that covered all of it is the answer even with fewer than
+        ``limit`` matches; with closed live segments behind it, fewer matches than ``limit`` means "read in full"."""
+        warm = self.path in self._parse_cache
+        with self._gate():
+            snap = self._take_snapshot(parse=False, open_only=True,
+                                       tail_bytes=None if warm else self.EVENTS_TAIL_WINDOW_BYTES)
+        data = snap.raw[-1]
+        if data is None:
+            return None
+        matched: list[ReadOnlyLedgerEvent] = []
+        if warm:
+            # the read-only twins (option C): what this returns reaches the caller, so never the private plain events
+            events, _ = self._parsed_ro(snap.layout.segs[-1].path, data, False)
+            for event in reversed(events):
+                if event_filter.matches(-1, event):
+                    matched.append(event)
+                    if len(matched) == limit:
+                        break
+            complete = True
+        else:
+            for line in reversed(data.split(b"\n")):
+                line = line.strip()
+                if not line:
+                    continue
+                event = LedgerEvent.model_validate(json.loads(line))
+                if event_filter.matches(-1, event):
+                    matched.append(ReadOnlyLedgerEvent.of(event))
+                    if len(matched) == limit:
+                        break
+            complete = not snap.tail_cut
+        if len(matched) == limit or (complete and len(snap.layout.segs) == 1):
+            matched.reverse()
+            return matched
+        return None
+
     def events(
         self,
         agent_id: str | None = None,
@@ -2154,7 +2370,7 @@ class LedgerStore:
         since: str | None = None,
         until: str | None = None,
         limit: int | None = None,
-    ) -> list[LedgerEvent]:
+    ) -> list[ReadOnlyLedgerEvent]:
         """Filtered read of the live segments in global order. ``since``/``until``
         are inclusive ISO 8601 instants (compared as datetimes, not strings); a
         bad bound raises ``InvalidTimeBound`` before anything is read. ``limit``
@@ -2166,8 +2382,12 @@ class LedgerStore:
         event_filter = EventFilter(
             agent_id=agent_id, event_type=event_type, since=since, until=until
         )
+        if limit is not None:
+            tail = self._events_tail(event_filter, limit)
+            if tail is not None:
+                return tail
         with self._gate():
-            snap = self._take_snapshot()
+            snap = self._take_snapshot(readonly=True)
         out = [event for index, event in snap.indexed_events() if event_filter.matches(index, event)]
         if limit is not None:
             out = out[-limit:]
@@ -2176,7 +2396,7 @@ class LedgerStore:
     def verify(self) -> ChainVerification:
         try:
             with self._gate():
-                return self._take_snapshot(tolerant=True).verify()
+                return self._verified(self._take_snapshot(tolerant=True))
         except LedgerBusy as exc:
             return ChainVerification(ok=False, length=0, reason=str(exc))
 
@@ -2360,9 +2580,15 @@ class LedgerStore:
             raise ValueError("retention apply needs a non-blank operator")
         if older_than_days < 0:
             raise ValueError("--days must be >= 0")
+        if older_than_days > MAX_RETENTION_DAYS:
+            raise ValueError(f"--days must be at most {MAX_RETENTION_DAYS}")
         self._require_appendable(RETENTION_EVENT_TYPE)  # F2: before anything moves
         now = now or datetime.now(timezone.utc)
-        adir = Path(archive_dir).resolve()
+        cutoff = now - timedelta(days=older_than_days)  # before anything is created below
+        try:
+            adir = Path(archive_dir).resolve()
+        except ValueError:  # a NUL byte in the path; fixed text, the path is never echoed
+            raise ArchiveRefused("archive dir is not a valid path") from None
         ldir = self.path.parent.resolve()
         if _within(adir, ldir):
             raise ArchiveRefused(f"archive dir {adir} is inside the live ledger dir {ldir}")
@@ -2380,7 +2606,6 @@ class LedgerStore:
                 f"archive dir {adir} is on a different filesystem than {ldir}; archival "
                 "renames, it never copies"
             )
-        cutoff = now - timedelta(days=older_than_days)
         completed: list[int] = []
         archived: list[int] = []
         # archive_evidence for this run's event: entries a live retention event

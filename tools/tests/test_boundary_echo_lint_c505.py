@@ -255,6 +255,20 @@ class _Scan(ast.NodeVisitor):
         self._bind(node.target, node.value)
         self.generic_visit(node)
 
+    def visit_Return(self, node: ast.Return) -> None:
+        # a dict literal that leaves the function with a reply-field key over a tainted value is an API reply
+        # (the dict need not be the whole value: `return _refuse(503, {"detail": f"..{exc}"})`)
+        if node.value is not None:
+            sink_args: set[int] = set()   # a dict that is an argument of a sink call: the sink already counts it
+            for c in (n for n in ast.walk(node.value) if isinstance(n, ast.Call) and _sink_kind(n)):
+                for a in [*c.args, *(k.value for k in c.keywords if k.arg != "extra")]:
+                    sink_args.update(id(n) for n in ast.walk(a))
+            for d in (n for n in ast.walk(node.value) if isinstance(n, ast.Dict) and id(n) not in sink_args):
+                if any(isinstance(k, ast.Constant) and k.value in FIELD_KEYWORDS and self.tainted(v)
+                       for k, v in zip(d.keys, d.values)):
+                    self._record("reply-field")
+        self.generic_visit(node)
+
     def _record(self, kind: str) -> None:
         self.found[(".".join(self.stack) or "<module>", kind)] += 1
 
@@ -462,6 +476,118 @@ def test_dunder_name_is_safe_on_an_alias():
 
 def test_sinks_are_counted_even_when_clean():
     assert scan_source("def f():\n    print('a')\n    print('b')\n")[1] == 2
+
+
+# --- C-1117 (Lane 17 Q-17 survivors S1..S7 of PR 407): rules that could change without a test noticing --------------
+def test_a_typed_except_clause_is_visited_and_a_bare_one_is_too():
+    """S1: ``if node.type is not None`` inverted. A sink inside the exception TYPE expression is found, and a bare
+    ``except:`` (no type) does not break the scan."""
+    typed = "def f(resp):\n    try:\n        pass\n    except g(print(resp.text)):\n        pass\n"
+    assert _hits(typed) == {("f", "cli"): 1}
+    bare = "def f(resp):\n    try:\n        pass\n    except:\n        print(resp.text)\n"
+    assert _hits(bare) == {("f", "cli"): 1}
+
+
+def test_an_alias_is_not_followed_inside_a_derived_expression():
+    """S2: ``tainted(e, aliases=False)`` flipped to True in ``_derived``. ``z = f"{x}"`` where ``x`` is itself an alias
+    does not make ``z`` tainted (a name assigned from a tainted name is not followed, as the docstring says)."""
+    assert _hits("def f(resp):\n    x = resp.text\n    z = f'{x}'\n    print(z)\n") == {}
+    assert _hits("def f(resp):\n    z = f'{resp.text}'\n    print(z)\n") == {("f", "cli"): 1}
+
+
+def test_strip_and_join_are_followed_rewrites():
+    """S4 and S5: ``strip`` and ``join`` in PASS_METHODS. A value rewritten by them stays tainted into a sink."""
+    strip = "def f():\n    try:\n        pass\n    except Exception as exc:\n        m = str(exc).strip()\n        print(m)\n"
+    assert _hits(strip) == {("f", "cli"): 1}
+    join = "def f(resp):\n    m = ', '.join(resp.text)\n    print(m)\n"
+    assert _hits(join) == {("f", "cli"): 1}
+
+
+def test_a_logger_exception_call_is_a_log_sink():
+    """S6: ``exception`` in LOG_METHODS."""
+    src = "def f():\n    try:\n        pass\n    except Exception as exc:\n        log.exception('x %s', exc)\n"
+    assert _hits(src) == {("f", "log"): 1}
+
+
+@pytest.mark.parametrize("ctor", ["UsageError", "BadParameter", "Exception", "ValueError"])
+def test_each_error_constructor_spelling_is_a_sink(ctor):
+    """S7: ``UsageError`` is also caught by the ``Error`` suffix rule, so dropping it from ERROR_NAMES is an equivalent
+    mutant; the spelling is pinned here as behaviour, not as a kill."""
+    src = f"def f(exc):\n    try:\n        pass\n    except Exception as exc:\n        raise {ctor}(str(exc))\n"
+    assert _hits(src) == {("f", "error"): 1}
+
+
+@pytest.mark.parametrize("call", ["sys.stderr.write(str(exc))", "sys.stdout.write(f'x {exc}')", "typer.secho(str(exc))",
+                                  "click.secho(f'x {exc}', fg='red')"])
+def test_a_stream_write_or_secho_is_a_cli_sink(call):
+    """C-1117: Limits paragraph, 'a sink spelled another way (sys.stderr.write, typer.secho)'. Both print to an operator
+    terminal exactly as ``typer.echo`` does."""
+    src = f"def f():\n    try:\n        pass\n    except Exception as exc:\n        {call}\n"
+    assert _hits(src) == {("f", "cli"): 1}
+
+
+def test_a_stream_write_of_a_fixed_text_is_a_clean_sink():
+    src = "def f():\n    sys.stderr.write('fixed text')\n    typer.secho('fixed', fg='red')\n    buf.write(resp.text)\n"
+    assert scan_source(src) == (Counter(), 2)   # buf.write is not a terminal; the two fixed texts are counted
+
+
+@pytest.mark.parametrize("call", ["logging.getLogger(__name__).error('x %s', exc)", "getLogger('a').warning(str(exc))",
+                                  "logging.getLogger().exception(f'x {exc}')"])
+def test_a_logger_held_in_a_call_result_is_a_log_sink(call):
+    """C-1117: Limits paragraph, 'logging.getLogger(..).error, a logger held in a call result'."""
+    src = f"def f():\n    try:\n        pass\n    except Exception as exc:\n        {call}\n"
+    assert _hits(src) == {("f", "log"): 1}
+
+
+def test_a_call_result_that_is_not_a_logger_is_not_a_log_sink():
+    src = "def f():\n    try:\n        pass\n    except Exception as exc:\n        make(exc).error(str(exc))\n"
+    assert _hits(src) == {}
+
+
+@pytest.mark.parametrize("ret", ["{'detail': resp.json()}", "{'error': str(resp.text), 'ok': False}",
+                                 "{'message': f'x {resp.text}'}", "{'ok': True, 'reason': resp.text}"])
+def test_a_returned_dict_with_a_reply_field_key_is_a_reply_field(ret):
+    """C-1117: Limits paragraph, 'a dict literal that is returned ... (return {"detail": resp.json()})'. A dict whose
+    key is one of the reply-field names and whose value is a source leaves the function as an API reply."""
+    assert _hits(f"def f(resp):\n    return {ret}\n") == {("f", "reply-field"): 1}
+
+
+@pytest.mark.parametrize("ret", ["{'detail': 'fixed'}", "{'other': resp.text}", "{'detail': resp.status_code}",
+                                 "{'detail': len(resp.text)}", "{'detail': type(resp).__name__}"])
+def test_a_returned_dict_without_a_tainted_reply_field_is_clean(ret):
+    assert _hits(f"def f(resp):\n    return {ret}\n") == {}
+
+
+@pytest.mark.parametrize("ret", ["_refuse(503, {'detail': f'x {exc}', 'decision': None})", "wrap([{'error': str(exc)}])",
+                                 "(200, {'message': exc.args})"])
+def test_a_dict_nested_in_the_returned_expression_is_a_reply_field(ret):
+    """Found by comparing with PR 436 (Lane 12, same card): the force-gateway refusal builds its reply as a dict inside
+    a returned call (``return _refuse(503, {"detail": f"..{exc}"})``), so the dict need not be the whole return value."""
+    src = f"def f():\n    try:\n        pass\n    except Exception as exc:\n        return {ret}\n"
+    assert _hits(src) == {("f", "reply-field"): 1}
+
+
+def test_a_returned_dict_inside_a_sink_call_is_one_finding_not_two():
+    """Lane 12's measurement on PR 437 (and Q-82 point 4): ``return JSONResponse({"detail": resp.text})`` is an api-reply
+    the sink already counts; the dict inside it must not be counted again as a reply-field."""
+    assert _hits("def f(resp):\n    return JSONResponse({'detail': resp.text})\n") == {("f", "api-reply"): 1}
+    assert _hits("def f(resp):\n    return JSONResponse(content={'error': resp.text})\n") == {("f", "api-reply"): 1}
+
+
+def test_a_nested_clean_dict_in_a_return_is_not_a_finding():
+    src = "def f():\n    try:\n        pass\n    except Exception as exc:\n        return _refuse(503, {'detail': 'fixed'})\n"
+    assert _hits(src) == {}
+
+
+def test_a_returned_dict_value_through_an_alias_is_followed_one_deep():
+    assert _hits("def f(resp):\n    x = resp.text\n    return {'detail': x}\n") == {("f", "reply-field"): 1}
+
+
+def test_a_class_object_of_an_exception_is_safe():
+    """S3: ``__class__`` in SAFE_ATTRS; near-equivalent (a field of the caught exception other than args and message is
+    already safe), pinned as behaviour."""
+    src = "def f():\n    try:\n        pass\n    except Exception as exc:\n        print(exc.__class__)\n"
+    assert _hits(src) == {}
 
 
 # --- allowlist rules -----------------------------------------------------------------------------------------------

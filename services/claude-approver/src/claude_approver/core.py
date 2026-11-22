@@ -277,13 +277,22 @@ class UsageCursor:
     def load(self) -> None:
         if self._loaded:
             return
-        self._loaded = True
+        try:
+            self._read()
+        except Exception:
+            self.data, self.error = {}, "usage cursor is corrupt"   # anything unforeseen disables posting too
+        self._loaded = True   # only after the outcome (data or error) is recorded: a failed first load is never an empty, error-free cursor
+
+    def _read(self) -> None:
         try:
             text = self.path.read_text(encoding="utf-8")
         except FileNotFoundError:
             return
         except OSError:
             self.error = "usage cursor unreadable"
+            return
+        except UnicodeDecodeError:
+            self.error = "usage cursor is corrupt"
             return
         try:
             raw = json.loads(text)
@@ -314,8 +323,26 @@ class UsageCursor:
         new[sid] = dict(snap)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_name(self.path.name + f".tmp-{os.getpid()}-{threading.get_ident()}")
-        tmp.write_text(json.dumps(new, sort_keys=True), encoding="utf-8")
-        os.replace(tmp, self.path)
+        try:
+            # Through an open handle so the bytes are on disk before the rename: a power loss
+            # must leave the old cursor or the new one, never an empty file (a re-post).
+            with tmp.open("w", encoding="utf-8") as fh:
+                fh.write(json.dumps(new, sort_keys=True))
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, self.path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)      # a full disk must not leave tmp-<pid>-<tid> files behind
+            raise
+        if os.name != "nt":                  # Windows cannot fsync a directory from Python
+            try:
+                dir_fd = os.open(self.path.parent, os.O_RDONLY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+            except OSError:
+                pass                         # best effort: the rename itself already happened
         self.data = new
 
 
@@ -727,7 +754,7 @@ class Approver:
             elif not tool:
                 verdict = Verdict("deny", "sentinel_error", "claude-approver: tool event has no name")
             else:
-                action = config.resolve_action(tool, entry, tmap)
+                action = config.resolve_action(tool, entry, tmap, _get(ev, "type"))
                 context = {
                     "source": "claude-approver",
                     "console_session_id": sid,

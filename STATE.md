@@ -2,6 +2,12 @@
 
 > Update before ending any session. Assume many sessions.
 
+> **Correction 2026-11-21 (Fly VM size).** Entries below that say `shared-cpu-1x` (the 2026-08-30 build, the production
+> deploy verification) record what was true on those dates and are left as written. They are not the current
+> configured size: `integration/fly/fly.toml` `[[vm]]` now sets `cpus = 4` (`cpu_kind = "shared"`, `memory = "2gb"`),
+> pinned by `tools/tests/test_fly_vm_size.py` (PR 1080). That file is the configured size, not proof of the running
+> Machine: whether the live Machine was redeployed onto it is NOT verified here (needs `fly machine status` by Don).
+
 ## Refresh through MERGE 20 (main cddca526; C-1184; previous refresh a9dc4f3)
 Written from the coordinator's MERGE lines in `comms/STATUS.md`, one line per merge, as PR numbers. A line says
 what STATUS says was built; where STATUS names no content for a PR, this file says so rather than guessing. The 18
@@ -347,8 +353,41 @@ on e07cd5b. Portal wiring: Netlify ESTATE_URL set; ESTATE_SHARED_SECRET
 PRODUCT estate (sentinel enforce); GB10 remains the private burn-in
 estate (log_only).
 [2026-11-12 correction: that was true on 2026-09-14. GB10 has since been armed to enforce (Stage 3 REQUIRE, 2026-11-10), so GB10 is no longer only a burn-in estate; Fly remains the product estate.]
+PRODUCT estate (sentinel enforce).
+[CORRECTED 2026-11-08 (E3): the closing clause of this sentence called the
+GB10 "the private burn-in estate (log_only)". That stopped being true at the
+2026-09-08 GB10 cutover (the "Dogfood step 1" section above): both estates
+run the sentinel in enforce by the file headers `integration/fly/entrypoint.sh`
+lines 10-11 and `integration/fly/fly.toml` lines 1-4, and "Next action" item 2
+records that the log-only burn-in is not running, by decision.]
 
 ## Current phase
+**Status refreshed 2026-11-08 (E3).** Everything below the next rule is the
+v1.2 build record, kept as written. What this file can and cannot say now:
+- **Phases.** v1.2 ran P, A, B, C, D, F, E in that order (`tasks/todo.md`
+  § "v1.2 — 12-system closure (2026-09)"). This file holds a build block for
+  Phase A (DONE), B (DONE), C (BUILT, store/renewal hardening), F (BUILT, committed
+  locally) and D (BUILT, uncommitted at the time of writing); each block's own
+  heading carries its date. Phase E (the words, last; E3 is this refresh) is
+  open in `tasks/todo.md` (line "Phase E"). Work since is the staged enforcement
+  rollout of the estates, tracked in the dated estate-deployer reports.
+- **Estate state is not recorded here.** This is a public repository (see
+  "Not recorded here" in the top block). For where each estate stands, read the
+  estate-deployer reports in `comms/inbox/estate-deployer/` and the ones
+  addressed to the coordinator in `comms/inbox/coordinator/` on branch `comms`
+  (latest on this refresh: `20261107-0430-estate-deployer-stage3-prep.md`, with
+  `20261107-0115-estate-deployer-stage2-window-clean.md` before it). Do not
+  read a live status from this file or from memory.
+- **Test count.** One figure only, in `ROADMAP.md` (see the top block here).
+- **`run_demo.sh` exit 0, wall times, from recorded runs only** (the tail of
+  each is in the block cited): Phase A exit 0 in 33 s (below, Phase A "Verified
+  locally"); Phase B exit 0 in 32 s with `FIELD_DOA_ROSTER` unset, and again in
+  31 s after the code fixes (below, Phase B); Phase F exit 0 in 33 s (below,
+  Phase F review). Phase C: not recorded. Phase D: not recorded. (`run_demo.sh`
+  boots seven local services on fixed ports and does not start lifecycle,
+  attestation or crosswalk; the per-service `demo.sh` times in the same blocks
+  cover those.)
+
 **v1.2 — 12-system closure (started 2026-09-12; plan approved by Don the
 same day).** Plan: `tasks/todo.md` § "v1.2 — 12-system closure (2026-09)"
 (P → A → B → C → D → F → E; one phase at a time; STOP after each phase
@@ -2097,13 +2136,14 @@ NOTE: services are NOT persistent daemons — run demo.sh / compose to bring a
 stack up; nothing runs between sessions.
 
 ## Capstone video (2026-08-10) — DONE
-Full 5-scene film recorded and committed: integration/video/out/capstone.mp4
+Full 5-scene film recorded (not committed; regenerable): integration/video/out/capstone.mp4
 (2:24, 1080p30). Honesty contract held: every terminal command executed,
 every output line verbatim; Scene 3 driven against the LIVE ops-console via
 Playwright (real D.scope harness verdict + real console kill on the ledger).
 Regenerate: record_scene4.py, record_scenes.py (scene1/2/3/5 + stitch),
 capture_scene3.py (needs the console stack up on :8011). Per-scene mp4s and
-browser shots are gitignored; capstone.mp4 + scene4.mp4 are committed.
+browser shots are gitignored. Neither capstone.mp4 nor scene4.mp4 is committed any more: both are
+regenerable (record_scene4.py, record_scenes.py), and integration/video/out/ is gitignored.
 The ONLY remaining backlog items are non-engineering: manual EUR-Lex
 read-through of the two EU AI Act articles, and the ISO/IEC 42001 purchase.
 
@@ -2253,11 +2293,15 @@ delegation-authority (:8003, ledger-first fail-closed mint/revoke,
 both verified done earlier in this file: Remote section 2026-08-09,
 Capstone video section 2026-08-10.)
 1. Deployment (private first): GB10 proxy cutover DONE 2026-09-08 (:18080).
-   Still open: Cloudflare Tunnel or Tailscale Serve in front of :18080 with
-   FIELD_SHARED_SECRET ON. Netlify gets ONLY the static tier.
-   Rebuild the estates at ≥1727de0 before any gate-key
-   manifest is registered on either estate (pre-lockstep field-core →
-   `I.manifest` BLOCK in enforce until then).
+   Still open as of that date, not re-checked in this refresh: Cloudflare
+   Tunnel or Tailscale Serve in front of :18080 with FIELD_SHARED_SECRET ON.
+   Netlify gets ONLY the static tier. [SUPERSEDED 2026-11-08 (E3): "rebuild
+   the estates at ≥1727de0" was a 2026-09 instruction; the estates have been
+   redeployed since. Where they stand is in the estate-deployer reports named
+   under "Current phase" (this file does not record it), and the open
+   conditions of the staged enforcement rollout are listed in
+   `comms/inbox/coordinator/20261107-0430-estate-deployer-stage3-prep.md`
+   (condition table with sources), not restated here.]
 2. Real-agent dogfood STARTED 2026-09-08 in ENFORCE (ssl-timekeeping-agent,
    ssl-invoicing-agent). The 2-week log-only burn-in / 30-day false-block
    window is NOT running by decision; revisit if the ADR 02 gate is needed.
@@ -2276,9 +2320,10 @@ Capstone video section 2026-08-10.)
    `attested_at` for lifecycle, gateway streaming, telemetry persistence,
    ops-console pagination/push, quarterly pack archive convention,
    verify_sync.sh into CI.
-7. Enforcement Gate follow-ups (2026-09-12): bump field-agent plugin.json
-   0.1.1 → 0.1.2 (+ source commit in the SOURCES.md stamp, `claude plugin
-   validate`); reword field-agent README/SKILL/command "design-time only";
+7. Enforcement Gate follow-ups (2026-09-12): [DONE for the bump: `plugin.json`
+   is 0.1.6 (≥ 0.1.2) and `verify_sync.sh` exits 0 on main, checked 2026-11-07
+   (GATE-D1); the SOURCES.md stamp records its own provenance, not the plugin
+   version. Not re-checked: `claude plugin validate`.] reword field-agent README/SKILL/command "design-time only";
    crosswalk controls for irreversible_actions / protected_paths /
    tool_call; one live Windows Git-Bash gate run + one PowerShell-fallback
    run after `claude auth login`; watch Force-Field Gate v1.2

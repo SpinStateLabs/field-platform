@@ -76,6 +76,21 @@ def _fail(resp: httpx.Response) -> None:
     raise typer.Exit(code=1)
 
 
+def _die(message: str) -> "typer.Exit":
+    """One line on stderr, exit 1. Callers pass only fixed text and exception TYPE names: never key or file content."""
+    typer.echo(f"error: {message}", err=True)
+    return typer.Exit(code=1)
+
+
+def _manifest(path: Path) -> dict:
+    from field_core.validation import load_manifest
+
+    try:
+        return load_manifest(path)
+    except Exception as exc:  # missing/unreadable file, YAML syntax error, non-mapping: the text may quote content
+        raise _die(f"cannot load manifest {path} ({type(exc).__name__})") from None
+
+
 @app.command()
 def version() -> None:
     typer.echo(f"federation-broker {__version__}")
@@ -183,25 +198,24 @@ def crossing(
     ),
 ) -> None:
     """Submit a crossing request; exit 0 ALLOW, 1 BLOCK (or a refused request)."""
-    from field_core.validation import load_manifest
-
     if direction is Direction.outbound:
         body = {"direction": "outbound", "counterparty_org": org,
-                "agent_id": agent_id, "manifest": load_manifest(manifest),
+                "agent_id": agent_id, "manifest": _manifest(manifest),
                 "manifest_signature": signature,  # the broker refuses one (422)
                 "scope": scope, "data_class": data_class}
     else:
         body = {"direction": "inbound", "counterparty_org": org,
                 "counterparty_agent_id": agent_id,
-                "counterparty_manifest": load_manifest(manifest),
+                "counterparty_manifest": _manifest(manifest),
                 "manifest_signature": signature,
                 "scope": scope, "data_class": data_class}
-    resp = httpx.post(
-        f"{_base()}/crossing",
-        json=body,
-        timeout=15.0,
-        headers=_hdr("POST", "/crossing"),
-    )
+    with _reachable():   # rebuild of PR 663: unreachable is one line, exit 1 (main's helper; no userinfo)
+        resp = httpx.post(
+            f"{_base()}/crossing",
+            json=body,
+            timeout=15.0,
+            headers=_hdr("POST", "/crossing"),
+        )
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)
@@ -213,19 +227,40 @@ def crossing(
 def keygen(
     out_dir: Path = typer.Option(Path("."), "--out-dir", help="Where to write the PEM pair"),
     name: str = typer.Option("federation", "--name", help="File name stem"),
+    force: bool = typer.Option(False, "--force", help="Replace an existing pair (the old private key is lost)"),
 ) -> None:
     """Generate an Ed25519 keypair for manifest signing.
 
     Keep the private key OUT of any repo; hand the public key to the
-    counterparty's GC with the contract instrument.
+    counterparty's GC with the contract instrument. The private key is created
+    mode 0600, and an existing pair is never overwritten without --force.
     """
+    import os
+
     from field_core.signing import generate_keypair
 
     private_pem, public_pem = generate_keypair()
     out_dir.mkdir(parents=True, exist_ok=True)
     private_path = out_dir / f"{name}-private.pem"
     public_path = out_dir / f"{name}-public.pem"
-    private_path.write_text(private_pem, encoding="ascii")
+    existing = [str(p) for p in (private_path, public_path) if p.exists()]
+    if existing and not force:
+        typer.echo(
+            f"error: {', '.join(existing)} already exists; nothing written. "
+            "Use --force to replace it (the old private key is lost), or another --name.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    # O_EXCL without --force: a file that appears between the check and here is still never overwritten.
+    flags = os.O_WRONLY | os.O_CREAT | (os.O_TRUNC if force else os.O_EXCL)
+    try:
+        fd = os.open(private_path, flags, 0o600)
+    except FileExistsError:
+        typer.echo(f"error: {private_path} already exists; nothing written. Use --force to replace it.", err=True)
+        raise typer.Exit(code=2)
+    with os.fdopen(fd, "w", encoding="ascii") as fh:
+        fh.write(private_pem)
+    os.chmod(private_path, 0o600)  # --force over an older, wider file: the mode argument above only applies at creation
     public_path.write_text(public_pem, encoding="ascii")
     typer.echo(f"private key: {private_path}  (never commit this)")
     typer.echo(f"public key:  {public_path}")
@@ -238,9 +273,17 @@ def sign(
 ) -> None:
     """Sign a manifest; prints the base64 signature for the crossing request."""
     from field_core.signing import sign_manifest
-    from field_core.validation import load_manifest
 
-    typer.echo(sign_manifest(load_manifest(manifest), key.read_text(encoding="ascii")))
+    data = _manifest(manifest)
+    try:
+        pem = key.read_text(encoding="ascii")
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise _die(f"cannot read --key ({type(exc).__name__})") from None
+    try:
+        signature = sign_manifest(data, pem)
+    except Exception as exc:  # the reason may quote key material
+        raise _die(f"--key is not an Ed25519 private key PEM ({type(exc).__name__})") from None
+    typer.echo(signature)
 
 
 @app.command()

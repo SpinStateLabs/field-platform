@@ -36,6 +36,7 @@ import os
 import secrets
 import threading
 import time
+import unicodedata
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -63,7 +64,34 @@ _STORE_LOCK = threading.Lock()
 # How long a writer waits for another writer's file lock. A check holds it
 # only for compare + persist (fetching happens outside), so seconds at most.
 LOCK_TIMEOUT_SECONDS = 30.0
+
+#: S5-18. A reviewer is a NAMED human on one line: the same rule ``evidence_pack._checked_signer`` (the signer) and
+#: ``regwatch._named_human`` (--fetched-by) hold; ``_plain_reviewer_name`` below applies it to ``clear``.
+MAX_REVIEWER_CHARS = 200
+#: free text a flag carries (the reason, the new version) is made one bounded line, not refused: the regwatch scheduler
+#: writes the reason itself, and a refusal there would lose the flag
+MAX_REASON_CHARS = 2000
+MAX_VERSION_CHARS = 100
+_REFUSED_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})
+
+
+def _one_line(value: object, limit: int) -> str:
+    """``value`` on one line: control, format and line-break characters become spaces, whitespace runs collapse, and
+    the result is cut at ``limit`` characters (ending in an ellipsis)."""
+    text = "".join(" " if unicodedata.category(c) in _REFUSED_CATEGORIES else c for c in str(value))
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 _LOCK_POLL_SECONDS = 0.05
+
+
+class StaleStoreError(RuntimeError):
+    """The stale-flags file exists but cannot be trusted: unreadable, not UTF-8 JSON, a key given twice, a value of
+    the wrong type, a top-level key the store never writes, or no ``active`` key. It is NOT an empty store: an empty store would reopen the evidence-pack gate that a stale flag closes
+    (``json.loads`` keeps the LAST of a duplicate key, so a second ``"active"`` used to read as "no flags"). The file is
+    never rewritten on this path, so a standing flag stays in it until a NAMED human clears it. The message is fixed:
+    the file's name and what is wrong, never the file's text and never the underlying exception's text. A RuntimeError
+    on purpose: the pack route's ``except ValueError`` is a 422 for the caller's input, and this is the service's own
+    state (503)."""
 
 
 class StoreLockTimeout(TimeoutError):
@@ -136,6 +164,38 @@ def _file_lock(lock_path: Path, timeout: float) -> Iterator[None]:
         os.close(fd)
 
 
+class _DuplicateKey(Exception):
+    """Internal: a JSON object named the same key twice."""
+
+
+def _no_duplicate_keys(pairs: list[tuple[str, object]]) -> dict:
+    """``object_pairs_hook`` that refuses a repeated key at any depth (``json.loads`` would keep the last one)."""
+    out: dict = {}
+    for key, value in pairs:
+        if key in out:
+            raise _DuplicateKey
+        out[key] = value
+    return out
+
+
+def _dump_text(payload: dict) -> str:
+    """The store as JSON text that ALWAYS encodes to UTF-8. Readable (``ensure_ascii=False``) unless some string holds a
+    lone surrogate (a ``\\ud800`` escape loads as one, and UTF-8 cannot encode it): then the same payload is written
+    ASCII-escaped, which is still valid UTF-8 JSON and round-trips every string exactly. Nothing is dropped or replaced,
+    so a stored record can never again make every later persist raise (stale detection and ``set-stale`` stay live)."""
+    text = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        text = json.dumps(payload, indent=2, ensure_ascii=True) + "\n"
+    return text
+
+
+# Every top-level key _persist writes (the only writer). An existing file with a key outside this set, or without
+# `active`, is damaged: a misspelled "active" ("Active", "actives") would otherwise read as an empty store.
+_STORE_KEYS = frozenset({"corpus_version", "active", "history", "sources", "last_check"})
+
+
 class StaleStore:
     """Persisted stale flags per framework, with a named-review history.
 
@@ -161,14 +221,43 @@ class StaleStore:
         self._last_check: dict | None = None
         self._load()
 
+    def _damaged(self, what: str) -> StaleStoreError:
+        return StaleStoreError(
+            f"the stale-flags store {self.path.name} is damaged ({what}); "
+            "evidence-pack generation stays blocked until it is repaired"
+        )
+
     def _load(self) -> None:
-        if not self.path.exists():  # missing file = empty state, not an error
+        if not self.path.exists():  # missing file = empty state (never written), not an error
             return
-        data = json.loads(self.path.read_text(encoding="utf-8"))
-        self._active = dict(data.get("active", {}))
-        self._history = list(data.get("history", []))
-        self._sources = dict(data.get("sources", {}))
-        self._last_check = data.get("last_check")
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"), object_pairs_hook=_no_duplicate_keys)
+        except _DuplicateKey:
+            raise self._damaged("a key appears twice") from None
+        except OSError as exc:
+            raise self._damaged(f"cannot be read: {type(exc).__name__}") from None
+        except (ValueError, RecursionError) as exc:  # not UTF-8, not JSON, or too deep: the TYPE only, never the text
+            raise self._damaged(f"not valid UTF-8 JSON: {type(exc).__name__}") from None
+        if not isinstance(data, dict):
+            raise self._damaged("the top level is not an object")
+        if "active" not in data:
+            raise self._damaged("the 'active' key is missing")
+        if not set(data) <= _STORE_KEYS:
+            raise self._damaged("a top-level key is not one this store writes")
+        active, history = data.get("active", {}), data.get("history", [])
+        sources, last_check = data.get("sources", {}), data.get("last_check")
+        if not isinstance(active, dict) or not all(isinstance(v, dict) for v in active.values()):
+            raise self._damaged("'active' is not an object of objects")
+        if not isinstance(history, list):
+            raise self._damaged("'history' is not a list")
+        if not isinstance(sources, dict):
+            raise self._damaged("'sources' is not an object")
+        if last_check is not None and not isinstance(last_check, dict):
+            raise self._damaged("'last_check' is neither null nor an object")
+        self._active = dict(active)
+        self._history = list(history)
+        self._sources = dict(sources)
+        self._last_check = last_check
 
     def _persist(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -191,7 +280,7 @@ class StaleStore:
             # replaced file empty or partial, the store then fails to load, and a lost write silently reopens the
             # evidence-pack gate that a stale flag closes.
             with open(tmp, "w", encoding="utf-8") as fh:
-                fh.write(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+                fh.write(_dump_text(payload))
                 fh.flush()
                 os.fsync(fh.fileno())
             os.replace(tmp, self.path)
@@ -259,8 +348,8 @@ class StaleStore:
             "flagged_at": existing["flagged_at"]
             if existing
             else _utc_now().isoformat(),
-            "reason": reason,
-            "new_version": new_version,
+            "reason": _one_line(reason, MAX_REASON_CHARS),
+            "new_version": None if new_version is None else _one_line(new_version, MAX_VERSION_CHARS),
         }
         self._active[framework] = flag
         return flag
@@ -361,6 +450,8 @@ def _plain_reviewer_name(name: object) -> str:
     if any(unicodedata.category(ch) in _REFUSED_NAME_CATEGORIES for ch in text):
         raise ValueError("reviewed_by must be a plain name (no control characters, invisible format characters or "
                          "line breaks) — re-review is NAMED")
+    if len(text) > MAX_REVIEWER_CHARS:
+        raise ValueError(f"reviewed_by is {len(text)} characters; the limit is {MAX_REVIEWER_CHARS}")
     if not any(ch.isalnum() for ch in text):
         raise ValueError("reviewed_by must name a human: it needs at least one letter or digit — re-review is NAMED")
     return text

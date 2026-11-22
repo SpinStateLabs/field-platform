@@ -7,6 +7,7 @@ Deterministic arithmetic only — no floats near a limit comparison, no LLM.
 from __future__ import annotations
 
 import logging
+import math
 import re
 import sqlite3
 import threading
@@ -201,8 +202,15 @@ class SpendCapConfig(BaseModel):
         cap = manifest.enforcement.spend_cap
         if cap is None:
             raise ValueError("manifest has no enforcement.spend_cap")
-        cents = round(cap.limit * 100)
-        if abs(cents - cap.limit * 100) > 1e-9:
+        scaled = cap.limit * 100
+        if not math.isfinite(scaled):
+            # S6-5: round(inf) is an OverflowError (not a ValueError); a limit so large that *100 overflows is the same
+            raise ValueError("spend_cap.limit must be a finite number")
+        if scaled > MAX_AMOUNT:
+            # one clear line, not a multi-line pydantic error that quotes the number back
+            raise ValueError(f"spend_cap.limit is above the maximum of {MAX_AMOUNT // 100} currency units")
+        cents = round(scaled)
+        if abs(cents - scaled) > 1e-9:
             raise ValueError("spend_cap.limit has sub-cent precision; refuse to guess")
         if cap.period not in SUPPORTED_CAP_PERIODS:
             # D1f: never silently widen an unknown window (per-run) to total.
@@ -408,6 +416,18 @@ _OPEN_ESCALATION_INDEX = (
 
 
 def window_start(period: str, now: datetime) -> str:
+    """The first instant of the window ``period`` counts from.
+
+    Seen from this function alone, anything that is not ``daily`` or ``monthly`` counts from the epoch, as
+    ``total``: it fails toward counting MORE spend, never less (reviewer C-125 F-C125-1). Through the service that
+    case does not arise: ``SpendCapConfig.period`` is pinned to daily|monthly|total, ``from_manifest`` refuses an
+    unknown period, and a stored row with an unknown period fails that validation when it is read back: every route
+    that reads the cap (GET /caps, GET /status, GET /totals, GET /usage, POST /spend, POST /usage) answers 500 and
+    records nothing, so the meter stops counting rather than counting more (reviewer C-703 F-C703-1, C-848
+    F-C848-2). Whether a bad stored row should instead meter conservatively or be refused loudly is open
+    (F-C703-3). ``now`` must be UTC: the day and month start are formatted from its fields, and the API converts
+    its clock to UTC before it gets here (F-C848-4).
+    """
     if period == "daily":
         return now.strftime("%Y-%m-%dT00:00:00+00:00")
     if period == "monthly":
@@ -929,3 +949,17 @@ def evaluate(
     if open_escalations:
         return SpendState.ESCALATE, f"{open_escalations} unresolved escalation(s)"
     return SpendState.OK, "within limits"
+
+
+def crossed_thresholds(
+    cap: SpendCapConfig, spent_cents: int, spent_tokens: int, spent_actions: int
+) -> list[str]:
+    """EVERY kind at or over the escalate threshold (evaluate() reports only
+    the first). Same integer test as evaluate(); order cents, tokens, actions."""
+    pairs = (
+        ("cents", spent_cents, cap.limit_cents),
+        ("tokens", spent_tokens, cap.token_limit),
+        ("actions", spent_actions, cap.action_limit),
+    )
+    return [kind for kind, spent, limit in pairs
+            if limit is not None and spent * 100 >= limit * cap.escalate_at_pct]

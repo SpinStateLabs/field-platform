@@ -146,7 +146,7 @@ def parse_head(body: bytes) -> tuple[int, str]:
     length, head = data.get("event_count"), data.get("head_hash")
     if type(length) is not int or length < 0:
         raise WitnessError(f"event_count {length!r} is not a non-negative integer")
-    if not isinstance(head, str) or not _HEX64.match(head):
+    if not isinstance(head, str) or not _HEX64.fullmatch(head):
         raise WitnessError("head_hash is not 64 lowercase hex")
     return length, head
 
@@ -288,7 +288,7 @@ class Witness:
             self._log(logging.INFO, f"{DIRECTION_2_NOT_LIVE}: {FLY_SECRET_FILE_ENV} is unset")
             return "not-live"
         try:
-            secret = Path(path).read_text(encoding="utf-8").strip()
+            secret = Path(path).read_text(encoding="utf-8-sig").strip()
         except (OSError, UnicodeError) as exc:
             self._log(logging.WARNING, f"direction 2 not sent: {FLY_SECRET_FILE_ENV} unreadable "
                       f"({type(exc).__name__})")
@@ -364,7 +364,9 @@ def load_events(raw: bytes) -> list[Any]:
         if not isinstance(data, list):
             raise WitnessError("events source is not a JSON array")
         return data
-    return [strict_json_loads(line.removeprefix("\ufeff")) for line in text.splitlines() if line.strip()]
+    # "\n" only, the boundary the store and the bundle reader use: str.splitlines() also breaks on U+2028, U+2029 and
+    # NEL, which JSON allows raw inside a string, and would cut a genuine event in two.
+    return [strict_json_loads(line.removeprefix("\ufeff")) for line in text.split("\n") if line.strip()]
 
 
 def fetch_events(url: str, secret: str | None, transport: httpx.BaseTransport | None = None) -> list[Any]:
@@ -393,7 +395,7 @@ def check_anchor(payload: dict[str, Any], snap: Snapshot, local_length: int,
     length, head = payload.get("length"), payload.get("head_hash")
     if type(length) is not int or length < 0:
         return f"malformed: length {length!r} is not a non-negative integer"
-    if not isinstance(head, str) or not _HEX64.match(head):
+    if not isinstance(head, str) or not _HEX64.fullmatch(head):
         return "malformed: head_hash is not 64 lowercase hex"
     if public_key_pem is not None:
         signature = payload.get("signature")

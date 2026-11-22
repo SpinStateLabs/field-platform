@@ -423,8 +423,8 @@ def test_domain_kill_records_a_per_agent_registry_fault_without_500(tmp_path):
                 raise RegistryUnreachableError("simulated per-agent fault")
             return self._inner.get_agent(agent_id)
 
-        def set_status(self, agent_id, status):
-            return self._inner.set_status(agent_id, status)
+        def set_status(self, agent_id, status, **kw):
+            return self._inner.set_status(agent_id, status, **kw)
 
         def list_agents(self, **kw):
             return self._inner.list_agents(**kw)
@@ -433,8 +433,8 @@ def test_domain_kill_records_a_per_agent_registry_fault_without_500(tmp_path):
     stack.register("alpha-agent")
     stack.register("beta-agent")
     r = stack.kill.post("/kill/domain/finance", json=OP)
-    assert r.status_code == 200
-    report = r.json()
+    assert r.status_code == 502          # kill-path hardening: any errored agent makes the route non-2xx; the report is the detail
+    report = r.json()["detail"]
     assert report["killed"] == ["alpha-agent"]
     rows = {row["agent_id"]: row for row in report["results"]}
     assert rows["beta-agent"]["outcome"] == "error"
@@ -462,8 +462,8 @@ def test_adversarial_drill_failure_leaves_the_agent_active(tmp_path):
                 return {**record, "status": "active"}
             return record
 
-        def set_status(self, agent_id, status):
-            return self._inner.set_status(agent_id, status)
+        def set_status(self, agent_id, status, **kw):
+            return self._inner.set_status(agent_id, status, **kw)
 
         def list_agents(self, **kw):
             return self._inner.list_agents(**kw)
@@ -485,10 +485,10 @@ def test_drill_restore_failure_is_reported_not_masked(tmp_path):
         def get_agent(self, agent_id):
             return self._inner.get_agent(agent_id)
 
-        def set_status(self, agent_id, status):
+        def set_status(self, agent_id, status, **kw):
             if status != "killed":
                 raise RegistryUnreachableError("registry died before the restore")
-            return self._inner.set_status(agent_id, status)
+            return self._inner.set_status(agent_id, status, **kw)
 
         def list_agents(self, **kw):
             return self._inner.list_agents(**kw)
@@ -953,8 +953,9 @@ def test_parse_method_empty_and_prefixed(raw, want):
     assert _parse_method(raw) == want
 
 
-def test_an_idempotent_rekill_does_not_write_the_registry_status_again(stack, monkeypatch):
-    """F-R11-3: `if previous != "killed"`: the second kill still signals, but must not PATCH the status again."""
+def test_a_rekill_signals_and_writes_the_registry_row_again(stack, monkeypatch):
+    """Kill-path hardening (reverses F-R11-3): a kill ALWAYS writes, even onto a killed row, so that the row's version
+    moves and a drill's compare-and-set restore cannot undo it."""
     monkeypatch.setenv("FIELD_KILL_ENDPOINT_ALLOWLIST", ALLOWED)
     stack.with_endpoint("invoicing-agent", f"http://{ALLOWED}/hooks/halt")      # registers the agent
     registry = stack.kill.app.state.registry
@@ -969,7 +970,7 @@ def test_an_idempotent_rekill_does_not_write_the_registry_status_again(stack, mo
     assert stack.kill.post("/kill/invoicing-agent", json=OP).status_code == 200
     assert calls == [("invoicing-agent", "killed")]
     assert stack.kill.post("/kill/invoicing-agent", json=OP).status_code == 200
-    assert calls == [("invoicing-agent", "killed")]                      # no second write
+    assert calls == [("invoicing-agent", "killed"), ("invoicing-agent", "killed")]      # the second kill writes again
     assert stack.registry.get("/agents/invoicing-agent").json()["status"] == "killed"
 
 def test_liveness_an_agent_exactly_at_the_cutoff_is_live_and_one_second_older_is_stale(tmp_path):

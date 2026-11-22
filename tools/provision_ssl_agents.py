@@ -119,6 +119,46 @@ AGENTS = {
     },
 }
 
+#: ROLE LOOP agents (draft 2026-11-04): five agents whose manifests say "DRAFT, not provisioned". They are NOT in the
+#: default run (review C1 on PR 857: a bare run of this tool must keep provisioning exactly the two agents above); a run
+#: provisions one of them only when it is named with --only.
+ROLE_AGENTS = {
+    "ssl-fp-red-team": {
+        "name": "SSL FP Red Team", "domain": "engineering",
+        "never": "merge pull request",
+    },
+    "ssl-fp-architect": {
+        "name": "SSL FP Architect", "domain": "engineering",
+        "never": "merge pull request",
+    },
+    "ssl-fp-frontdoor-engineer": {
+        "name": "SSL FP Front Door Engineer", "domain": "engineering",
+        "never": "merge pull request",
+    },
+    "ssl-fp-router-engineer": {
+        "name": "SSL FP Router Engineer", "domain": "engineering",
+        "never": "merge pull request",
+    },
+    "ssl-fp-runtime-engineer": {
+        "name": "SSL FP Runtime Engineer", "domain": "engineering",
+        "never": "merge pull request",
+    },
+}
+
+#: Every agent this tool knows; the default run uses AGENTS only.
+ALL_AGENTS = {**AGENTS, **ROLE_AGENTS}
+
+
+def selected_agents(only: list[str] | None) -> dict:
+    """The agents one run provisions: AGENTS (the two original agents) by default, or exactly the named ids (in table
+    order) from ALL_AGENTS. An id this tool does not know is a ValueError."""
+    if not only:
+        return dict(AGENTS)
+    unknown = [a for a in only if a not in ALL_AGENTS]
+    if unknown:
+        raise ValueError(", ".join(unknown))
+    return {a: ALL_AGENTS[a] for a in ALL_AGENTS if a in only}
+
 headers = {}
 if os.environ.get("FIELD_SHARED_SECRET"):
     headers["x-field-auth"] = os.environ["FIELD_SHARED_SECRET"]
@@ -305,7 +345,8 @@ def provision_agent(agent_id: str, meta: dict, engine=None):
     """One agent through `lifecycle provision`. Returns the ProvisionReport."""
     engine = engine or build_engine()
     m = manifest(agent_id)
-    assert m["agent"]["name"] == agent_id, f"manifest name mismatch for {agent_id}"
+    if m["agent"]["name"] != agent_id:      # a real check: an assert vanishes under python -O
+        raise ValueError(f"manifest name mismatch for {agent_id}")
     principal = m["identity"]["principal"]
     return engine.provision(
         manifest_path=manifest_path(agent_id),
@@ -343,6 +384,19 @@ def probe(agent_id: str, meta: dict, scope: list[str], token_id: str | None,
     return rows
 
 
+def save_tokens(tokens: dict[str, str]) -> None:
+    """Write the token cache so a crash never loses a token that is already minted: a temp file in the
+    same directory, 0600 from creation, fsync'd, then os.replace (atomic)."""
+    TOKENS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = TOKENS_FILE.with_name(TOKENS_FILE.name + ".tmp")
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(tokens, indent=2))
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, TOKENS_FILE)
+
+
 def main(argv: list[str] | None = None) -> int:
     from lifecycle_manager.engine import LifecycleError
 
@@ -354,7 +408,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--operator-key-file", metavar="PATH",
                         help="file holding that operator's key; read and stripped here, never printed "
                              "(default: $FIELD_OPERATOR_KEY_FILE, else $FIELD_OPERATOR_KEY)")
+    parser.add_argument("--only", metavar="AGENT_ID", action="append",
+                        help="provision this agent id (repeatable); default: the two original agents, never the "
+                             "role-loop drafts, which run only when named here")
     args = parser.parse_args(argv)
+    try:
+        chosen = selected_agents(args.only)
+    except ValueError as exc:
+        _refuse(f"--only names an agent this tool does not know: {exc}; nothing sent")
     if not PROXY:
         print("FIELD_PROXY_URL is not set: it is the estate base URL, an operator setting with no default "
               "in this repository. Nothing was sent.", file=sys.stderr)
@@ -369,12 +430,16 @@ def main(argv: list[str] | None = None) -> int:
         tokens = json.loads(TOKENS_FILE.read_text(encoding="utf-8"))
 
     failed: list[str] = []
-    for agent_id, meta in AGENTS.items():
+    for agent_id, meta in chosen.items():
         print(f"\n== {agent_id}")
         try:
             report = provision_agent(agent_id, meta, engine=engine)
         except LifecycleError as exc:
             print(f"  REFUSED: {exc}")
+            failed.append(agent_id)
+            continue
+        except (httpx.HTTPError, ValueError, KeyError) as exc:
+            print(f"FAILED {agent_id}: {type(exc).__name__}")
             failed.append(agent_id)
             continue
         for step in report.steps:
@@ -387,13 +452,25 @@ def main(argv: list[str] | None = None) -> int:
             continue
         if report.token_id:
             tokens[agent_id] = report.token_id
-        probe(agent_id, meta, report.scope, report.token_id)
+            try:
+                save_tokens(tokens)      # saved NOW, before any probe can fail: the token exists on the estate
+            except OSError as exc:
+                print(f"FAILED {agent_id}: the minted token could not be saved ({type(exc).__name__})")
+                return 1
+        try:
+            probe(agent_id, meta, report.scope, report.token_id)
+        except (httpx.HTTPError, ValueError, KeyError, LifecycleError) as exc:
+            print(f"FAILED {agent_id}: {type(exc).__name__}")
+            failed.append(agent_id)
 
-    TOKENS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    TOKENS_FILE.write_text(json.dumps(tokens, indent=2), encoding="utf-8")
-    print(f"\ntokens ({TTL_DAYS}-day TTL) saved to {TOKENS_FILE}")
+    if tokens:
+        print(f"\ntokens ({TTL_DAYS}-day TTL) saved to {TOKENS_FILE}")
 
-    ver = H.get(f"{LED}/verify").json()
+    try:
+        ver = H.get(f"{LED}/verify").json()
+    except (httpx.HTTPError, ValueError) as exc:
+        ver = f"unavailable ({type(exc).__name__})"
+        failed.append("ledger verify")
     print(f"ledger verify: {ver}")
     if failed:
         print(f"FAILED: {', '.join(failed)}")

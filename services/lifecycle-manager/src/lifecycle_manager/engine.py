@@ -53,6 +53,7 @@ from __future__ import annotations
 import csv
 import io
 import os
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -133,6 +134,9 @@ class Orphan(BaseModel):
     status: str
     reason: str
     auto_killed: bool = False
+    # Set when an auto-kill was attempted and did not land: the exception class
+    # or "HTTP <status>", never a URL or exception text.
+    kill_error: str | None = None
 
 
 RETENTION_FINDING_STATUSES = ("violation", "no_estate_policy", "unresolvable", "unavailable")
@@ -202,6 +206,15 @@ class WitnessFinding(BaseModel):
     detail: str = ""
 
 
+class UnreadableTimestamp(BaseModel):
+    """A record the sweep skipped because its timestamp could not be read.
+    Names the record and the field only, never the value (it is caller data)."""
+
+    kind: Literal["token", "agent"]
+    record_id: str
+    field: str
+
+
 class SweepReport(BaseModel):
     swept_at: str
     config: SweepConfig
@@ -222,6 +235,17 @@ class SweepReport(BaseModel):
         description="None = no witness on this estate (FIELD_WITNESS_EVERY unset), or its latest "
         "anchor.remote is within 3 x the interval. A default, so older reports still validate.",
     )
+    persist_error: str | None = Field(
+        default=None,
+        description="Served sweeps only: the exception class name when the finished report could not be "
+        "written to disk (the sweep, and any auto-kill, had already run); None otherwise. A default, so "
+        "older reports still validate.",
+    )
+    unreadable_timestamps: list[UnreadableTimestamp] = Field(
+        default_factory=list,
+        description="Records skipped because expires_at, attested_at or created_at was not a "
+        "readable time. A default, so older reports still validate.",
+    )
     method: str = (
         "deterministic sweep v0.1 over agent-registry + delegation-authority "
         "vs. owners.csv roster; no LLM"
@@ -236,6 +260,12 @@ class SweepReport(BaseModel):
 class LifecycleError(Exception):
     """A transition refused before it changed anything. Carries the message
     the CLI prints; the caller exits non-zero and nothing was created."""
+
+
+# The kill-switch's KillRequest bounds (operator <= 200, reason <= 1000); the
+# reason is sent with a 24-character prefix, so 976 is what the caller may give.
+MAX_DECOMMISSION_BY = 200
+MAX_DECOMMISSION_REASON = 976
 
 
 class TransitionStep(BaseModel):
@@ -302,6 +332,13 @@ class DecommissionReport(BaseModel):
     )
 
 
+def owner_key(text: str) -> str:
+    """The one way an owner string is compared: NFC, stripped, case-folded. Exact otherwise (no substring). Used
+    for the roster and for the orphan test, so a padded or NFD-composed owner is not reported as an orphan."""
+    import unicodedata   # in the function: a top import would move the ENVIRONMENT.md line cites above it
+    return unicodedata.normalize("NFC", text).strip().casefold()
+
+
 class RosterEntry(BaseModel):
     """One HUMAN on owners.csv: the `owner` string plus the other strings the
     registry may record for the same person (`aliases`)."""
@@ -313,7 +350,7 @@ class RosterEntry(BaseModel):
 
     def match_strings(self) -> set[str]:
         """Every string that makes an agent owned by this human, lower-cased."""
-        return {self.owner.lower(), *(a.lower() for a in self.aliases)}
+        return {owner_key(self.owner), *(owner_key(a) for a in self.aliases)}
 
 
 def parse_roster_entries(csv_text: str) -> list[RosterEntry]:
@@ -418,7 +455,15 @@ class _Unreachable:
     status_code: int | None = None
 
     def __init__(self, exc: BaseException):
+        self.exc_name = type(exc).__name__
         self.text = f"transport error: {type(exc).__name__}: {exc}"
+
+
+def _seg(value: str) -> str:
+    """One path segment: an id with ``/``, ``?``, ``#`` or ``%`` can never address another route. ``quote`` leaves the
+    dots alone, so the dot segments ``.`` and ``..`` (which a URL resolver would collapse) are spelled ``%2E``."""
+    out = urllib.parse.quote(str(value), safe="")
+    return {".": "%2E", "..": "%2E%2E"}.get(out, out)
 
 
 def _try(fn: Any, *args: Any, **kwargs: Any) -> Any:
@@ -449,9 +494,43 @@ def _body(resp: Any) -> str:
     return str(text)[:500]
 
 
+def _listing_rows(listing: Any) -> tuple[list[dict], list[str]]:
+    """``(rows, failures)`` from the answer to ``GET /tokens``: the rows that are objects with a non-empty string
+    ``token_id``, and one failure text for each thing wrong with the answer (a non-200 status, a body that is not JSON, a
+    body that is not a list, a row that is not usable). A failure text never contains more than ``_body`` allows."""
+    status = _status(listing)
+    if status is not None and status != 200:
+        return [], [f"token listing answered {status}: {_body(listing)}"]
+    try:
+        body = _json(listing)
+    except Exception as exc:  # noqa: BLE001 — a body that is not JSON
+        return [], [f"token listing is not JSON ({type(exc).__name__})"]
+    if body is None:
+        return [], []
+    if not isinstance(body, list):
+        return [], [f"token listing is a {type(body).__name__}, not a list"]
+    rows: list[dict] = []
+    failures: list[str] = []
+    for i, row in enumerate(body):
+        tid = row.get("token_id") if isinstance(row, dict) else None
+        if not isinstance(tid, str) or not tid:
+            failures.append(f"token listing row {i} has no usable token_id; it was not revoked")
+            continue
+        rows.append(row)
+    return rows, failures
+
+
 def _parse_ts(raw: str) -> datetime:
     dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _parse_ts_or_none(raw: Any) -> datetime | None:
+    """`_parse_ts`, but None for anything unreadable (not a string, not ISO)."""
+    try:
+        return _parse_ts(raw)
+    except (TypeError, ValueError, AttributeError):
+        return None
 
 
 #: The register step's text when the registry answers 403 to the owner / manifest_ref PATCH (G21).
@@ -616,6 +695,7 @@ class LifecycleEngine:
         )
 
         escalations = 0
+        unreadable: list[UnreadableTimestamp] = []
 
         # 1. Expiring authorities.
         expiring: list[ExpiringAuthority] = []
@@ -623,7 +703,11 @@ class LifecycleEngine:
         for t in tokens:
             if t.get("revoked"):
                 continue
-            expires = _parse_ts(t["expires_at"])
+            expires = _parse_ts_or_none(t.get("expires_at"))
+            if expires is None:
+                unreadable.append(UnreadableTimestamp(
+                    kind="token", record_id=str(t.get("token_id")), field="expires_at"))
+                continue
             if now <= expires <= horizon:
                 days_left = (expires - now).days
                 finding = ExpiringAuthority(
@@ -650,8 +734,12 @@ class LifecycleEngine:
             # reset the clock to zero and hide a stale agent completely.
             attested = a.get("attested_at")
             basis = "attested_at" if attested else "created_at"
-            raw = attested or a["created_at"]
-            since = _parse_ts(raw)
+            raw = attested or a.get("created_at")
+            since = _parse_ts_or_none(raw)
+            if since is None:
+                unreadable.append(UnreadableTimestamp(
+                    kind="agent", record_id=str(a.get("agent_id")), field=basis))
+                continue
             if since < stale_before:
                 days_stale = (now - since).days
                 finding = ReattestationDue(
@@ -676,7 +764,7 @@ class LifecycleEngine:
             if a.get("status") == "retired":
                 continue
             owner = str(a.get("owner", ""))
-            if owner.lower() in roster:
+            if owner_key(owner) in roster:
                 continue
             orphan = Orphan(
                 agent_id=a["agent_id"], owner=owner, status=a.get("status", "?"),
@@ -693,13 +781,28 @@ class LifecycleEngine:
                 and self.killswitch is not None
                 and a.get("status") == "active"
             ):
-                resp = self.killswitch.post(
-                    f"/kill/{orphan.agent_id}",
+                resp = _try(
+                    self.killswitch.post,
+                    f"/kill/{_seg(orphan.agent_id)}",
                     json={"operator": config.operator,
                           "reason": "lifecycle sweep: orphaned agent (auto-kill flag set)"},
                 )
-                orphan.auto_killed = getattr(resp, "status_code", 0) == 200
+                status = getattr(resp, "status_code", 0)
+                orphan.auto_killed = status == 200
+                if isinstance(resp, _Unreachable):
+                    orphan.kill_error = resp.exc_name
+                elif not orphan.auto_killed:
+                    orphan.kill_error = f"HTTP {status}"
             orphans.append(orphan)
+
+        # 3b. Records the sweep could not judge (R-PR489 C2): a finding, not a silent skip. One escalation per
+        # record, naming the record id and the field only, never the unreadable value.
+        for u in unreadable:
+            escalations += self._ledger_note(
+                "lifecycle.unreadable_timestamp",
+                {"kind": u.kind, "record_id": u.record_id, "field": u.field, "operator": config.operator},
+                u.record_id if u.kind == "agent" else None,
+            )
 
         # 4. Retention policy (estate-level, from the ledger). No ledger event.
         retention_policy = self._retention_finding()
@@ -719,6 +822,7 @@ class LifecycleEngine:
             escalations_written=escalations,
             retention_policy=retention_policy,
             witness=witness,
+            unreadable_timestamps=unreadable,
         )
 
 
@@ -839,7 +943,7 @@ class LifecycleEngine:
             # attribution) and `manifest_ref` (which the kill-switch resolves
             # its halt endpoint from), and the cap step then installed a live
             # spend cap on a decommissioned record. Stop before any of it.
-            existing = _try(self.registry_http.get, f"/agents/{agent_id}")
+            existing = _try(self.registry_http.get, f"/agents/{_seg(agent_id)}")
             stored: dict[str, Any] | None = None
             if _status(existing) == 200:
                 try:
@@ -883,7 +987,7 @@ class LifecycleEngine:
             else:
                 patch = _try(
                     self.registry_http.patch,
-                    f"/agents/{agent_id}",
+                    f"/agents/{_seg(agent_id)}",
                     json={"owner": owner, "manifest_ref": report.manifest_ref},
                 )
                 pstatus = _status(patch)
@@ -927,7 +1031,7 @@ class LifecycleEngine:
         except ValueError as exc:
             steps.append(TransitionStep(step="cap", outcome="failed", detail=str(exc)))
             return report
-        cresp = _try(self.governor.put, f"/caps/{agent_id}", json=cap.model_dump())
+        cresp = _try(self.governor.put, f"/caps/{_seg(agent_id)}", json=cap.model_dump())
         cstatus = _status(cresp)
         if cstatus != 200:
             steps.append(
@@ -1057,6 +1161,18 @@ class LifecycleEngine:
         * then the registry goes to ``retired``, which the kill-switch refuses
           to undo (409 on both ``/kill`` and ``/revive``).
         """
+        # Refuse text the kill-switch would 422 BEFORE any client call: otherwise
+        # the revoke runs, the halt fails, and the agent is retired unhalted.
+        if not by.strip() or len(by) > MAX_DECOMMISSION_BY:
+            raise LifecycleError(
+                f"--by must be non-blank and at most {MAX_DECOMMISSION_BY} "
+                "characters — nothing decommissioned"
+            )
+        if not reason.strip() or len(reason) > MAX_DECOMMISSION_REASON:
+            raise LifecycleError(
+                f"--reason must be non-blank and at most {MAX_DECOMMISSION_REASON} "
+                "characters — nothing decommissioned"
+            )
         now = now or datetime.now(timezone.utc)
         try:
             record = self.registry.get_agent(agent_id)
@@ -1110,12 +1226,21 @@ class LifecycleEngine:
             )
             tokens: list = []
         else:
-            tokens = _json(listing) or []
+            # S7-9: a reachable authority can still answer 5xx, a non-JSON body, a JSON object, or rows without a
+            # token_id. Each is a failed `revoke` step on the report, never an exception: the kill and the retire
+            # below must still run (the act-first rule above).
+            tokens, listing_failures = _listing_rows(listing)
+            for detail in listing_failures:
+                ok = False
+                report.revoke_failures.append(
+                    TransitionStep(step="revoke", outcome="failed", detail=detail,
+                                   http_status=_status(listing) if _status(listing) != 200 else None)
+                )
         for token in tokens:
-            if token.get("revoked"):
+            if token.get("revoked") is True:     # only a real True skips; anything else is revoked again (safe side)
                 continue
             token_id = token["token_id"]
-            resp = _try(self.delegation.post, f"/tokens/{token_id}/revoke")
+            resp = _try(self.delegation.post, f"/tokens/{_seg(token_id)}/revoke")
             status = _status(resp)
             if status == 200:
                 report.tokens_revoked.append(token_id)
@@ -1154,7 +1279,7 @@ class LifecycleEngine:
         else:
             resp = _try(
                 self.killswitch.post,
-                f"/kill/{agent_id}",
+                f"/kill/{_seg(agent_id)}",
                 json={"operator": by, "reason": f"lifecycle decommission: {reason}"},
             )
             status = _status(resp)
@@ -1250,6 +1375,8 @@ def render_markdown(report: SweepReport) -> str:
     add(f"## Orphans ({len(report.orphans)})")
     for o in report.orphans:
         killed = " → AUTO-KILLED" if o.auto_killed else ""
+        if o.kill_error:   # an exception class or HTTP status the engine built, never registry text
+            killed = f" → AUTO-KILL FAILED ({o.kill_error})"
         add(f"- {_inline(o.agent_id)} ({_inline(o.status)}) — {_inline(o.reason)}{killed}")
     if not report.orphans:
         add("- none")
@@ -1279,6 +1406,11 @@ def render_markdown(report: SweepReport) -> str:
             f"{witness.anchors_seen} seen; latest ts {witness.latest_ts}")
         if witness.detail:
             add(f"- detail: {_inline(witness.detail)}")
+        add("")
+    if report.unreadable_timestamps:
+        add(f"## Skipped: unreadable timestamp ({len(report.unreadable_timestamps)})")
+        for u in report.unreadable_timestamps:
+            add(f"- {u.kind} {_inline(u.record_id)}: `{u.field}` is not a readable time")
         add("")
     add(f"*Escalations written to ledger:* {report.escalations_written}")
     add(f"\n---\n*Method:* {report.method}")

@@ -181,3 +181,17 @@ def test_allow_ip_cidr_matches_an_ipv4_mapped_client():
     # and a bare-address allowlist entry in the mapped spelling matches too
     findings, _, _ = evaluate(sessions, RetroConfig(allow_ips=["::ffff:203.0.113.5"]))
     assert [f.verdict for f in findings] == [Verdict.AUTHORIZED]
+
+
+def test_exactly_twenty_benign_requests_before_the_first_hostile_one_are_kept():
+    # reviewer-8 on 166db1c (mutants B4, B5): CONTEXT_BENIGN is a calibrated number outside RetroConfig; pin it
+    from agent_incident_retro.clauses import CONTEXT_BENIGN, _kept_requests
+
+    assert CONTEXT_BENIGN == 20
+    benign = [req(n, n, f"/page{n}") for n in range(1, 22)]                      # 21 benign requests
+    hostile = req(22, 30, "/search", "q=%27%20OR%20%271%27%3D%271")
+    assert hostile.is_hostile and not any(r.is_hostile for r in benign)
+    kept = _kept_requests(sess(benign + [hostile]), [], include_raw=True)
+    assert [r.ref.line for r in kept] == list(range(2, 23))                      # lines 2..21 (20 benign) and the hostile 22
+    short = _kept_requests(sess(benign[:19] + [hostile]), [], include_raw=True)  # 19 benign: all kept
+    assert [r.ref.line for r in short] == list(range(1, 20)) + [22]

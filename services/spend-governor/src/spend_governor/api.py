@@ -21,6 +21,7 @@ from typing import Literal
 from fastapi import Depends, FastAPI, HTTPException
 
 from field_core import operator_auth, operator_health
+from field_core.startup import warn_open
 from fastapi.responses import JSONResponse
 
 from field_core.authn import install as install_authn
@@ -33,7 +34,7 @@ from field_core.pricing import (
     units_to_cents,
     units_to_usd_str,
 )
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from spend_governor import __version__
 from spend_governor.core import (
@@ -49,6 +50,7 @@ from spend_governor.core import (
     ThrottleInfo,
     Utf8Str,
     action_totals,
+    crossed_thresholds,
     evaluate,
     rolling_window_start,
     window_action_rows,
@@ -64,18 +66,26 @@ from spend_governor.usage import (
 )
 
 
+# S2-2: bounds on caller free text, so a stored row cannot grow without limit
+# (the ledger copy is already truncated by ledger_note, the stored row was not).
+# The numbers are proposals, flagged for the owner.
+MAX_NOTE_LEN = 1000  # the ledger copy is still cut to 300 (pinned by test_usage_55_and_notes)
+MAX_LABEL_LEN = 200   # action, model
+MAX_ID_LEN = 128      # agent_id, the registry id style
+
+
 class SpendRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    agent_id: str = Field(min_length=1)
+    agent_id: str = Field(min_length=1, max_length=MAX_ID_LEN)
     cents: int = Field(default=0, ge=0, le=MAX_AMOUNT)
     tokens: int = Field(default=0, ge=0, le=MAX_AMOUNT)
     actions: int = Field(default=0, ge=0, le=MAX_AMOUNT)
-    note: Utf8Str | None = None
+    note: Utf8Str | None = Field(default=None, max_length=MAX_NOTE_LEN)
     # D1: which action this row is for (feeds that action's rate window) and
     # who counted it. ``sentinel`` is a LABEL any authenticated caller can
     # send, not an authenticated identity (README LIMITS).
-    action: str | None = Field(default=None, min_length=1)
+    action: str | None = Field(default=None, min_length=1, max_length=MAX_LABEL_LEN)
     source: Literal["self", "sentinel"] = "self"
     shadowed: bool = False  # sentinel: the ALLOW was a log-only shadow
 
@@ -93,12 +103,12 @@ class TotalsResponse(BaseModel):
 class UsageRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    agent_id: str = Field(min_length=1)
-    model: str = Field(min_length=1, description="Model the agent used")
+    agent_id: str = Field(min_length=1, max_length=MAX_ID_LEN)
+    model: str = Field(min_length=1, max_length=MAX_LABEL_LEN, description="Model the agent used")
     input_tokens: int = Field(default=0, ge=0, le=MAX_AMOUNT)
     output_tokens: int = Field(default=0, ge=0, le=MAX_AMOUNT)
     cache_read_tokens: int = Field(default=0, ge=0, le=MAX_AMOUNT)
-    note: Utf8Str | None = None
+    note: Utf8Str | None = Field(default=None, max_length=MAX_NOTE_LEN)
 
 
 class UsageResponse(BaseModel):
@@ -110,7 +120,17 @@ class UsageResponse(BaseModel):
 class ResolveRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    resolved_by: str = Field(min_length=1, description="Human resolver")
+    resolved_by: str = Field(min_length=1, max_length=200, description="Human resolver")
+
+    @field_validator("resolved_by")
+    @classmethod
+    def _resolver_stripped_not_blank(cls, value: str) -> str:
+        """The recorded human of record (first resolver wins) and the ledger note's `resolved_by`: stripped, never blank,
+        so ' alice' and 'alice' are the same human."""
+        value = value.strip()
+        if not value:
+            raise ValueError("resolved_by must not be blank")
+        return value
 
 
 class HealthResponse(operator_health.OperatorHealthFields):
@@ -295,6 +315,41 @@ def create_app(
     def _status(agent_id: str, now: datetime, action: str | None = None) -> SpendStatus:
         return _status_full(agent_id, now, action)[0]
 
+    def _open_threshold_escalations(
+        agent_id: str, status: SpendStatus, cap_detail: str,
+        cap: SpendCapConfig, now: datetime,
+    ) -> None:
+        """One escalation per crossed dimension, for /spend and /usage alike.
+        A cap_detail that is not a crossing ("N unresolved escalation(s)")
+        opens nothing."""
+        if cap_detail.split(" ", 1)[0] not in ("cents", "tokens", "actions"):
+            return
+        spent_limit = {
+            "cents": (status.spent_cents, status.limit_cents),
+            "tokens": (status.spent_tokens, status.token_limit),
+            "actions": (status.spent_actions, status.action_limit),
+        }
+        for kind in crossed_thresholds(
+            cap, status.spent_cents, status.spent_tokens, status.spent_actions
+        ):
+            spent, limit = spent_limit[kind]
+            # check-and-insert in one store call: concurrent crossings
+            # open (and ledger) exactly one escalation per kind
+            esc, opened = _store().add_escalation_if_none_open(
+                Escalation(
+                    escalation_id=str(uuid.uuid4()), agent_id=agent_id,
+                    ts=now.isoformat(), kind=kind, spent=spent, limit=limit,
+                    pct=cap.escalate_at_pct,
+                )
+            )
+            if opened:
+                _ledger_note(
+                    "spend.escalate",
+                    {"escalation_id": esc.escalation_id, "kind": kind,
+                     "spent": spent, "limit": limit},
+                    agent_id,
+                )
+
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
         return HealthResponse(ok=True, build_sha=build_sha(),
@@ -399,29 +454,7 @@ def create_app(
 
         status, cap_state, cap_detail = _status_full(req.agent_id, now, req.action)
         if cap_state is SpendState.ESCALATE:
-            kind = cap_detail.split(" ", 1)[0]
-            if kind in ("cents", "tokens", "actions"):
-                spent, limit = {
-                    "cents": (status.spent_cents, status.limit_cents),
-                    "tokens": (status.spent_tokens, status.token_limit),
-                    "actions": (status.spent_actions, status.action_limit),
-                }[kind]
-                # check-and-insert in one store call: concurrent crossings
-                # open (and ledger) exactly one escalation per kind
-                esc, opened = _store().add_escalation_if_none_open(
-                    Escalation(
-                        escalation_id=str(uuid.uuid4()), agent_id=req.agent_id,
-                        ts=now.isoformat(), kind=kind, spent=spent, limit=limit,
-                        pct=cap.escalate_at_pct,
-                    )
-                )
-                if opened:
-                    _ledger_note(
-                        "spend.escalate",
-                        {"escalation_id": esc.escalation_id, "kind": kind,
-                         "spent": spent, "limit": limit},
-                        req.agent_id,
-                    )
+            _open_threshold_escalations(req.agent_id, status, cap_detail, cap, now)
         elif status.state is SpendState.BLOCK:
             _ledger_note(
                 "spend.cap_reached",
@@ -574,7 +607,9 @@ def create_app(
                     req.agent_id,
                 )
 
-        status = _status(req.agent_id, now)
+        status, cap_state, cap_detail = _status_full(req.agent_id, now)
+        if cap_state is SpendState.ESCALATE:
+            _open_threshold_escalations(req.agent_id, status, cap_detail, cap, now)
         if status.state is SpendState.BLOCK:
             _ledger_note("spend.cap_reached", {"detail": status.detail}, req.agent_id)
         return UsageResponse(
@@ -616,4 +651,5 @@ def create_app(
             open_rogue_flags=rogue_open,
         )
 
+    warn_open("spend-governor", operator_layer=True)
     return app
