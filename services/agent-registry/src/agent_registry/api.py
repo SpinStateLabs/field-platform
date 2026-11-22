@@ -35,6 +35,7 @@ from agent_registry.store import (
     RetiredAgentError,
     RetiredAttestationError,
     RetiredRecordFrozenError,
+    RowChangedError,
 )
 
 
@@ -362,6 +363,8 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
         except RetiredAgentError:
             raise HTTPException(409, f"agent '{agent_id}' is retired - "
                                 "a decommission cannot be reversed here") from None
+        except RowChangedError:
+            raise HTTPException(412, f"agent '{agent_id}' was changed since it was read") from None
         if record.status != before.status:
             _ledger_note(
                 "registry.status_changed",
@@ -371,7 +374,7 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
         else:
             _ledger_note(
                 "registry.updated",
-                {"fields": sorted(patch.model_dump(exclude_none=True))},
+                {"fields": sorted(patch.model_dump(exclude_none=True, exclude={"if_updated_at"}))},
                 agent_id,
             )
         return record
