@@ -103,4 +103,4 @@ def test_an_unreachable_sentinel_is_one_line_exit_1(run, exc):
 
 def test_a_non_200_status_is_still_exit_1(run):
     r, _ = run(Resp(status=503, body={"detail": "down"}))
-    assert r.exit_code == 1 and "error 503" in r.output
+    assert r.exit_code == 1 and "returned 503" in r.output

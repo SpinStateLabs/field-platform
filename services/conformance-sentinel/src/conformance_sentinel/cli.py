@@ -6,6 +6,7 @@ from field_core.guarded_operator import perimeter_headers
 from conformance_sentinel import headers as _headers
 from field_core.errors import upstream_error
 
+import json
 import os
 import sys
 
@@ -49,12 +50,13 @@ def check(
                   "irreversible": irreversible},
             timeout=15.0,
             headers=perimeter_headers(),
+            follow_redirects=False,
         )
     except _HTTP_ERRORS as exc:
         typer.echo(f"error: sentinel unreachable ({type(exc).__name__})", err=True)
         raise typer.Exit(code=1)
     if resp.status_code != 200:
-        typer.echo(f"error {resp.status_code}: {resp.text}", err=True)
+        typer.echo(f"error: {upstream_error(resp, 'sentinel /check')}", err=True)   # status only, never the body (B4)
         raise typer.Exit(code=1)
     # S6-13, fail closed: only the exact decision 'ALLOW' exits 0. A body that is not JSON, not an object, has no
     # decision or a decision this CLI does not know is a refusal, never an allow.
@@ -69,7 +71,7 @@ def check(
                    + (f"an unknown decision {shown!r}" if shown is not None else "no readable decision")
                    + "; treated as BLOCK", err=True)
         raise typer.Exit(code=1)
-    typer.echo(resp.text)
+    typer.echo(json.dumps(verdict, ensure_ascii=True))   # the parsed verdict re-serialised, never the raw body (B4)
     if decision == "BLOCK":
         raise typer.Exit(code=1)
     if decision == "ESCALATE":
