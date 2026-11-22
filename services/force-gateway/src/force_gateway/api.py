@@ -28,7 +28,7 @@ failing open: BEFORE passthrough and BEFORE any bypass window, ``/v1/messages``
 requires ``x-field-agent-id`` AND ``x-field-token`` (the delegation token id —
 B2's OAuth-style pattern at the egress; missing either ⇒ 401 naming both) and
 asks the sentinel ``POST /check {agent_id, token_id, action}`` through
-``SentinelClient`` (``FIELD_SENTINEL_URL``, ``auth_headers()``,
+``SentinelClient`` (``FIELD_SENTINEL_URL``, ``perimeter_headers()``,
 ``FORCE_GATEWAY_SENTINEL_TIMEOUT`` default 30 s). ``action`` is the
 ``x-field-action`` header when present (scope enforced against the manifest
 like any governed action), else exactly ``llm.messages``. ALLOW ⇒ the call
@@ -71,7 +71,8 @@ from fastapi.responses import JSONResponse
 
 from field_core import posture_flag
 from field_core.startup import warn_open
-from field_core.authn import auth_headers, install as install_authn, shared_secret
+from field_core.authn import install as install_authn, shared_secret
+from field_core.guarded_operator import perimeter_headers
 from field_core.http_errors import install_validation_handler
 from field_core.buildinfo import build_sha
 from field_core.llm import AGENT_ID_HEADER, EGRESS_ACTION, TOKEN_HEADER
@@ -384,7 +385,7 @@ class SentinelUnavailable(RuntimeError):
 
 class SentinelClient:
     """`POST /check` on the conformance-sentinel (base `FIELD_SENTINEL_URL`,
-    perimeter `auth_headers()`, timeout `FORCE_GATEWAY_SENTINEL_TIMEOUT`).
+    perimeter `perimeter_headers()`, timeout `FORCE_GATEWAY_SENTINEL_TIMEOUT`).
     Injectable like field-core's clients (a TestClient qualifies)."""
 
     def __init__(self, client=None, base_url: str | None = None,
@@ -395,7 +396,7 @@ class SentinelClient:
         if self._client is None:
             import httpx
 
-            self._client = httpx.Client(timeout=self.timeout, headers=auth_headers())
+            self._client = httpx.Client(timeout=self.timeout, headers=perimeter_headers())
 
     @property
     def base_url(self) -> str:
