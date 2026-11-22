@@ -1,6 +1,7 @@
-"""S8-26 — GET /api/events and /api/events/export with a ledger 200 of the wrong shape (not a list, a row
-that is not an object, an event whose payload is not an object) answer a fixed 502, never a 500 and
-never a short or mangled export. The ledger's text is not echoed."""
+"""S8-26 — GET /api/events and /api/events/export with a ledger 200 of the wrong shape (not a list, or a row
+that is not an object) answer a fixed 502, never a 500 and never a short or mangled export. The ledger's text
+is not echoed. An event whose payload is not an object is NOT a wrong shape: main's S-2-17 rule exports it
+(empty clause_id), so those rows answer 200 here too."""
 
 from __future__ import annotations
 
@@ -50,10 +51,9 @@ BAD = [
     ("list-of-numbers", [1, 2]),
     ("list-with-null", [GOOD, None]),
     ("list-in-list", [[GOOD]]),
-    ("payload-string", [{**GOOD, "payload": LEAK}]),
-    ("payload-list", [{**GOOD, "payload": [LEAK]}]),
-    ("payload-number", [{**GOOD, "payload": 5}]),
 ]
+# Main's S-2-17 per-event tolerance: a row whose payload is not an object still passes through and exports.
+NON_DICT_PAYLOADS = [[{**GOOD, "payload": LEAK}], [{**GOOD, "payload": [LEAK]}], [{**GOOD, "payload": 5}]]
 ROUTES = [("/api/events", {}), ("/api/events/export", {"format": "csv"}), ("/api/events/export", {"format": "json"})]
 
 
@@ -68,7 +68,8 @@ def test_a_wrong_shaped_ledger_answer_is_a_fixed_502(label, body, path, params):
 
 @pytest.mark.parametrize("path, params", ROUTES, ids=["events", "export-csv", "export-json"])
 def test_good_answers_and_the_existing_edge_cases_are_unchanged(path, params):
-    for body in ([], [GOOD], [{**GOOD, "payload": None}], [{**GOOD}, {k: v for k, v in GOOD.items() if k != "payload"}]):
+    for body in ([], [GOOD], [{**GOOD, "payload": None}], [{**GOOD}, {k: v for k, v in GOOD.items() if k != "payload"}],
+                 *NON_DICT_PAYLOADS):
         r = console(body).get(path, params=params)
         assert r.status_code == 200, (body, r.text)
 
