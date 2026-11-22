@@ -214,17 +214,29 @@ def real_upstream(body: dict[str, Any], headers: dict[str, str]) -> tuple[int, d
             raise HTTPException(502, f"{REQUIRE_TLS_ENV}=1: refusing to send the upstream key over "
                                      "plain http to a non-private host (set ANTHROPIC_BASE_URL to https)")
         _warn_once(warning)
-    resp = httpx.post(
-        f"{base}/v1/messages",
-        json=body,
-        headers={
-            "x-api-key": api_key,
-            "anthropic-version": headers.get("anthropic-version", "2023-06-01"),
-            "content-type": "application/json",
-        },
-        timeout=120.0,
-    )
-    return resp.status_code, scrub_secret(resp.json(), api_key)
+    try:
+        resp = httpx.post(
+            f"{base}/v1/messages",
+            json=body,
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": headers.get("anthropic-version", "2023-06-01"),
+                "content-type": "application/json",
+            },
+            timeout=120.0,
+        )
+    except httpx.HTTPError as exc:
+        # Class name only: the exception text can carry the base URL.
+        raise HTTPException(502, f"upstream unreachable: {type(exc).__name__}") from None
+    try:
+        answer = resp.json()
+    except ValueError:
+        raise HTTPException(502, f"upstream answered a non-JSON body (status {resp.status_code})") from None
+    if not isinstance(answer, dict):
+        # valid JSON that is not an object ([], null, a string, a number) is not a model reply either: the route would call
+        # .get on it and end as a 500 (R-PR699-516d9cb C1)
+        raise HTTPException(502, f"upstream answered JSON that is not an object (status {resp.status_code})") from None
+    return resp.status_code, scrub_secret(answer, api_key)
 
 
 def resolve_upstream(upstream: Upstream | None = None) -> Upstream:
@@ -523,8 +535,12 @@ def _meter_usage(app: FastAPI, agent_id: str | None, model: str,
                 "agent_id": agent_id, "tokens": input_tokens + output_tokens,
                 "note": note,
             })
-    except Exception:
-        pass
+    except Exception as exc:
+        # Traffic stands; the metering gap is now visible: counted for /health and
+        # logged (the exception TYPE only: its text can carry a URL or a value).
+        app.state.spend_forwards_dropped += 1
+        log.warning("spend forward to the governor dropped (%s); request kept",
+                    type(exc).__name__)
 
 
 def _ledger_event(app: FastAPI, event_type: str, payload: dict) -> None:
@@ -535,8 +551,10 @@ def _ledger_event(app: FastAPI, event_type: str, payload: dict) -> None:
     try:
         app.state.ledger.append(event_type, payload=payload,
                                 agent_id=SELF_AGENT_ID)
-    except Exception:
-        pass
+    except Exception as exc:
+        app.state.ledger_appends_dropped += 1
+        log.warning("ledger append %s dropped (%s); request kept",
+                    event_type, type(exc).__name__)
 
 
 def _refuse(app: FastAPI, status: int, agent_id: str, action: str,
@@ -674,13 +692,19 @@ def _maybe_judge(app: FastAPI, preset: str, text: str,
     except Exception:
         _count(app, "judge_bypassed", "governor_unreachable", pending)
         return None
-    if resp.status_code == 404:
+    status = getattr(resp, "status_code", None)
+    if status == 404:
         _count(app, "judge_bypassed", "no_cap", pending)
         return None
-    if resp.status_code != 200:
+    if status != 200:
         _count(app, "judge_bypassed", "governor_error", pending)
         return None
-    if resp.json().get("state") == "BLOCK":
+    try:
+        state = resp.json().get("state")      # a body that is not a JSON object is a governor error too (S7-31)
+    except Exception:
+        _count(app, "judge_bypassed", "governor_error", pending)
+        return None
+    if state == "BLOCK":
         _count(app, "judge_bypassed", "budget", pending)
         return None
     try:
@@ -808,6 +832,8 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
         max(1, telemetry_window) if telemetry_window is not None
         else resolve_telemetry_window())
     app.state.request_count = 0
+    app.state.ledger_appends_dropped = 0
+    app.state.spend_forwards_dropped = 0
     app.state.bypass_remaining = 0
     app.state.coverage = _fresh_coverage(app.state.sample_every)
     app.state.store_error = None
@@ -859,6 +885,8 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
                 "tool_check_active": app.state.enforce and app.state.tool_check,
                 "sentinel_url": app.state.sentinel_url,
                 "sentinel_timeout_seconds": app.state.sentinel_timeout,
+                "ledger_appends_dropped": app.state.ledger_appends_dropped,
+                "spend_forwards_dropped": app.state.spend_forwards_dropped,
                 "build_sha": build_sha()}
 
     @app.get("/presets")
