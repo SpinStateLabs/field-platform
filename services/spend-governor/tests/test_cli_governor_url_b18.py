@@ -1,7 +1,7 @@
 """Backlog B18: a FIELD_GOVERNOR_URL that httpx cannot build a URL from (httpx.InvalidURL or ValueError) escaped the
 governor CLI as a traceback, and some shapes echoed the value. ``_base()`` now refuses such a value, and one that is
 not http(s) or has no host, before any request: one fixed line on stderr, exit 2, never the value. Blank is unset.
-httpx's request functions are faked; nothing leaves the process. Values are made up."""
+httpx.Client.request is faked; nothing leaves the process. Values are made up."""
 
 from __future__ import annotations
 
@@ -20,12 +20,12 @@ MARK = "Qz7mark"
 def calls(monkeypatch):
     seen: list[str] = []
 
-    def fake(url, **kw):
+    def fake(self, method, url, **kw):
         seen.append(url)
         return SimpleNamespace(status_code=200, text="{}", json=lambda: {})
 
-    for name in ("get", "put", "post"):
-        monkeypatch.setattr(cli.httpx, name, fake)
+    # the CLI sends through one httpx.Client (S10-12, #1263), so the recorder sits on Client.request
+    monkeypatch.setattr(cli.httpx.Client, "request", fake)
     return seen
 
 
