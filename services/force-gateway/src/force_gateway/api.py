@@ -57,6 +57,7 @@ import ipaddress
 import logging
 import math
 import os
+import re
 import sqlite3
 import time
 from contextlib import asynccontextmanager
@@ -374,6 +375,37 @@ def checked_sentinel_timeout(value: float, default: float = DEFAULT_SENTINEL_TIM
     return min(float(value), MAX_SENTINEL_TIMEOUT)
 
 
+_HOSTNAME = re.compile(r"[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?")
+
+
+def public_origin(url: str | None) -> str | None:
+    """scheme://host[:port] of a configured URL, the only part ever shown (`/health`, the 503 detail, logs): userinfo,
+    path, query and fragment are dropped, an unparsable value shows as a fixed word (C-623, reviewer C-596 F-C596-2)."""
+    if not url:
+        return None
+    try:
+        parts = urlparse(url)
+        host, port = parts.hostname, parts.port
+    except ValueError:
+        return "(unparsable url)"
+    if parts.scheme not in ("http", "https") or not _is_host(host):   # a junk host is text from the value: fixed word instead
+        return "(unparsable url)"
+    return f"{parts.scheme}://{'[' + host + ']' if ':' in host else host}" + (f":{port}" if port else "")
+
+
+def _is_host(host: str | None) -> bool:
+    """A hostname (letters, digits, dot, hyphen, underscore) or an IP literal; anything else is not shown (C-734 F-C734-1)."""
+    if not host or "%" in host:                           # a scope id (`fe80::1%text`) is accepted by ipaddress: refuse it (C-846 F-C846-1)
+        return False
+    if _HOSTNAME.fullmatch(host):
+        return True
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return True
+
+
 class SentinelUnavailable(RuntimeError):
     """The sentinel could not be asked, or did not answer a verdict: transport
     error, timeout, any non-200, or a body that is not a verdict. The caller
@@ -404,9 +436,11 @@ class SentinelClient:
             resp = self._client.post(f"{self._base}/check", json={
                 "agent_id": agent_id, "token_id": token_id, "action": action})
         except Exception as exc:
-            raise SentinelUnavailable(
-                f"sentinel unreachable at {self._base}: {type(exc).__name__}: {exc}"
-            ) from exc
+            failure = type(exc).__name__
+        else:
+            failure = None
+        if failure is not None:                           # raised outside the handler: no cause or context keeps the transport text
+            raise SentinelUnavailable(f"sentinel unreachable at {public_origin(self._base)}: {failure}")
         if resp.status_code != 200:
             raise SentinelUnavailable(f"sentinel returned {resp.status_code}")
         try:
@@ -947,7 +981,7 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
                 "enforce": app.state.enforce,
                 "tool_check": app.state.tool_check,
                 "tool_check_active": app.state.enforce and app.state.tool_check,
-                "sentinel_url": app.state.sentinel_url,
+                "sentinel_url": public_origin(app.state.sentinel_url),
                 "sentinel_timeout_seconds": app.state.sentinel_timeout,
                 "ledger_appends_dropped": app.state.ledger_appends_dropped,
                 "spend_forwards_dropped": app.state.spend_forwards_dropped,
