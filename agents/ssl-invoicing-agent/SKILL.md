@@ -99,7 +99,7 @@ Always re-read `Customers\CLAUDE.md` at the start of a session if available — 
 
 ```
 Interac e-Transfer to don@spinstatelabs.ca.
-<bank transfer details: provided on the invoice>
+<bank transfer details on the invoice>
 ```
 
 Never include a personal gmail address on an invoice's payment line — only the spinstatelabs.ca address.

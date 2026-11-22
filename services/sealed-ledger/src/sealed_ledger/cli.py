@@ -669,11 +669,14 @@ def _call_served(base_url: str, method: str, route: str, body: dict | None = Non
     path prefix such as ``/ledger`` (``urllib.parse.urljoin`` would drop it)."""
     import httpx
 
-    from field_core.authn import auth_headers
+    from field_core.guarded_operator import LEDGER_GUARDED, request_headers
 
+    # Headers per request (C-1181): the perimeter secret always, the operator pair only on a guarded route
+    # of the ledger (POST /rotate, /hold, /hold/release, /retention/apply); GET /retention/check carries no pair.
     try:
-        with httpx.Client(base_url=base_url, headers=auth_headers(), timeout=timeout) as client:
-            return client.request(method, route.lstrip("/"), json=body)
+        with httpx.Client(base_url=base_url, timeout=timeout) as client:
+            return client.request(method, route.lstrip("/"), json=body,
+                                  headers=request_headers(method, route, LEDGER_GUARDED))
     except httpx.HTTPError as exc:
         # the class and the origin only: httpx's text can carry the whole URL
         typer.echo(f"error: ledger at {_origin(base_url)} unreachable: {type(exc).__name__}", err=True)
@@ -1014,8 +1017,10 @@ def witness_run(
     from sealed_ledger import witness as w
 
     started_at = datetime.now(timezone.utc).isoformat()
-    if not estate.strip():
-        typer.echo("error: --estate must not be blank", err=True)
+    try:
+        w.checked_estate(estate)
+    except ValueError:   # fixed text: the name is never echoed
+        typer.echo(f"error: {w.ESTATE_NAME_REFUSAL}", err=True)
         raise typer.Exit(code=2)
     ledger_url = os.environ.get("FIELD_LEDGER_URL")
     if not ledger_url:
@@ -1078,6 +1083,11 @@ def verify_witness_cmd(
     from sealed_ledger import witness as w
     from sealed_ledger.store import LedgerBusy
 
+    try:
+        w.checked_estate(estate)   # a typo is a usage error here, not "nothing witnessed"
+    except ValueError:   # fixed text: the name is never echoed
+        typer.echo(f"error: {w.ESTATE_NAME_REFUSAL}", err=True)
+        raise typer.Exit(code=2)
     if (events_url is None) == (events_file is None):
         typer.echo("error: give exactly one of --events-url or --events-file", err=True)
         raise typer.Exit(code=2)
