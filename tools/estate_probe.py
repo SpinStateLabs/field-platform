@@ -1103,8 +1103,6 @@ def main(argv: list[str] | None = None) -> int:
                              f"{DEFAULT_TIMEOUT:g}); a request that outlasts it fails the check. It is also the retry "
                              f"budget of one call: a busy 503 with a Retry-After is resent while the wait leaves at "
                              f"least {RETRY_MIN_BUDGET:g} s of it")
-    parser.add_argument("--allow-plaintext", action="store_true",
-                        help="permit http:// to a non-loopback, non-private host with the secret")
     parser.add_argument("--allow-heavy", action="store_true",
                         help="permit /attest/pack, /ledger/verify and /ledger/events WITHOUT a filter against a "
                              "non-local base (default: refused, nothing sent; local bases are never refused); "
@@ -1155,7 +1153,7 @@ def main(argv: list[str] | None = None) -> int:
         parts = urllib.parse.urlsplit(args.base)
         host = parts.hostname or ""
         local = _internal_host(host)
-        if parts.scheme != "https" and not local and not args.allow_plaintext:
+        if parts.scheme != "https" and not local:
             _die("the secret or operator key would travel in cleartext: use https:// or a loopback/private "
                  "address")
     heavy = _heavy_routes(args.cmd, args)
