@@ -254,3 +254,21 @@ def test_register_names_no_library_text_and_leaves_no_chain(body):
     assert str(exc.value) == ("register answered 201 with an unusable body; the agent may be registered, "
                               "check before retrying")
     assert exc.value.__cause__ is None and exc.value.__context__ is None
+
+# ---- don.reviewer on the rebuild of PR 556: a deeply nested 2xx body (json raises RecursionError) fails closed ----------
+
+DEEP = ("[" * 200_000 + "]" * 200_000).encode()
+
+
+@pytest.mark.parametrize("call,err", [
+    (lambda: bootstrap.register("a", "n", "o", client=Raw201(DEEP), registry_url="http://r.invalid"), BootstrapError),
+    (lambda: bootstrap.mint("a", "me", ["draft"], ttl_seconds=60, client=Raw201(DEEP), delegation_url="http://d.invalid"),
+     BootstrapError),
+    (lambda: LivenessClient(client=Raw(DEEP), base_url="http://kill.invalid").heartbeat("a"), HeartbeatUnreachable),
+    (lambda: LivenessClient(client=Raw(DEEP), base_url="http://kill.invalid").checkin("a"), HeartbeatUnreachable),
+], ids=["register", "mint", "heartbeat", "checkin"])
+def test_a_deeply_nested_2xx_body_is_the_sdk_error_not_a_recursion_error(call, err):
+    with pytest.raises(err) as exc:
+        call()
+    assert "unusable" in str(exc.value)
+    assert exc.value.__cause__ is None and exc.value.__context__ is None and exc.value.__suppress_context__ is True
