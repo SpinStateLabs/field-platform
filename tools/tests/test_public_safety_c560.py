@@ -251,7 +251,9 @@ def test_the_repository_matches_the_allowlist():
     assert repository_problems(ALLOWLIST.read_text(encoding="utf-8"), read_scannable()) == []
 
 
-MIN_FILES = 600   # a floor under the number of files the scan reads; pinned to the repository size below (C-726)
+MIN_FILES = 800   # a floor under the number of files the scan reads; pinned to the repository size below (C-726).
+#                   Raised from 600 when the tree passed 1,200 files (1,229 scannable at the rebuild of PR 851): it must
+#                   stay >= half the tracked files, and 800 leaves room to grow to 1,600 before it needs raising again.
 
 
 def test_the_scan_is_not_blind():
