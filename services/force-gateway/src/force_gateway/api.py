@@ -406,6 +406,30 @@ def _is_host(host: str | None) -> bool:
     return True
 
 
+class _SentinelUrlLogFilter(logging.Filter):
+    """roley.reviewer C1 on #1272: httpx logs every request at INFO as ``HTTP Request: <method> <url> ...`` and the
+    url there is the whole sentinel URL, userinfo, path and query included. For a request to a sentinel origin this
+    filter puts ``public_origin`` of the url in its place, so the success path logs no more than the 503 detail and
+    ``/health`` show. Requests to any other origin are left as httpx logs them. The record is kept, not dropped."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.origins: set[str] = set()
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if (self.origins and isinstance(args, tuple) and len(args) >= 2
+                and isinstance(record.msg, str) and record.msg.startswith("HTTP Request:")):
+            shown = public_origin(str(args[1]))
+            if shown in self.origins:
+                record.args = (args[0], shown, *args[2:])
+        return True
+
+
+_SENTINEL_URL_LOG_FILTER = _SentinelUrlLogFilter()
+logging.getLogger("httpx").addFilter(_SENTINEL_URL_LOG_FILTER)
+
+
 class SentinelUnavailable(RuntimeError):
     """The sentinel could not be asked, or did not answer a verdict: transport
     error, timeout, any non-200, or a body that is not a verdict. The caller
@@ -422,6 +446,7 @@ class SentinelClient:
         self._base = (base_url or resolve_sentinel_url() or "http://127.0.0.1:8004").rstrip("/")
         self.timeout = checked_sentinel_timeout(timeout) if timeout is not None else resolve_sentinel_timeout()
         self._client = client
+        _SENTINEL_URL_LOG_FILTER.origins.add(public_origin(self._base))   # C1: httpx's request line shows the origin
         if self._client is None:
             import httpx
 

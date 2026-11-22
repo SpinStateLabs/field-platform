@@ -160,3 +160,67 @@ def test_the_503_text_names_the_exception_type_c846():
     """The type name (never the message) tells the caller which failure mode occurred."""
     client, _ = gateway_with(URL)
     assert "RuntimeError" in client.post("/v1/messages", json=MSG, headers=HEADERS).text
+
+
+# ---- roley.reviewer C1 on #1272: the success path (a sentinel that answers) logs no userinfo, path or query ----------
+
+def _loopback_sentinel():
+    """A real HTTP sentinel on 127.0.0.1 that answers every POST with ALLOW. Returns (server, port)."""
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class Allow(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802 (http.server's name)
+            self.rfile.read(int(self.headers.get("content-length") or 0))
+            body = json.dumps({"decision": "ALLOW", "clause_id": None, "reason": "ok"}).encode()
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):  # the test server itself logs nothing
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Allow)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, server.server_address[1]
+
+
+def test_a_sentinel_allow_logs_no_userinfo_path_or_query_at_any_level(caplog):
+    server, port = _loopback_sentinel()
+    try:
+        url = f"http://svc-user:{PASSWORD}@127.0.0.1:{port}/basepath-Qp41?token={TOKEN}#frag"
+        with caplog.at_level(logging.DEBUG):
+            verdict = SentinelClient(base_url=url, timeout=5.0).check("a-1", "t-1", "egress")
+        assert verdict["decision"] == "ALLOW"
+        lines = [r for r in caplog.records if r.name == "httpx" and r.getMessage().startswith("HTTP Request:")]
+        assert lines, "httpx logged no request line: the test would prove nothing"
+        assert f"http://127.0.0.1:{port}" in lines[0].getMessage()
+        text = caplog.text + " ".join(repr(r.args) for r in caplog.records)
+        assert_absent(PASSWORD, text)                 # the made-up canaries: no 4-character slice anywhere
+        assert_absent(TOKEN, text)
+        for marker in ("svc-user", "basepath-Qp41", "#frag"):   # whole markers (a slice like "base" is in BaseHTTP)
+            assert marker not in text, marker
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_the_filter_rewrites_only_a_sentinel_origin_and_keeps_the_record():
+    import logging as _logging
+
+    from force_gateway import api as gw
+
+    SentinelClient(base_url=f"http://u:{PASSWORD}@sentinel.example:8004/p?token={TOKEN}", timeout=1.0, client=object())
+    f = gw._SENTINEL_URL_LOG_FILTER
+
+    def rec(url):
+        return _logging.LogRecord("httpx", _logging.INFO, __file__, 1, 'HTTP Request: %s %s "%s %d %s"',
+                                  ("POST", url, "HTTP/1.1", 200, "OK"), None)
+
+    mine = rec(f"http://u:{PASSWORD}@sentinel.example:8004/p?token={TOKEN}/check")
+    assert f.filter(mine) is True and mine.args[1] == "http://sentinel.example:8004"
+    other = rec("https://api.example.org/v1/messages?x=1")
+    assert f.filter(other) is True and other.args[1] == "https://api.example.org/v1/messages?x=1"
