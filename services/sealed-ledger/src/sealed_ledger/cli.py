@@ -1081,7 +1081,7 @@ def verify_witness_cmd(
     secret = None
     if secret_file is not None:
         try:
-            secret = secret_file.read_text(encoding="utf-8").strip()
+            secret = secret_file.read_text(encoding="utf-8-sig").strip()
         except (OSError, UnicodeError) as exc:
             # the exception text is NEVER echoed: a UnicodeDecodeError says "byte 0xff in position 25" (a byte and the
             # length of the secret before it)
