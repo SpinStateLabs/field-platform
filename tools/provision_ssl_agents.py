@@ -29,7 +29,7 @@ see docs/INTEGRATION.md §3). It is the single-port-proxy analogue of
 untracked in the PARENT folder, and its local path is now
 ``lifecycle provision`` too.
 
-Run from rog-command (venv C:\\Users\\donal\\.venvs\\field-platform):
+Run from rog-command (venv <home>\\.venvs\\field-platform):
 
     python tools/provision_ssl_agents.py [--operator-id don --operator-key-file PATH]
 

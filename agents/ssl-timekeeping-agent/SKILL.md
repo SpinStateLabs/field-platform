@@ -16,7 +16,7 @@ This skill IS the FIELD-governed agent **`ssl-timekeeping-agent`**. Manifest: `f
 `FIELD_PROXY_URL` must be set (the estate base URL, no default): `field-rest.ps1` throws at load when it is unset, and so does `tools/ssl-verify-token.ps1`, which dot-sources it.
 
 ```powershell
-. "C:\Users\donal\My Drive\Spin State Labs\Projects\FORCE-FIELD\field-platform\tools\field-rest.ps1"
+. "<repo>\tools\field-rest.ps1"
 Get-FieldHeartbeat -Agent ssl-timekeeping-agent                                     # hook 3a — FIRST: the halt gate
 Send-FieldCheckin  -Agent ssl-timekeeping-agent                                     # hook 3b — records last_seen
 Invoke-FieldCheck  -Agent ssl-timekeeping-agent -Action "read calendars and email"  # hook 1 — before EACH governed action
