@@ -4,8 +4,10 @@
 return on a peer that accepts and then stalls, the opposite of the module's fail-closed rules; NaN and inf behave as no limit
 too. A timeout must be a finite number greater than 0 (ValueError at construction, like the base_url checks).
 (b) `FieldAgent(heartbeat_max_age=NaN)`: `time.monotonic() - alive_at > NaN` is False, so after the first successful `ensure_alive` the
-kill-switch is never asked again. NaN, a negative number and a non-number are refused; 0 stays valid (the tests use 0.0), None stays
-"off", and inf stays what it says ("never re-ask")."""
+kill-switch is never asked again. NaN, a negative number and a non-number are refused; 0 stays valid (the tests use 0.0) and None
+stays "off". inf is refused too (S10-1, ruling on the rebuild of PR 927): an infinite limit means the agent never re-asks after its
+first poll, so a later kill never reaches it, a fail-open on the kill path; a caller that wants a long limit passes a large finite
+number."""
 
 import math
 
@@ -42,13 +44,13 @@ def test_the_default_timeout_is_still_ten_seconds():
     assert FieldClient(BASE, "agent-1", "tok-1").timeout == 10.0
 
 
-@pytest.mark.parametrize("bad", [math.nan, -1, -0.001, -math.inf, "30", True, [1]],
-                         ids=["nan", "neg", "neg-small", "-inf", "str", "true", "list"])
-def test_a_heartbeat_max_age_that_is_nan_negative_or_not_a_number_is_refused(bad):
+@pytest.mark.parametrize("bad", [math.nan, math.inf, -1, -0.001, -math.inf, "30", True, [1]],
+                         ids=["nan", "inf", "neg", "neg-small", "-inf", "str", "true", "list"])
+def test_a_heartbeat_max_age_that_is_nan_infinite_negative_or_not_a_number_is_refused(bad):
     with pytest.raises(ValueError, match="heartbeat_max_age"):
         agent(heartbeat_max_age=bad)
 
 
-@pytest.mark.parametrize("good", [0.0, 0, 30, 30.0, 0.5, math.inf, None], ids=["zero-float", "zero", "int", "float", "half", "inf", "none"])
-def test_zero_a_positive_number_inf_and_none_are_accepted(good):
+@pytest.mark.parametrize("good", [0.0, 0, 30, 30.0, 0.5, 1e9, None], ids=["zero-float", "zero", "int", "float", "half", "large", "none"])
+def test_zero_a_finite_positive_number_and_none_are_accepted(good):
     assert agent(heartbeat_max_age=good)._heartbeat_max_age == good

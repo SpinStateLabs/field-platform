@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Changed - field-agent `heartbeat_max_age` refuses an infinite limit (S10-1, rebuild of PR 927)
+- `FieldAgent(heartbeat_max_age=float("inf"))` (or `math.inf`) now raises `ValueError` at construction. Before, an infinite limit was accepted and meant the agent never re-asked the kill-switch after its first successful poll, so a later kill never reached it (a fail-open on the kill path). Replacement: pass a large finite number of seconds, for example `heartbeat_max_age=86400.0`. Every other value is accepted or refused as before (None = off; 0 and any finite number >= 0 accepted; NaN, a negative number, a bool and a non-number refused). `check()` and `cross()` share one liveness gate, `_gate_liveness`.
+
 ### Added - main on 2026-11-04 (4d03b2a, PR 532)
 - `tools/start_role_session.py` starts a Managed Agents session for one of five ssl-fp role agents (red-team, architect, frontdoor-engineer, router-engineer, runtime-engineer) with the caller's `ANTHROPIC_API_KEY`; `docs/ROLE-AGENTS-TEAM-ACCESS.md` documents team access. Agent bundles and manifests are not included (commit message).
 - Known red on main from this commit: `tools/tests/test_http_env_proxy_lint_c57.py::test_the_repo_matches_the_allowlist` fails because `call()` uses `urllib.request.urlopen`, which reads the environment proxy; seen on CI run 41812420379 (tests 3.12) and reproduced locally on `origin/main`. No fix was on main or in an open PR when this was written (2026-11-04).

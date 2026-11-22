@@ -47,7 +47,7 @@ def run(
     # a str, not a click Path: click stats a Path option while parsing, and a NUL byte there escapes as a ValueError
     # before this command runs (S6-15); the write is guarded below instead
     markdown: str = typer.Option(
-        None, "--markdown", help="Write the RACI-ready post-mortem here"
+        None, "--markdown", help="Write the RACI-structured post-mortem here"
     ),
 ) -> None:
     """Reconstruct an incident window for an agent. Exit 1 when the service is unreachable or refuses; exit 2 when the
