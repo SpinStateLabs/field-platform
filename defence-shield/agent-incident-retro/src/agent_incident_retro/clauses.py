@@ -147,13 +147,12 @@ def s_pivot(s: Session, window_s: float) -> ClauseHit | None:
     a payload within the window (the A6 'search, then tamper' pattern)."""
     refs: list[LineRef] = []
     pairs = 0
-    # (path, parameter) -> [latest benign use, latest benign use whose value differs
-    # from the latest one's], as (order, value, request). The newest benign request
-    # carrying the parameter with a value other than the payload request's is one of
-    # the two, so each payload request is answered in O(parameters). Two slots are
-    # needed because a payload request with a repeated key can resolve to a benign
-    # value (`q=<payload>&q=safe`: the last value wins), which the newest benign use
-    # may share.
+    # (path, parameter) -> [latest benign use, latest benign use whose values differ
+    # from the latest one's], as (order, values, request); `values` is every value of
+    # the name in that request, in order (param_values, S10-31). Each payload request
+    # is answered in O(parameters): the latest use is a hit when some value of the name
+    # in the payload request is absent from its values, else the older, differing one
+    # is tried (it can be when the payload request also repeats a benign value).
     benign: dict[tuple[str, str], list] = {}
     for n, r in enumerate(s.requests):
         if not r.is_hostile:
@@ -178,7 +177,10 @@ def s_pivot(s: Session, window_s: float) -> ClauseHit | None:
             slot = benign.get((r.path, k))
             if slot is None:
                 continue
-            cand = slot[0] if slot[0][1] != r_vals.get(k) else slot[1]
+            # S10-31: a hit when ANY value of the name in the payload request is absent from ALL the values of that
+            # benign use (`q=<payload>&q=cat` against a benign `q=cat` is a pivot); else the older, differing use
+            hostile_vals = r_vals.get(k, ())
+            cand = next((c for c in slot if c is not None and any(v not in c[1] for v in hostile_vals)), None)
             if cand is not None and (best is None or cand[0] > best[0]):
                 best = cand
         if best is not None and (r.ts - best[2].ts).total_seconds() <= window_s:

@@ -1,7 +1,9 @@
 """S.pivot answers each payload request from an index, not a window scan (S4 B6).
 
 The reference below is the previous quadratic implementation, kept verbatim so the
-new one is checked against it on random sessions (same hit, detail and cited lines).
+new one is checked against it on random sessions (same hit, detail and cited lines),
+except its tamper test, which is S10-31's (every value of a repeated name is kept: a hit
+when any value of the name in the payload request is absent from all the benign ones).
 """
 
 import random
@@ -31,7 +33,8 @@ def _reference(s, window_s):
             if (r.ts - b.ts).total_seconds() > window_s:
                 break
             b_vals = param_values(b.query)
-            shared = [k for k in tampered if k in b_vals and b_vals[k] != r_vals.get(k)]
+            shared = [k for k in tampered
+                      if k in b_vals and any(v not in b_vals[k] for v in r_vals.get(k, ()))]
             if shared:
                 refs.extend([b.ref, r.ref])
                 pairs += 1
@@ -50,7 +53,7 @@ def test_pivot_matches_the_quadratic_reference_on_random_sessions():
             roll = rnd.random()
             if roll < 0.2:
                 q = f"{rnd.choice(['q', 'id'])}={rnd.choice(PAYLOADS)}"
-            elif roll < 0.35:  # repeated key: the last value wins, and it may be benign
+            elif roll < 0.35:  # repeated key: every value is kept (S10-31); one of them may be benign
                 k = rnd.choice(["q", "id"])
                 q = f"{k}={rnd.choice(PAYLOADS)}&{k}={rnd.choice(['x', 'y'])}"
             else:
@@ -102,7 +105,7 @@ def test_pivot_edge_cases_match_the_reference():
     assert got is not None and [r.line for r in got.lines] == [2, 3]
     got = _same([req(1, 0, "/s", "id=b"), req(2, 5, "/s", "q=a"), req(3, 30, "/s", two)])
     assert [r.line for r in got.lines] == [2, 3]
-    # duplicate keys: the last value wins on both sides
+    # duplicate keys: every value is kept on both sides (S10-31)
     assert _same([req(1, 0, "/s", "q=a&q=b"), req(2, 9, "/s", f"q={SQLI}")]) is not None
 
 
@@ -124,9 +127,31 @@ def test_pivot_work_does_not_grow_with_the_benign_run(monkeypatch):
     assert calls["n"] <= 2 * len(reqs)  # the old scan re-parsed benign queries per payload request
 
 
-def test_pivot_repeated_key_resolving_to_a_benign_value_is_not_a_pivot():
-    # the last q wins: the payload request carries q=safe, equal to the benign value
-    assert _same([req(1, 0, "/s", "q=safe"), req(2, 10, "/s", f"q={SQLI}&q=safe")]) is None
-    # an older benign request with a different value is still found behind the newest equal one
+def test_pivot_repeated_key_carrying_a_benign_value_too_is_a_pivot():
+    # S10-31 (ruling on the rebuild of PR 964): `q=<payload>&q=safe` against a benign `q=safe` IS a pivot. Before, the
+    # last value won, so the payload request looked unchanged and this asserted None.
+    got = _same([req(1, 0, "/s", "q=safe"), req(2, 10, "/s", f"q={SQLI}&q=safe")])
+    assert got is not None and [r.line for r in got.lines] == [1, 2]
+    # the newest benign use is the one cited now (its values lack the payload), no longer an older different one
     got = _same([req(1, 0, "/s", "q=other"), req(2, 5, "/s", "q=safe"), req(3, 10, "/s", f"q={SQLI}&q=safe")])
-    assert got is not None and [r.line for r in got.lines] == [1, 3]
+    assert got is not None and [r.line for r in got.lines] == [2, 3]
+
+
+def test_s10_31_benign_cat_then_payload_and_cat_fires():
+    got = _same([req(1, 0, "/s", "q=cat"), req(2, 30, "/s", f"q={SQLI}&q=cat")])
+    assert got is not None and [r.line for r in got.lines] == [1, 2]
+
+
+def test_a_reordered_repeat_with_the_payload_elsewhere_does_not_fire_on_q():
+    # the payload is in p, which no benign request used; q only repeats the benign values in another order
+    assert _same([req(1, 0, "/s", "q=a&q=b"), req(2, 30, "/s", f"q=b&q=a&p={SQLI}")]) is None
+
+
+def test_an_unchanged_repeated_benign_value_set_keeps_one_slot_and_cites_the_newest_use():
+    import agent_incident_retro.clauses as c
+
+    reqs = [req(1, 0, "/s", "q=a&q=b"), req(2, 10, "/s", "q=a&q=b"), req(3, 30, "/s", f"q={SQLI}&q=a")]
+    got = _same(reqs)
+    assert got is not None and [r.line for r in got.lines] == [2, 3]
+    # the same value set twice refreshes the latest-use slot; it never becomes the "older, differing" one
+    assert c.param_values("q=a&q=b") == {"q": ["a", "b"]}
