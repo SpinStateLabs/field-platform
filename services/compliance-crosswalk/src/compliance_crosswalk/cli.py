@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
 import typer
+import yaml
 
 for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
@@ -14,6 +16,62 @@ for _stream in (sys.stdout, sys.stderr):
 from compliance_crosswalk import __version__
 
 app = typer.Typer(name="crosswalk", help="Compliance crosswalk.", no_args_is_help=True)
+
+
+def _die(message: str) -> "typer.Exit":
+    """One line on stderr, exit 2: a fixed text naming the option, never exception text (it can quote a path's
+    contents), so a bad file is an error and not a traceback (S6-23)."""
+    typer.echo(f"error: {message}", err=True)
+    return typer.Exit(code=2)
+
+
+def _load(manifest: str) -> dict:
+    """The manifest as a dict, or a one-line exit 2. ``manifest`` is a plain string, not a click ``Path``: click stats a
+    Path while parsing, and a NUL byte there escapes as a ValueError before the command runs."""
+    from field_core.validation import load_manifest
+
+    try:
+        return load_manifest(manifest)
+    except (OSError, UnicodeDecodeError, yaml.YAMLError, ValueError, RecursionError) as exc:
+        raise _die(f"cannot read the manifest ({type(exc).__name__}); it must be a UTF-8 YAML mapping; "
+                   "nothing written") from None
+
+
+def _check_output(path: str, option: str) -> None:
+    """Refuse an output path that cannot be written BEFORE any network call or other work: a NUL byte, a directory, a
+    missing or unwritable parent."""
+    try:
+        p = Path(path)
+        # is_dir() answers False (not an error) for a path holding a NUL byte, so that case is named explicitly
+        ok = ("\x00" not in path and not p.is_dir() and p.parent.is_dir()
+              and os.access(p.parent, os.W_OK | os.X_OK))
+    except (OSError, ValueError):
+        ok = False
+    if not ok:
+        raise _die(f"cannot write {option}: not a writable file path; nothing written")
+
+
+def _write_all(outputs: list[tuple[str, str, str]]) -> None:
+    """Write every ``(path, text, option)`` to a temporary name beside it, and replace the real files only after ALL of
+    them were written, so a failing second output leaves no half-pack behind."""
+    temps: list[tuple[Path, Path]] = []
+    try:
+        for path, text, option in outputs:
+            final = Path(path)
+            tmp = final.with_name(f".{final.name}.{os.getpid()}.tmp")
+            try:
+                tmp.write_text(text, encoding="utf-8")
+            except (OSError, ValueError, UnicodeEncodeError):
+                raise _die(f"cannot write {option}; nothing written") from None
+            temps.append((tmp, final))
+        for tmp, final in temps:
+            try:
+                os.replace(tmp, final)
+            except OSError:
+                raise _die("cannot write the output files; nothing was installed") from None
+    finally:
+        for tmp, _ in temps:
+            tmp.unlink(missing_ok=True)
 
 
 @app.command()
@@ -42,21 +100,22 @@ def frameworks() -> None:
 
 @app.command()
 def run(
-    manifest: Path = typer.Argument(..., help="FIELD manifest YAML"),
+    manifest: str = typer.Argument(..., help="FIELD manifest YAML"),
     agent_id: str = typer.Option(None, "--agent-id",
                                  help="Collect live evidence for this agent"),
-    markdown: Path = typer.Option(None, "--markdown", help="Write report here"),
+    markdown: str = typer.Option(None, "--markdown", help="Write report here"),
 ) -> None:
     """Evaluate coverage: declared vs. evidenced (offline unless --agent-id)."""
     from compliance_crosswalk.api import collect_evidence
     from compliance_crosswalk.engine import evaluate, render_markdown
-    from field_core.validation import load_manifest
 
-    data = load_manifest(manifest)
+    data = _load(manifest)
+    if markdown:
+        _check_output(markdown, "--markdown")
     sources = collect_evidence(agent_id) if agent_id else None
     report = evaluate(data, agent_id=agent_id, sources=sources)
     if markdown:
-        markdown.write_text(render_markdown(report), encoding="utf-8")
+        _write_all([(markdown, render_markdown(report), "--markdown")])
         typer.echo(f"crosswalk written to {markdown}")
     else:
         typer.echo(report.model_dump_json(indent=2))
@@ -98,13 +157,11 @@ def self_manifest() -> None:
 
 @app.command()
 def suggest(
-    manifest: Path = typer.Argument(..., help="FIELD manifest YAML"),
+    manifest: str = typer.Argument(..., help="FIELD manifest YAML"),
 ) -> None:
     """Gated mapping suggestions for unmapped manifest paths (ADR 07).
     SUGGESTION ONLY — below the precision floor renders as
     'unmapped — review required', never as a mapping."""
-    from field_core.validation import load_manifest
-
     from compliance_crosswalk.suggestions import (
         resolve_suggest_floor,
         resolve_suggester,
@@ -140,7 +197,7 @@ def suggest(
                        err=True)
             raise typer.Exit(code=1)
 
-    data = load_manifest(manifest)
+    data = _load(manifest)
     results = run_suggest(data, suggester, resolve_suggest_floor())
     for s in results:
         typer.echo(s.model_dump_json())
@@ -152,25 +209,26 @@ def suggest(
 
 @app.command()
 def pack(
-    manifest: Path = typer.Argument(..., help="FIELD manifest YAML"),
+    manifest: str = typer.Argument(..., help="FIELD manifest YAML"),
     signer: str = typer.Option(..., "--signer",
                                help="Named human signer — no pack without one"),
     agent_id: str = typer.Option(None, "--agent-id",
                                  help="Collect live evidence for this agent"),
-    out_md: Path = typer.Option(None, "--out-md"),
-    out_json: Path = typer.Option(None, "--out-json"),
+    out_md: str = typer.Option(None, "--out-md"),
+    out_json: str = typer.Option(None, "--out-json"),
 ) -> None:
     """Generate the evidence pack (ADR 07). Exit 3 when stale regulatory
     flags block generation — re-review them first (regwatch clear)."""
     import json
 
-    from field_core.validation import load_manifest
-
     from compliance_crosswalk.api import collect_evidence
     from compliance_crosswalk.evidence_pack import InvalidSigner, StalePackError, generate_pack
     from compliance_crosswalk.staleness import StaleStore
 
-    data = load_manifest(manifest)
+    data = _load(manifest)
+    for path, option in ((out_md, "--out-md"), (out_json, "--out-json")):
+        if path:
+            _check_output(path, option)             # before collect_evidence makes its network calls
     sources = collect_evidence(agent_id) if agent_id else None
     try:
         md, payload = generate_pack(data, signer=signer,
@@ -184,12 +242,15 @@ def pack(
         typer.echo("re-review with: crosswalk regwatch clear <framework> "
                    "--reviewed-by NAME", err=True)
         raise typer.Exit(code=3)
+    outputs = []
     if out_md:
-        out_md.write_text(md, encoding="utf-8")
+        outputs.append((out_md, md, "--out-md"))
+    if out_json:
+        outputs.append((out_json, json.dumps(payload, indent=2, default=str), "--out-json"))
+    _write_all(outputs)
+    if out_md:
         typer.echo(f"pack written to {out_md}")
     if out_json:
-        out_json.write_text(json.dumps(payload, indent=2, default=str),
-                            encoding="utf-8")
         typer.echo(f"pack json written to {out_json}")
     if not out_md and not out_json:
         typer.echo(md)
