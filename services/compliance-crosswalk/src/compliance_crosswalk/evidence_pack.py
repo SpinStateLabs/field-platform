@@ -33,7 +33,21 @@ import unicodedata
 from datetime import datetime, timezone
 from typing import Any
 
-from compliance_crosswalk.engine import EvidenceSources, evaluate
+from compliance_crosswalk.engine import (
+    LEDGER_VERIFY_NOT_CHECKED,
+    REFUSED_CATEGORIES,
+    EvidenceSources,
+    evaluate,
+    one_line,
+)
+
+#: gap kind -> its label in the Markdown "Gaps" list (the JSON carries the kind itself)
+GAP_LABELS = {"not-declared": "not declared", "not-evidenced": "not evidenced", "not-checked": "not checked"}
+#: the FC-L-01 "not-checked" gap detail: fixed text, so Markdown and JSON say the same
+LEDGER_NOT_CHECKED_GAP = (
+    "the ledger did not answer /verify (busy or unreachable), so the chain was not verified on this run; "
+    "this is not a pass: re-run the pack"
+)
 from compliance_crosswalk.mapping import CONTROLS, FRAMEWORKS, INGESTION_LOG
 
 DISCLAIMER = (
@@ -106,14 +120,14 @@ MAX_SIGNER_CHARS = 200
 #: mark, zero-width space/joiner, word joiner, byte-order mark, and the bidirectional overrides and isolates) and
 #: line or paragraph separator (Zl, Zp). A signer is a name you can SEE on one line (C-389): the format characters
 #: reorder the text around them or make two different signers look identical.
-_REFUSED_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})
+_REFUSED_CATEGORIES = REFUSED_CATEGORIES
 
 
 def _checked_signer(signer: Any) -> str:
     """The stripped signer, or ``InvalidSigner``: not text, blank, over ``MAX_SIGNER_CHARS``, or holding a control
     character (Unicode category Cc: newline, carriage return, tab, NUL, DEL, C1), an invisible format character (Cf:
-    marks, zero-width characters, byte-order mark, bidirectional overrides) or a line or paragraph separator (Zl, Zp).
-    The message names the code point and its position, never the signer."""
+    marks, zero-width characters, byte-order mark, bidirectional overrides), a line or paragraph separator (Zl, Zp) or
+    an unpaired surrogate (Cs, PR 563). The message names the code point and its position, never the signer."""
     if signer is not None and not isinstance(signer, str):
         raise InvalidSigner(f"refusing to generate: the signer must be text, not {type(signer).__name__}")
     if signer is None or not str(signer).strip():
@@ -154,6 +168,9 @@ def generate_pack(
 ) -> tuple[str, dict[str, Any]]:
     """Generate the evidence pack: (markdown, dict). Blocked, never fudged."""
     signer = _checked_signer(signer)
+    if isinstance(agent_id, str) and any(unicodedata.category(ch) == "Cs" for ch in agent_id):
+        # PR 563 / Q-47 F-Q47-3: refused by name rather than cleaned, as for the signer (the API grammar 422s it first)
+        raise ValueError("refusing to generate: agent_id holds an unpaired surrogate code unit")
 
     flags = list(stale_store.active() or [])
     if flags:
@@ -188,6 +205,20 @@ def generate_pack(
                     "detail": control.evidence_detail,
                 }
             )
+        elif (
+            control.evidenced is None
+            and control.control_id == "FC-L-01"
+            and control.evidence_detail == LEDGER_VERIFY_NOT_CHECKED
+        ):
+            # don.reviewer C1 (rebuild of PR 1093): not checked is not failed, but it is never silent; a provoked
+            # 503 on /verify must not let the pack say "No gaps recorded" as it would for a verified chain
+            gaps.append(
+                {
+                    "control_id": control.control_id,
+                    "kind": "not-checked",
+                    "detail": LEDGER_NOT_CHECKED_GAP,
+                }
+            )
 
     lines: list[str] = []
     add = lines.append
@@ -195,7 +226,7 @@ def generate_pack(
     add("")
     add(f"- generated_at: {generated_at}")
     add(f"- Regulatory corpus version: {corpus_version}")
-    add(f"- agent_id: {agent_id or 'manifest-only'}")
+    add(f"- agent_id: {coverage.agent_id or 'manifest-only'}")
     add(f"- Prepared for signature by: {signer}")
     add("- Document type: named-signer. This pack carries no cryptographic signature, hash or key; the Signature block at the end is completed by the named human.")
     add("")
@@ -252,9 +283,7 @@ def generate_pack(
         )
         add("")
         for gap in gaps:
-            label = (
-                "not declared" if gap["kind"] == "not-declared" else "not evidenced"
-            )
+            label = GAP_LABELS[gap["kind"]]
             add(f"- {gap['control_id']} — {label}: {gap['detail']}")
     else:
         add(
@@ -277,11 +306,13 @@ def generate_pack(
         )
         add("")
         for entry in active:
-            bits = [f"framework: {entry.get('framework', 'unknown')}"]
+            # one line each (PR 563 / Q-47 F-Q47-2): new flags are cleaned when marked (staleness._one_line), but a flag
+            # stored before that, or a hand-edited store, is read back as it is
+            bits = [f"framework: {one_line(entry.get('framework', 'unknown'))}"]
             if entry.get("flagged_at"):
-                bits.append(f"flagged_at: {entry['flagged_at']}")
+                bits.append(f"flagged_at: {one_line(entry['flagged_at'])}")
             if entry.get("reason"):
-                bits.append(f"reason: {entry['reason']}")
+                bits.append(f"reason: {one_line(entry['reason'])}")
             if entry.get("stale_window_seconds") is not None:
                 bits.append(
                     f"stale window (seconds): {entry['stale_window_seconds']}"
@@ -313,7 +344,7 @@ def generate_pack(
         "generated_at": generated_at,
         "corpus_version": corpus_version,
         "signer": signer,
-        "agent_id": agent_id,
+        "agent_id": coverage.agent_id,
         "controls": [
             {
                 "control_id": control.control_id,

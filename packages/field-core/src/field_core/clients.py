@@ -227,6 +227,12 @@ class AgentNotRegisteredError(Exception):
     pass
 
 
+class AgentRowChangedError(RegistryUnreachableError):
+    """A conditional ``set_status`` (``if_updated_at``) was refused with 412: the agent's row was written after the
+    version the caller read. A subclass of RegistryUnreachableError so an unaware caller treats it as a failed write;
+    the kill-switch drill catches it first and leaves the agent as the other writer left it."""
+
+
 class AgentNotActiveError(Exception):
     def __init__(self, agent_id: str, status: str):
         self.status = status
@@ -427,7 +433,8 @@ class RegistryClient:
         return _json_body(resp, RegistryUnreachableError, "registry agents list", list, items=dict)
 
     def set_status(self, agent_id: str, status: str, *,
-                   extra_headers: Mapping[str, str] | None = None) -> dict[str, Any]:
+                   extra_headers: Mapping[str, str] | None = None,
+                   if_updated_at: str | None = None) -> dict[str, Any]:
         """``PATCH /agents/{agent_id}`` with ``{"status": status}``.
 
         ``extra_headers`` (Phase G C-12): headers added to THIS one request,
@@ -437,19 +444,27 @@ class RegistryClient:
         case) is refused with :class:`HeaderCollisionError` before anything is
         sent: a per-call header never replaces the caller's identity. ``None``
         (the default) sends exactly what this method sent before the argument
-        existed."""
+        existed.
+
+        ``if_updated_at`` (kill-path hardening): a compare-and-set. The registry applies the write only if the row's
+        ``updated_at`` still equals this value (the one an earlier read or write of the row returned); any other
+        write in between makes the registry answer 412 and this method raise :class:`AgentRowChangedError`. ``None``
+        (the default) is the unconditional write it always was."""
         try:
             auth = _request_auth(self._own_client, "PATCH", f"/agents/{agent_id}", REGISTRY_GUARDED)
             if extra_headers is not None:
                 auth = {"headers": _with_extra_headers(auth.get("headers", {}), extra_headers)}
             resp = self._client.patch(
-                f"{self._base}/agents/{agent_id}", json={"status": status},
+                f"{self._base}/agents/{agent_id}",
+                json={"status": status} if if_updated_at is None else {"status": status, "if_updated_at": if_updated_at},
                 **auth,
             )
         except HeaderCollisionError:
             raise
         except Exception as exc:
             raise RegistryUnreachableError(str(exc)) from exc
+        if resp.status_code == 412 and if_updated_at is not None:
+            raise AgentRowChangedError(agent_id)
         if resp.status_code == 404:
             raise AgentNotRegisteredError(agent_id)
         if resp.status_code != 200:
