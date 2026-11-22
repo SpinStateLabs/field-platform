@@ -186,7 +186,9 @@ def _health(base: str, timeout: float = 5.0) -> dict[str, dict]:
         url = base.rstrip("/") + ("/" + prefix if prefix else "") + "/health"
         try:
             with urllib.request.urlopen(url, timeout=timeout) as r:  # noqa: S310 - loopback estate URL
-                out[svc] = json.loads(r.read(65536).decode("utf-8"))
+                body = json.loads(r.read(65536).decode("utf-8"))
+            # any JSON parses; only an object is a /health body (null, a list, a number or a string is not)
+            out[svc] = body if isinstance(body, dict) else {"_error": "NotAnObject"}
         except Exception as exc:  # noqa: BLE001 - reported, never raised
             out[svc] = {"_error": type(exc).__name__}
     return out
@@ -195,6 +197,9 @@ def _health(base: str, timeout: float = 5.0) -> dict[str, dict]:
 def check_health(health: dict[str, dict], expect: str) -> list[str]:
     problems = []
     for svc, h in health.items():
+        if not isinstance(h, dict):    # a caller may hand over any shape: a named problem, never a TypeError / AttributeError
+            problems.append(f"{svc}: /health is not a JSON object ({type(h).__name__})")
+            continue
         if "_error" in h:
             problems.append(f"{svc}: /health unreadable ({h['_error']})")
             continue
