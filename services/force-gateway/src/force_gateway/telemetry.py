@@ -21,7 +21,7 @@ _CONFIDENCE = re.compile(r"\*\*(HIGH|MEDIUM|LOW)\*\*|\[(HIGH|MEDIUM|LOW)\]")
 
 # [F] Corrections issued (the protocol demands direct correction).
 _CORRECTION = re.compile(
-    r"(?i)\b(correction:|that (is|'s) incorrect|the premise is (wrong|flawed|false)|"
+    r"(?i)\b(correction:|that(?:\s+is|['\u2019]s)\s+incorrect|the premise is (wrong|flawed|false)|"
     r"i need to correct|this is not (correct|accurate))"
 )
 

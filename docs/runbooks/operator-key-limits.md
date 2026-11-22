@@ -2,15 +2,21 @@
 
 Three limits of the operator-key layer that the code states but no runbook
 did (card C-46; reviewer cards C-20 and C-34). Each is a documented limit, not a
-defect, and each cites the line that says so. Line numbers are for main at the
-time of writing; re-grep the quoted phrase if they have moved.
+defect, and each cites the code that says so by file and symbol (a function,
+constant or quoted expression), so a cite survives the code moving; re-grep the
+quoted phrase if it does not resolve.
 
 ## 1. Retired-key memory: in process memory, per registry path, capped
 
 What it does: when a load of the operators file at a higher generation removes
-a key hash, the verifier remembers that hash and refuses it if it comes back in
-a file whose generation is not above the one that removed it (a restored
-backup, a stale `.prev`). It learns a hash only from a higher-generation load
+a key hash, the verifier remembers that hash and refuses it in ANY file that is
+not a new highest generation: a restored backup, a stale `.prev`, or a second
+file at the same generation as the highest seen, even one above the generation
+that removed it. Only a re-issue in a file above the highest generation seen
+makes the key live again (C-1147, Don's ruling of 2026-11-02 on PR 355: a new
+high clears its own keys from the retired table, then `returned = {h for h in
+present if h in retired}` in `_apply_retired_memory` refuses every retired hash
+still present). It learns a hash only from a higher-generation load
 that LACKS it (`_apply_retired_memory` in `packages/field-core/src/field_core/operator_auth.py`, the `removed` sets);
 a higher file that still carries the hash retires nothing.
 
@@ -23,10 +29,11 @@ The limits:
 - It learns only from loads this process makes, and only from a STRICTLY higher
   generation (`_apply_retired_memory`: `generation > st["generation"]` and `generation > st["high_generation"]`). A file at the SAME generation as the
   highest seen is not "below the high-water mark" (`_apply_retired_memory`, `generation < st["high_generation"]`, tests
-  `<`), so a different file that carries the same generation number is not
-  refused for hashes the first one lacked. Whether to refuse that is open in
-  PR 355; until it is decided, treat two files with one generation number as
-  one file.
+  `<`), so it is not refused for hashes the highest file merely lacked; but a
+  hash already RETIRED is refused there (C-1147, decided: the narrow rule;
+  `packages/field-core/tests/test_operator_retired_key_narrow_rule_c1147.py`).
+  Only a hash that was never retired passes in a second file with the same
+  generation number.
 - It is capped at `MAX_RETIRED_HASHES = 4096` (constant `MAX_RETIRED_HASHES` in `operator_auth.py`); when
   full, the oldest generations are dropped (the `len(retired) > MAX_RETIRED_HASHES` trim in `_apply_retired_memory`). The
   eviction is silent: no log line and no counter. Eviction removes the hash
