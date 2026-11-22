@@ -47,7 +47,7 @@ GATE = "G18"
 SECONDS_PER_HOUR = 3600.0
 #: The shortest window that counts as a Stage 1 window (the runbook's Stage 2 entry states it). A shorter one, or one
 #: where the flag was forgotten, is not clean: the default is not zero.
-DEFAULT_MIN_HOURS = 24.0
+DEFAULT_MIN_HOURS = sc.G18_MIN_WINDOW_HOURS
 
 
 def _finite(value: Any) -> bool:
@@ -178,7 +178,13 @@ def main(argv: list[str] | None = None) -> int:
         except sc.Refused as exc:
             print(f"refused: {exc.reason}")
             return 2
-        span = {"window_hours": round((after["taken_at"] - before["taken_at"]) / SECONDS_PER_HOUR, 2),
+        hours = (after["taken_at"] - before["taken_at"]) / SECONDS_PER_HOUR
+        if hours < sc.G18_MIN_WINDOW_HOURS:
+            # B5: the controller counts a G18 row only for a window of at least that length; never write one it ignores
+            print(f"[FAIL] the window is clean but shorter than the {sc.G18_MIN_WINDOW_HOURS:g} hours a gate {GATE} row "
+                  "needs; no row written")
+            return 1
+        span = {"window_hours": round(hours, 2),
                 "window_end": int(after["taken_at"]),               # when the window closed: Stage 2 judges how old it is
                 "services": len(before["counters"])}
         try:                         # the record is written BEFORE the PASS line: a failed write must not look recorded

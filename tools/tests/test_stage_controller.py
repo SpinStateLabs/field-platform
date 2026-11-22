@@ -111,13 +111,17 @@ class Driver:
         return [c[2] for c in self.calls if c[0] == "do"]
 
 
+#: B5: the clean-window evidence a G18 row must carry to count (tools/stage1_window.py writes it)
+G18_EVIDENCE = {"window_hours": 30.0, "window_end": 1_790_000_000, "services": 8}
+
+
 def _records(tmp_path, *, alerts_proven=True, gates=(), clean_stage2=True, sha="a" * 40):
     r = sc.Records(tmp_path / "records.jsonl")
     extra = {"sha8": sha[:8]} if sha else {}
     if alerts_proven:
         r.append("alerts_proven", ok=True, **extra)
     for g in gates:
-        r.append("gate", gate=g, ok=True, **extra)
+        r.append("gate", gate=g, ok=True, **extra, **(G18_EVIDENCE if g == "G18" else {}))
     if clean_stage2 and gates:                   # the ready estate Stage 3 needs: Stage 2 armed, held and recorded done
         r.append("stage_done", stage=2)
     return r
@@ -453,7 +457,9 @@ def test_the_command_line_records_a_gate_and_refuses_a_gate_record_without_a_nam
     assert sc.main(["record", "gate", "--records", rec]) == 2
     assert sc.main(["record", "gate", "G22", "--records", rec]) == 0
     assert sc.Records(rec).gate_ok("G22") and not sc.Records(rec).gate_ok("G21")
-    assert sc.main(["record", "gate", "G18", "--records", rec]) == 0 and sc.Records(rec).gate_ok("G18")
+    assert sc.main(["record", "gate", "G18", "--records", rec]) == 2 and not sc.Records(rec).gate_ok("G18")  # B5
+    sc.Records(rec).append("gate", gate="G18", ok=True, **G18_EVIDENCE)       # what tools/stage1_window.py writes
+    assert sc.Records(rec).gate_ok("G18")
     sc.main(["record", "alerts-proven", "--records", rec])
     assert sc.main(["plan", "--stage", "2", "--records", rec, "--go-sentence", GO]) == 0
 
@@ -613,8 +619,8 @@ def test_the_command_line_binds_a_record_to_a_sha_and_a_plan_checks_it(tmp_path,
     path = str(tmp_path / "r.jsonl")
     assert sc.main(["record", "alerts-proven", "--records", path, "--build-sha", SHA_A]) == 0
     assert sc.main(["record", "gate", "G22", "--records", path, "--build-sha", SHA_A]) == 0
-    assert sc.main(["record", "gate", "G18", "--records", path, "--build-sha", SHA_A]) == 0
     row = [json.loads(x) for x in Path(path).read_text(encoding="utf-8").splitlines()][-1]
+    sc.Records(path).append("gate", gate="G18", ok=True, sha8=SHA_A[:8], **G18_EVIDENCE)  # B5: stage1_window's row
     assert row["sha8"] == SHA_A[:8] and SHA_A not in json.dumps(row)         # 8 characters only, never the full sha
     capsys.readouterr()
     assert sc.main(["plan", "--stage", "2", "--records", path, "--go-sentence", GO, "--build-sha", SHA_A]) == 0
@@ -687,7 +693,7 @@ def test_a_stage_three_plan_prints_the_irreversibility_notice_and_the_other_stag
     r.append("alerts_proven", ok=True)
     r.append("gate", gate="G21", ok=True)
     r.append("gate", gate="G22", ok=True)
-    r.append("gate", gate="G18", ok=True)          # G25 (rebuild of PR 838): the Stage 2 plan below needs it
+    r.append("gate", gate="G18", ok=True, **G18_EVIDENCE)          # G25 (rebuild of PR 838): the Stage 2 plan below needs it
     r.append("stage_done", stage=2)
     assert sc.main(["plan", "--stage", "3", "--records", path, "--go-sentence", GO]) == 0
     out = capsys.readouterr().out
@@ -719,7 +725,7 @@ def _stage2_ready(tmp_path, sha=None, **omit):
         r.append("alerts_proven", ok=True, **extra)
     for g in ("G18", "G21", "G22"):
         if g not in omit:
-            r.append("gate", gate=g, ok=True, **extra)
+            r.append("gate", gate=g, ok=True, **extra, **(G18_EVIDENCE if g == "G18" else {}))
     return r
 
 
@@ -744,7 +750,7 @@ def test_stage_two_plan_refuses_without_a_go_sentence_even_with_every_record(tmp
 
 def test_a_g18_record_for_another_build_is_not_a_g18_record(tmp_path):
     r = _stage2_ready(tmp_path, sha=SHA_A, G18=True)
-    r.append("gate", gate="G18", ok=True, sha8="deadbeef")
+    r.append("gate", gate="G18", ok=True, sha8="deadbeef", **G18_EVIDENCE)
     with pytest.raises(sc.Refused) as e:
         sc.preconditions(2, r, GO, build_sha=SHA_A)
     assert e.value.reason == "gate_G18_not_recorded"
@@ -756,7 +762,7 @@ def test_the_command_line_plan_for_stage_two_refuses_each_gate_in_turn(tmp_path,
     sc.main(["record", "gate", "G22", "--records", rec])
     assert sc.main(["plan", "--stage", "2", "--records", rec, "--go-sentence", GO]) == 2
     assert "gate_G18_not_recorded" in capsys.readouterr().out
-    sc.main(["record", "gate", "G18", "--records", rec])
+    sc.Records(rec).append("gate", gate="G18", ok=True, **G18_EVIDENCE)       # B5: stage1_window's row, not the CLI
     assert sc.main(["plan", "--stage", "2", "--records", rec, "--go-sentence", GO]) == 0
 
 
