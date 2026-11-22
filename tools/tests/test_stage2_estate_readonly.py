@@ -85,11 +85,12 @@ def _records(tmp_path, name="records.jsonl"):
     rec = sc.Records(tmp_path / name)
     rec.append("alerts_proven", ok=True, sha8=SHA[:8])
     rec.append("gate", gate="G22", ok=True, sha8=SHA[:8])
+    rec.append("gate", gate="G18", ok=True, sha8=SHA[:8])    # G25 (rebuild of PR 838): Stage 2 also needs G18
     return rec
 
 
 def _kinds(rec):
-    return [r["kind"] for r in rec.rows()][2:]       # after the two precondition rows
+    return [r["kind"] for r in rec.rows()][3:]       # after the three precondition rows
 
 
 def _drive(rec, host, **kw):
