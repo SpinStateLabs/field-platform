@@ -67,6 +67,16 @@ def test_a_timeout_or_network_failure_is_retryable(exc, want):
     assert _post(_Opener(exc=exc)) == want
 
 
+@pytest.mark.parametrize("exc", [http.client.BadStatusLine("x"), http.client.IncompleteRead(b"ab"),
+                                 http.client.CannotSendRequest()])
+def test_an_http_exception_that_is_not_an_oserror_is_a_retryable_network_failure(exc):
+    """Reviewer C-738 F-C738-1: RemoteDisconnected is both an HTTPException and an OSError, so the table above
+    cannot tell the two handlers apart; these are HTTPException only, and dropping it from the tuple would let
+    them escape as a non-retried `error`."""
+    assert not isinstance(exc, OSError)
+    assert _post(_Opener(exc=exc)) == (False, "network", None, True)
+
+
 @pytest.mark.parametrize("code,retry", [
     (400, False), (401, False), (403, False), (404, False), (408, False), (413, False), (499, False),
     (429, True), (500, True), (502, True), (503, True), (599, True),
