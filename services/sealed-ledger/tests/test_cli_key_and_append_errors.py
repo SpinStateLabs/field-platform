@@ -103,11 +103,14 @@ def test_a_good_pubkey_on_verify_is_unchanged(ledger, tmp_path):
     assert "is not a readable" not in res.output
 
 
-@pytest.mark.parametrize("name,cls", [("missing", "FileNotFoundError"), ("bom", "UnicodeDecodeError")])
-def test_export_sign_key_error_shows_the_class_only(ledger, tmp_path, keys, name, cls):
+# A missing file names the class only; a decode error prints main's fixed text with no class name (main's
+# test_export_sign_key_leak.py forbids "UnicodeDecodeError" in the output).
+@pytest.mark.parametrize("name,shown", [("missing", "(FileNotFoundError)"), ("bom", "(not a readable ASCII PEM file)")])
+def test_export_sign_key_error_shows_the_class_only(ledger, tmp_path, keys, name, shown):
     res = runner.invoke(cli_app, ["export", "--path", str(ledger), "--out-dir", str(tmp_path / "x"),
                                   "--sign-key", str(keys[name])])
-    assert res.exit_code == 2 and f"error: cannot read --sign-key ({cls})" in res.output
+    assert res.exit_code == 2 and f"error: cannot read --sign-key {shown}" in res.output
+    assert "UnicodeDecodeError" not in res.output
     assert not (tmp_path / "x").exists()
     no_traceback(res)
     no_decode_detail(res)

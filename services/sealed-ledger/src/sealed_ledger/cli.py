@@ -524,8 +524,13 @@ def export(
     if sign_key is not None:
         try:
             private_key_pem = sign_key.read_text(encoding="ascii")
-        except (OSError, UnicodeDecodeError) as exc:
-            typer.echo(f"error: cannot read --sign-key ({type(exc).__name__})", err=True)
+        except UnicodeDecodeError:
+            # main's fixed text (B-EXPORT-KEY-BYTE-LEAK): a decode error's message carries one raw byte of the key and
+            # its offset, and no class name is printed either
+            typer.echo("error: cannot read --sign-key (not a readable ASCII PEM file)", err=True)
+            raise typer.Exit(code=2)
+        except OSError as exc:
+            typer.echo(f"error: cannot read --sign-key ({type(exc).__name__})", err=True)   # PR 915: the class only
             raise typer.Exit(code=2)
     try:
         store = _store(path)   # opening a store takes a snapshot too: a busy ledger can refuse here as well
