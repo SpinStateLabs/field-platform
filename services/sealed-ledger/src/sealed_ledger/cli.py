@@ -510,6 +510,7 @@ def export(
     (hash spine to head), signature.json (signed only with --sign-key)."""
     from sealed_ledger.bundle import InvalidSigningKey
     from sealed_ledger.filters import InvalidTimeBound
+    from sealed_ledger.store import LedgerBusy, LedgerCorrupt
 
     private_key_pem = None
     if sign_key is not None:
@@ -519,8 +520,8 @@ def export(
             # fixed text: a decode error's message carries one raw byte of the key and its offset
             typer.echo("error: cannot read --sign-key (not a readable ASCII PEM file)", err=True)
             raise typer.Exit(code=2)
-    store = _store(path)
     try:
+        store = _store(path)   # opening a store takes a snapshot too: a busy ledger can refuse here as well
         summary = store.export(
             out_dir or store.path.parent / "exports",
             since=since,
@@ -532,6 +533,11 @@ def export(
     except (InvalidTimeBound, InvalidSigningKey) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=2)
+    except LedgerBusy as exc:   # a snapshot that could not be taken is never evidence of tampering (exit 4)
+        _busy(str(exc))
+    except (LedgerCorrupt, ValueError) as exc:   # the text can quote a stored line or ts: only the class is shown
+        typer.echo(f"error: export failed: the ledger cannot be exported ({type(exc).__name__})", err=True)
+        raise typer.Exit(code=1)
     except OSError as exc:
         typer.echo(f"error: export failed: {exc}", err=True)
         raise typer.Exit(code=1)
