@@ -111,5 +111,6 @@ def test_restored_true_is_believed_only_when_nothing_contradicts_it_on_every_2xx
 def test_a_genuine_restore_with_an_explicit_false_skip_flag_is_still_ok(status):
     good = {"agent_id": "invoicing-agent", "restored": True, "restored_status": "active", "restore_skipped": False}
     c = _console(status, good)
-    assert c.post("/api/agents/invoicing-agent/drill", json=ACTION).status_code == status
+    r = c.post("/api/agents/invoicing-agent/drill", json=ACTION)
+    assert r.status_code == 200 and r.json()["restored"] is True      # the console's proxy has always answered 200 for an accepted 2xx
     assert c.post("/api/agents/bulk", json={"action": "drill", "agent_ids": ["invoicing-agent"], **ACTION}).json()["all_ok"] is True
