@@ -210,6 +210,11 @@ def _to_utc(value: Any) -> datetime | None:
     return None
 
 
+#: An ABSOLUTE URL: a scheme and "://" before any "/", "?" or "#". Group 1 is everything after the host. A uri that only
+#: holds "://" inside its query (``/login?next=http://evil.example/x``) is relative and must keep its query.
+_ABSOLUTE_URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^/?#]*(.*)", re.DOTALL)
+
+
 def make_jsonl_parser(field_map: dict[str, list[str]]) -> LineParser:
     missing = {"ts", "ip", "uri", "status"} - set(field_map)
     if missing:
@@ -237,8 +242,10 @@ def make_jsonl_parser(field_map: dict[str, list[str]]) -> LineParser:
         ua = _pick(record, field_map.get("ua", [])) or ""
         ref = _pick(record, field_map.get("referer", [])) or ""
         target = str(uri)
-        if "://" in target:  # full URL: keep path + query
-            target = "/" + target.split("://", 1)[1].partition("/")[2]
+        absolute = _ABSOLUTE_URL.match(target)
+        if absolute:  # a full URL: keep path + query (a bare host is "/"); a relative uri is left exactly as logged
+            rest = absolute.group(1)
+            target = rest if rest.startswith("/") else "/" + rest
         # JSON strings may hold lone surrogates (\udXXX); drop them so a later
         # utf-8 encode (hashing, canonical pack) cannot raise on one bad line.
         clean = lambda s: str(s).encode("utf-8", "replace").decode("utf-8")
