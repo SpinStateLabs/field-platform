@@ -165,7 +165,7 @@ def test_real_ledger_client_end_to_end_and_ledger_down(tmp_path, monkeypatch):
     report = LifecycleEngine(registry=FakeRegistry(_agents("AP Team Lead")), delegation=NoTokens(),
                              ledger=down, retention=down).sweep(ROSTER, now=NOW)
     assert report.retention_policy.status == "unavailable"
-    assert "connection refused" in report.retention_policy.detail
+    assert "ConnectionError" in report.retention_policy.detail   # S7-5: the exception type only
 
 
 # --- the CLI: exit 3 --------------------------------------------------------

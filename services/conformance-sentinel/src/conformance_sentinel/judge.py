@@ -21,9 +21,13 @@ golden-set evals run against the pinned real model (README).
 from __future__ import annotations
 
 import json
+import logging
+import math
 import os
 import re
 from dataclasses import dataclass, field
+
+_log = logging.getLogger(__name__)
 
 # Version-pinned default. Swapping models is a deliberate act (env override or
 # code change) and every verdict records which model judged it — ADR 1's
@@ -187,11 +191,17 @@ class AnthropicJudgeClient:  # pragma: no cover — Declared-untested without ke
             if not (isinstance(model, str) and 0 < len(model) <= MAX_MODEL_NAME and model.isprintable()):
                 model = self.model                      # the upstream's value is untrusted: short printable text only
             conforming = data["conforming"]
-            if conforming is not None:
-                conforming = bool(conforming)
+            # JSON true / false / null only: `bool("false")` is True (scout P-20). Raised as ValueError, caught below
+            # and reported by class name only; the engine escalates on JudgeError.
+            if conforming is not None and not isinstance(conforming, bool):
+                raise ValueError("conforming is not true, false or null")
+            confidence = data["confidence"]
+            # A finite JSON number only: `float(nan)` clamps to 1.0 and would clear any floor; bool and str are coerced.
+            if isinstance(confidence, bool) or not isinstance(confidence, (int, float)) or not math.isfinite(confidence):
+                raise ValueError("confidence is not a finite number")
             return JudgeVerdict(
                 conforming=conforming,
-                confidence=max(0.0, min(1.0, float(data["confidence"]))),
+                confidence=max(0.0, min(1.0, float(confidence))),
                 rationale=str(data.get("rationale", ""))[:300],
                 cited_scope=cited,
                 model=model,
@@ -217,8 +227,18 @@ def resolve_judge():
 
 
 def resolve_floor(default: float = 0.8) -> float:
-    raw = os.environ.get("FIELD_JUDGE_CONFIDENCE_FLOOR", "")
-    try:
-        return max(0.0, min(1.0, float(raw)))
-    except ValueError:
+    """The confidence a conforming=True judge verdict needs to affirm a paraphrase. Fail-safe direction: a value
+    that would make the gate MORE permissive than intended (negative, -inf, nan, junk) is invalid and falls back to
+    the default; a value above 1 (including inf) is the strictest floor, 1.0. Empty is unset. One warning, never
+    quoting the value."""
+    raw = os.environ.get("FIELD_JUDGE_CONFIDENCE_FLOOR", "").strip()
+    if not raw:
         return default
+    try:
+        value = float(raw)
+    except ValueError:
+        value = math.nan
+    if math.isnan(value) or value < 0:   # -inf is < 0; nan fails every compare, so test it first
+        _log.warning("FIELD_JUDGE_CONFIDENCE_FLOOR is not a number in 0..1; using the default floor")
+        return default
+    return min(1.0, value)
