@@ -222,6 +222,12 @@ class SweepReport(BaseModel):
         description="None = no witness on this estate (FIELD_WITNESS_EVERY unset), or its latest "
         "anchor.remote is within 3 x the interval. A default, so older reports still validate.",
     )
+    persist_error: str | None = Field(
+        default=None,
+        description="Served sweeps only: the exception class name when the finished report could not be "
+        "written to disk (the sweep, and any auto-kill, had already run); None otherwise. A default, so "
+        "older reports still validate.",
+    )
     method: str = (
         "deterministic sweep v0.1 over agent-registry + delegation-authority "
         "vs. owners.csv roster; no LLM"
@@ -236,6 +242,12 @@ class SweepReport(BaseModel):
 class LifecycleError(Exception):
     """A transition refused before it changed anything. Carries the message
     the CLI prints; the caller exits non-zero and nothing was created."""
+
+
+# The kill-switch's KillRequest bounds (operator <= 200, reason <= 1000); the
+# reason is sent with a 24-character prefix, so 976 is what the caller may give.
+MAX_DECOMMISSION_BY = 200
+MAX_DECOMMISSION_REASON = 976
 
 
 class TransitionStep(BaseModel):
@@ -302,6 +314,13 @@ class DecommissionReport(BaseModel):
     )
 
 
+def owner_key(text: str) -> str:
+    """The one way an owner string is compared: NFC, stripped, case-folded. Exact otherwise (no substring). Used
+    for the roster and for the orphan test, so a padded or NFD-composed owner is not reported as an orphan."""
+    import unicodedata   # in the function: a top import would move the ENVIRONMENT.md line cites above it
+    return unicodedata.normalize("NFC", text).strip().casefold()
+
+
 class RosterEntry(BaseModel):
     """One HUMAN on owners.csv: the `owner` string plus the other strings the
     registry may record for the same person (`aliases`)."""
@@ -313,7 +332,7 @@ class RosterEntry(BaseModel):
 
     def match_strings(self) -> set[str]:
         """Every string that makes an agent owned by this human, lower-cased."""
-        return {self.owner.lower(), *(a.lower() for a in self.aliases)}
+        return {owner_key(self.owner), *(owner_key(a) for a in self.aliases)}
 
 
 def parse_roster_entries(csv_text: str) -> list[RosterEntry]:
@@ -676,7 +695,7 @@ class LifecycleEngine:
             if a.get("status") == "retired":
                 continue
             owner = str(a.get("owner", ""))
-            if owner.lower() in roster:
+            if owner_key(owner) in roster:
                 continue
             orphan = Orphan(
                 agent_id=a["agent_id"], owner=owner, status=a.get("status", "?"),
@@ -1057,6 +1076,18 @@ class LifecycleEngine:
         * then the registry goes to ``retired``, which the kill-switch refuses
           to undo (409 on both ``/kill`` and ``/revive``).
         """
+        # Refuse text the kill-switch would 422 BEFORE any client call: otherwise
+        # the revoke runs, the halt fails, and the agent is retired unhalted.
+        if not by.strip() or len(by) > MAX_DECOMMISSION_BY:
+            raise LifecycleError(
+                f"--by must be non-blank and at most {MAX_DECOMMISSION_BY} "
+                "characters — nothing decommissioned"
+            )
+        if not reason.strip() or len(reason) > MAX_DECOMMISSION_REASON:
+            raise LifecycleError(
+                f"--reason must be non-blank and at most {MAX_DECOMMISSION_REASON} "
+                "characters — nothing decommissioned"
+            )
         now = now or datetime.now(timezone.utc)
         try:
             record = self.registry.get_agent(agent_id)
