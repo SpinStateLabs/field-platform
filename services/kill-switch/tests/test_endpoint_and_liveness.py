@@ -433,8 +433,8 @@ def test_domain_kill_records_a_per_agent_registry_fault_without_500(tmp_path):
     stack.register("alpha-agent")
     stack.register("beta-agent")
     r = stack.kill.post("/kill/domain/finance", json=OP)
-    assert r.status_code == 200
-    report = r.json()
+    assert r.status_code == 502          # kill-path hardening: any errored agent makes the route non-2xx; the report is the detail
+    report = r.json()["detail"]
     assert report["killed"] == ["alpha-agent"]
     rows = {row["agent_id"]: row for row in report["results"]}
     assert rows["beta-agent"]["outcome"] == "error"

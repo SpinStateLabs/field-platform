@@ -233,6 +233,11 @@ class DrillReport(BaseModel):
     restored_status: str
     total_ms: float
     endpoint_result: EndpointResult | None = None
+    restore_skipped: bool = Field(
+        default=False,
+        description="True when a real kill (or another status change) landed during the drill: the restore was NOT "
+                    "performed and the agent was left as that change set it",
+    )
     note: str = (
         "Drill: real kill, real propagation, then status restored. "
         "The 2 a.m. answer: one command, measured below."
@@ -495,6 +500,20 @@ def create_app(
         return app.state.endpoint_client
 
     app.state.ledger_note_failures = _GapCounter()
+    # Per-agent count of REAL kills (every _kill_one, bumped at its start and again at its end). A drill snapshots it
+    # before it reads the agent and restores only if it is unchanged: a real kill that overlapped the drill in any way
+    # makes the restore a no-op (R-PR1025 drill restore race).
+    _kill_gen: dict[str, int] = {}
+    _kill_gen_lock = threading.Lock()
+
+    def _bump_kill_gen(agent_id: str) -> None:
+        with _kill_gen_lock:
+            _kill_gen[agent_id] = _kill_gen.get(agent_id, 0) + 1
+
+    def _kill_gen_of(agent_id: str) -> int:
+        with _kill_gen_lock:
+            return _kill_gen.get(agent_id, 0)
+
     app.state.heartbeat_ids_refused = _GapCounter()    # malformed or over-long check-in ids refused (R-PR858 C2)
     app.state.heartbeats_refused = _GapCounter()      # new unregistered check-ins refused because the table is full (RT4 C1)
 
@@ -626,6 +645,19 @@ def create_app(
         origin: str | None = None,
         extra: dict | None = None,
     ) -> KillReport:
+        _bump_kill_gen(agent_id)
+        try:
+            return _kill_one_inner(agent_id, operator, reason, origin, extra)
+        finally:
+            _bump_kill_gen(agent_id)
+
+    def _kill_one_inner(
+        agent_id: str,
+        operator: str,
+        reason: str,
+        origin: str | None,
+        extra: dict | None,
+    ) -> KillReport:
         t0 = time.perf_counter()
         try:
             record = app.state.registry.get_agent(agent_id)
@@ -646,9 +678,21 @@ def create_app(
             )
         if previous != "killed":
             try:
-                _set_status(agent_id, "killed")
+                answer = _set_status(agent_id, "killed")
+            except AgentNotRegisteredError:
+                # the agent vanished between the read and the write: a clean 404, never an unhandled 500
+                raise HTTPException(404, f"agent '{agent_id}' not registered")
             except RegistryUnreachableError as exc:
                 raise HTTPException(502, f"registry unreachable — cannot kill: {_registry_reason(exc)}")
+            except HTTPException:
+                raise
+            except Exception as exc:
+                # any other failure of the write (a transport error that escaped the client, a header collision):
+                # fixed text, never the exception's
+                raise HTTPException(502, "registry write failed — cannot kill")
+            if not isinstance(answer, dict) or answer.get("status") != "killed":
+                # a 200 whose body does not say killed is NOT a kill: never report or ledger it as one
+                raise HTTPException(502, f"registry did not confirm the kill of '{agent_id}'")
         # The signal is sent even on an idempotent re-kill: the flip is what
         # is idempotent, the halt signal is the whole point of repeating it.
         endpoint_result = _signal_and_ledger(
@@ -755,8 +799,8 @@ def create_app(
                 )
             except HTTPException as exc:
                 # Recorded, not raised: one broken agent must not abort the
-                # halt of the rest; the route stays 200 unless every attempt
-                # errored (C-19, below).
+                # halt of the rest; the route answers non-2xx afterwards when
+                # any agent errored (below).
                 results.append(
                     DomainAgentResult(
                         agent_id=agent_id, outcome="error",
@@ -765,6 +809,18 @@ def create_app(
                     )
                 )
                 errored.append({"agent_id": agent_id, "status_code": exc.status_code})   # the status only, never the text (S9-3)
+                continue
+            except Exception as exc:
+                # Anything else (a bug, an exception type the registry client did not wrap) must not stop the halt of
+                # the agents after this one either. The class name only, never the text.
+                results.append(
+                    DomainAgentResult(
+                        agent_id=agent_id, outcome="error",
+                        previous_status=record.get("status"),
+                        error="500: kill failed unexpectedly",
+                    )
+                )
+                errored.append({"agent_id": agent_id, "status_code": 500})
                 continue
             if was_killed:
                 already.append(agent_id)
@@ -796,10 +852,10 @@ def create_app(
             results=results,
         )
         attempted = [r for r in results if r.outcome != "skipped_retired"]
-        if attempted and all(r.outcome == "error" for r in attempted):
-            # C-19: no agent was halted and every attempt errored (e.g. the
-            # kill-switch's own registry identity is missing or revoked): not a
-            # success. The report travels as the detail (the console reads it).
+        if any(r.outcome == "error" for r in attempted):
+            # C-19, widened: a domain halt that left ANY agent running is not a success (it used to answer 200 while
+            # at least one agent was halted). The other agents WERE halted and the kill.domain row above says which;
+            # the report travels as the detail (the console and the CLI read it).
             raise HTTPException(502, report.model_dump(mode="json"))
         return report
 
@@ -931,6 +987,7 @@ def create_app(
               _op: Any = Depends(guard_drill)) -> DrillReport:
         req.operator = operator_auth.bind_body_operator(req.operator)
         t0 = time.perf_counter()
+        gen0 = _kill_gen_of(agent_id)       # BEFORE the read: a real kill that overlaps the drill in any way changes it
         try:
             record = app.state.registry.get_agent(agent_id)
         except AgentNotRegisteredError:
@@ -956,6 +1013,7 @@ def create_app(
         )
 
         restored = False
+        restore_skipped = False
         restored_status = "<not restored>"
         # try/finally: an exception anywhere between the flip and the restore
         # must never leave the agent killed. The restore is itself guarded so
@@ -990,9 +1048,27 @@ def create_app(
             raise HTTPException(502, f"registry unreachable — drill aborted")
         finally:
             try:
-                _set_status(agent_id, previous)
-                restored_status = app.state.registry.get_agent(agent_id).get("status") or "<unknown>"
-                restored = restored_status == previous
+                # Conditional restore: only while the registry still shows THIS drill's own kill and no real kill
+                # (or any other status change, a retire for one) overlapped it. Otherwise the agent stays as that
+                # change left it: a drill must never undo a real kill.
+                try:
+                    now_status = app.state.registry.get_agent(agent_id).get("status")
+                except Exception:
+                    now_status = None
+                if _kill_gen_of(agent_id) != gen0 or now_status not in ("killed", previous):
+                    restore_skipped = True
+                    restored_status = now_status if isinstance(now_status, str) else "<unknown>"
+                    _ledger_note(
+                        "kill.drill.restore_skipped",
+                        {"operator": req.operator, "target_status": previous, "current_status": restored_status,
+                         "reason": "superseded by kill" if _kill_gen_of(agent_id) != gen0
+                                   else "superseded: status changed during the drill"},
+                        agent_id,
+                    )
+                else:
+                    _set_status(agent_id, previous)
+                    restored_status = app.state.registry.get_agent(agent_id).get("status") or "<unknown>"
+                    restored = restored_status == previous
             except Exception as exc:
                 restored = False
                 restored_status = "<restore failed>"
@@ -1013,6 +1089,7 @@ def create_app(
             restored_status=restored_status,
             total_ms=round(total, 2),
             endpoint_result=endpoint_result,
+            restore_skipped=restore_skipped,
         )
         _ledger_note(
             "kill.drill.complete",
@@ -1020,6 +1097,9 @@ def create_app(
              **report.model_dump(exclude={"note"}, exclude_none=True)},
             agent_id,
         )
+        if restore_skipped:
+            # a real kill (or a retire) overlapped the drill: the agent was deliberately left as that change set it
+            raise HTTPException(409, report.model_dump(mode="json"))
         if not restored:
             # C-19: a drill that could not restore left the agent stopped: a
             # failure, never a 2xx. The report travels as the detail.

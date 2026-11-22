@@ -52,7 +52,7 @@ give agents a heartbeat to poll, and prove readiness with timed drills.
 - **Domain kill** runs the same per-agent path; `DomainKillReport.results[]`
   carries `DomainAgentResult{agent_id, outcome, previous_status, error,
   endpoint_result}`. A per-agent registry fault is recorded, not raised: the
-  route stays 200 while at least one agent was halted or already killed; when every attempted (non-retired) agent errored it answers **502** with the report as the `detail` (C-19), and a domain with no registered agent is 404. Serial bound: N agents x 2 s against the CLI's 30 s.
+  route answers 200 only when no attempted (non-retired) agent errored; when ANY attempted agent errored it answers **502** with the report as the `detail` (C-19; the agents that could be halted WERE halted, every agent is attempted, and `kill.domain` always records killed / already_killed / errored / attempted), and a domain with no registered agent is 404. Serial bound: N agents x 2 s against the CLI's 30 s.
 - **Drill** wraps the flip in `try/finally` so no exception can leave the
   agent killed; the restore is itself guarded (`restored: false` + ledger
   `kill.drill.restore_failed` rather than masking the original error).
