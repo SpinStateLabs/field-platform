@@ -159,3 +159,7 @@ crossing naming either spelling finds the one contract. This fails closed: a fal
 first or registers it under another name), never a second contract and never a bypass. The stored name is kept exactly
 as written; only the comparison key drops the joiners. Decision: keep merging joiners and invisible marks, and
 document this case.
+
+### Deactivating and reactivating a contract (S10-21)
+
+`fedbroker deactivate CONTRACT_ID` re-registers the stored contract with `active: false` and nothing else changed (same id, key, scopes and reference), so the operator never hand-writes the PUT body or re-pastes the key. While no contract for the org is active, crossings for that org are BLOCKed with "no active federation contract", and the org may register a new contract id (one active contract per org). `fedbroker activate CONTRACT_ID` turns it back on; it is refused with the same 409 while another active contract holds the org. An unknown id is one line, exit 1. Both go through the operator-guarded write, so the operator pair is attached like `add-contract`.
