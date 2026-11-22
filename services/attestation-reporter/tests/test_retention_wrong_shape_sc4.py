@@ -89,3 +89,33 @@ def test_a_falsy_wrong_shaped_value_fails_closed_not_to_zero(bad):
         assert m[COUNT].status == "unavailable" and m[COUNT].value is None, (key, bad)
         assert "not a list of records" in (m[COUNT].note or "")
         assert m[POLICY].value == 365
+
+
+# R-PR519 roley.reviewer C2: a list that starts with a good record and then holds a non-record must still fail
+# closed (kills "check only the first element" and "all() instead of any()").
+MIXED = [[{"agent_id": "a1", "retention_days": 400}, 1],
+         [{"agent_id": "a1", "retention_days": 400}, None],
+         [{"agent_id": "a1", "retention_days": 400}, "x"]]
+
+
+@pytest.mark.parametrize("field", ["offending", "unresolvable"])
+@pytest.mark.parametrize("mixed", MIXED, ids=repr)
+def test_a_mixed_list_fails_closed_for_both_fields(field, mixed):
+    other = "unresolvable" if field == "offending" else "offending"
+    m = _metrics(_body(**{field: mixed, other: []}))
+    assert m[COUNT].status == "unavailable" and m[COUNT].value is None
+    assert "not a list of records" in (m[COUNT].note or "")
+    assert m[POLICY].value == 365
+
+
+# R-PR519 roley.reviewer C3: the note echoes nothing of the wrong value, for both fields, with a SHORT marker
+# inside a list and inside a dict (kills a mutant that echoes a 20-character prefix of the value).
+@pytest.mark.parametrize("field", ["offending", "unresolvable"])
+@pytest.mark.parametrize("shape", ["list", "dict", "str"])
+def test_the_note_never_echoes_the_wrong_value_for_either_field(field, shape):
+    marker = "zq9"
+    bad = {"list": [marker], "dict": {marker: marker}, "str": marker}[shape]
+    other = "unresolvable" if field == "offending" else "offending"
+    m = _metrics(_body(**{field: bad, other: []}))
+    assert m[COUNT].status == "unavailable"
+    assert marker not in (m[COUNT].note or "")
