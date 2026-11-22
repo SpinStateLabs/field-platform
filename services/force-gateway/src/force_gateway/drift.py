@@ -22,6 +22,7 @@ reproduces baselines, windows and alert state exactly.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 #: the dimensions the gateway feeds from each hygiene judgment, in order
@@ -51,9 +52,23 @@ class _SeriesState:
     rubric_version: str | None = None
 
 
+def _is_int_at_least_one(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 1
+
+
 class DriftTracker:
     def __init__(self, window_size: int = 5, band: float = 0.15,
                  baseline_windows: int = 2):
+        # Refused here, not at record time: baseline_windows=0 averaged an empty list (ZeroDivisionError), window_size<1
+        # made every score its own window, and a NaN or non-positive band made every window out of band or none. The
+        # message names the argument and never the value.
+        if not _is_int_at_least_one(window_size):
+            raise ValueError("window_size must be an integer >= 1")
+        if not _is_int_at_least_one(baseline_windows):
+            raise ValueError("baseline_windows must be an integer >= 1")
+        if (isinstance(band, bool) or not isinstance(band, (int, float))
+                or not math.isfinite(band) or band <= 0):
+            raise ValueError("band must be a finite number > 0")
         self.window_size = window_size
         self.band = band
         self.baseline_windows = baseline_windows
