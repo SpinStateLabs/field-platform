@@ -9,7 +9,7 @@ has a different baseline and loses an active alert."""
 
 from __future__ import annotations
 
-from force_gateway.drift import DriftTracker
+from force_gateway.drift import MAX_WINDOW_HISTORY, DriftTracker
 from force_gateway.store import GatewayStore
 
 
@@ -40,6 +40,9 @@ def test_a_tracker_replayed_from_only_the_newest_scores_is_not_the_tracker_of_th
     assert (tail["baseline_mean"], tail["alert_active"], tail["alerts_fired"]) == (0.4, False, 0)
 
 
-def test_the_completed_windows_also_grow_with_the_history():
+def test_the_completed_window_list_is_capped_while_the_total_counts_every_window():
+    """Main caps the kept window means at ``MAX_WINDOW_HISTORY`` (#1125); only the total keeps counting. The cap bounds
+    memory, not the replay: the baseline and alert state still come from the whole history (test above)."""
     full = build([0.8] * 50 + [0.4] * 150)
-    assert len(full["completed_windows"]) == 40          # one per window of 5: unbounded in the tracker too (S3-20)
+    assert len(full["completed_windows"]) == MAX_WINDOW_HISTORY   # 40 windows of 5 completed; the list keeps 20
+    assert full["completed_windows_total"] == 40
