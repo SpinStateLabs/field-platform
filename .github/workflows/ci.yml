@@ -4,31 +4,26 @@
 # which needs the service CWD on sys.path (run #1 failed exactly here).
 name: ci
 
-# CI runs at the END of a pull request, not on every push (owner decision
-# 2026-11-22): a DRAFT pull request runs nothing. The run starts when the PR is
-# marked ready for review (after its verdicts are in) and on every push to a
-# ready PR. Pushes to main still run. The merge gate is unchanged: CI must be
-# green on the exact head that is merged.
+# Owner decision 2026-11-22: pull requests run NO GitHub CI. The pre-merge test
+# gate is the full run on the GX10 (see comms/GO-LIVE-LOOP.md, "Merge gate").
+# This workflow runs on every push to main, as the after-merge confirmation,
+# and by hand on any branch (Actions tab or `gh workflow run ci.yml --ref <branch>`).
 on:
   push:
     branches: [main]
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   tests:
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        # A pull request tests the production image version (3.12) only;
-        # main runs the full matrix after every merge.
-        python-version: ${{ fromJSON(github.event_name == 'pull_request' && '["3.12"]' || '["3.11", "3.12", "3.13", "3.14"]') }}
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -105,7 +100,6 @@ jobs:
           (cd defence-shield/agent-incident-retro && python -m pytest -q tests)
 
   compose-smoke:
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     # x86_64 counterpart to the GB10 (aarch64) verification of 2026-08-08.
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -252,7 +246,6 @@ jobs:
         run: docker compose --profile approver down
 
   fly-image-smoke:
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     # Single-container Fly.io estate image (integration/fly/) — same proxy
     # route map and governed flow as compose-smoke, one container instead of
     # fourteen. Build context is the repo root.
@@ -437,7 +430,6 @@ jobs:
           docker rm -f estate-c5 || true
 
   compose-upgrade-smoke:
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     # v1.2 Phase C. The GB10 topology (base file + docker-compose.gb10.yml:
     # read-only field-manifests volume, manifests-admin seed, field-keys in the
     # ledger only) started by the CURRENT images on a /data written the way a
