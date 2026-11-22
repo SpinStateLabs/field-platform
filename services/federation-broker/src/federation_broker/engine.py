@@ -150,6 +150,38 @@ def _not_blank(value: Any) -> Any:
     return value
 
 
+def _first_unencodable(value: Any) -> bool:
+    """True when ``value`` (text, or a list or dict holding text) holds a string that cannot be written as UTF-8: a
+    lone surrogate such as the JSON escape ``\\ud800``. pydantic refuses one in a plain ``str`` field but lets it
+    through a list entry and an optional string, and SQLite then raises ``UnicodeEncodeError`` at bind (a 500, or the
+    row written and the response not), and a ledger payload that cannot be encoded is dropped (S6-11).
+
+    The walk is iterative (an explicit stack), so nesting depth cannot raise ``RecursionError``: a deeply nested
+    manifest is answered like any other body, never a 500 (R-PR711 roley.reviewer condition 3)."""
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str):
+            try:
+                item.encode("utf-8")
+            except UnicodeEncodeError:
+                return True
+        elif isinstance(item, dict):
+            for k, v in item.items():
+                stack.append(k)
+                stack.append(v)
+        elif isinstance(item, (list, tuple)):
+            stack.extend(item)
+    return False
+
+
+def _refuse_unencodable(model: BaseModel) -> None:
+    for name in type(model).model_fields:
+        if _first_unencodable(getattr(model, name)):
+            # the field name only, never the text
+            raise ValueError(f"{name} holds text that is not valid UTF-8 (a lone surrogate)")
+
+
 class FederationContract(BaseModel):
     # hide_input_in_errors: a ValidationError's text must not quote an input
     # that may be a pasted private key (the API's 422 drops ``input`` too).
@@ -175,6 +207,11 @@ class FederationContract(BaseModel):
     @classmethod
     def _names_not_blank(cls, value: Any) -> Any:
         return _not_blank(value)
+
+    @model_validator(mode="after")
+    def _text_is_utf8(self) -> "FederationContract":
+        _refuse_unencodable(self)
+        return self
 
     @field_validator("counterparty_pubkey_pem")
     @classmethod
@@ -205,7 +242,8 @@ REFUSED_NAMES: dict[str, tuple[str, ...]] = {
 
 
 class CrossingRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    # hide_input_in_errors: a ValidationError's own text must not quote the request (the API's 422 drops ``input``)
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     direction: Direction = Field(
         default="inbound",
@@ -242,6 +280,11 @@ class CrossingRequest(BaseModel):
     @classmethod
     def _names_not_blank(cls, value: Any) -> Any:
         return _not_blank(value)
+
+    @model_validator(mode="after")
+    def _text_is_utf8(self) -> "CrossingRequest":
+        _refuse_unencodable(self)
+        return self
 
     @model_validator(mode="after")
     def _names_match_direction(self) -> "CrossingRequest":
