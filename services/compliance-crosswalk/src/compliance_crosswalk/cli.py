@@ -369,5 +369,34 @@ def serve(
     uvicorn.run(create_app(every=every), host=host, port=port)
 
 
+def _store_refusal_is_exit_2(fn):
+    """A stale-flags file that cannot be trusted (unreadable, not JSON, a repeated key, a wrong type) is one fixed
+    ``error:`` line and exit 2, never a traceback and never an empty store (an empty store would reopen the evidence-pack
+    gate). The line is the file's name and what is wrong, never the file's text. Nothing is written on this path."""
+    import functools
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        from compliance_crosswalk.staleness import StaleStoreError
+
+        try:
+            return fn(*args, **kwargs)
+        except StaleStoreError as exc:
+            typer.echo(f"error: {exc}", err=True)
+            raise typer.Exit(code=2) from None
+
+    return wrapper
+
+
+#: The commands that open the stale-flags store. Wrapped here, after every definition, so each one refuses a damaged
+#: store the same way.
+_STORE_COMMANDS = frozenset({"pack", "regwatch_check", "regwatch_check_file", "regwatch_status", "regwatch_set_stale",
+                             "regwatch_clear"})
+for _typer_app in (app, regwatch_app):
+    for _command in _typer_app.registered_commands:
+        if _command.callback is not None and _command.callback.__name__ in _STORE_COMMANDS:
+            _command.callback = _store_refusal_is_exit_2(_command.callback)
+
+
 if __name__ == "__main__":  # pragma: no cover
     sys.exit(app())

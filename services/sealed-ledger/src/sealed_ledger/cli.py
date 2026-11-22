@@ -512,8 +512,9 @@ def export(
     if sign_key is not None:
         try:
             private_key_pem = sign_key.read_text(encoding="ascii")
-        except (OSError, UnicodeDecodeError) as exc:
-            typer.echo(f"error: cannot read --sign-key: {exc}", err=True)
+        except (OSError, UnicodeDecodeError):
+            # fixed text: a decode error's message carries one raw byte of the key and its offset
+            typer.echo("error: cannot read --sign-key (not a readable ASCII PEM file)", err=True)
             raise typer.Exit(code=2)
     store = _store(path)
     try:
@@ -1064,16 +1065,28 @@ def verify_witness_cmd(
         except (OSError, UnicodeError, ValueError, TypeError, UnsupportedAlgorithm) as exc:
             typer.echo(f"error: --pubkey is not a readable Ed25519 public key ({type(exc).__name__})", err=True)
             raise typer.Exit(code=2)
+    secret = None
+    if secret_file is not None:
+        try:
+            secret = secret_file.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeError) as exc:
+            # the exception text is NEVER echoed: a UnicodeDecodeError says "byte 0xff in position 25" (a byte and the
+            # length of the secret before it)
+            typer.echo(f"error: --secret-file is not readable text ({type(exc).__name__})", err=True)
+            raise typer.Exit(code=2)
     try:
         if events_file is not None:
             events = w.load_events(events_file.read_bytes())
         else:
-            secret = secret_file.read_text(encoding="utf-8").strip() if secret_file is not None else None
             events = w.fetch_events(events_url, secret or None)
     except w.DuplicateKey as exc:
         typer.echo(f"WITNESS FAILED — events source refused: {exc}")
         raise typer.Exit(code=1)
-    except (OSError, UnicodeError, ValueError) as exc:
+    except UnicodeError as exc:
+        # type only: the message of a decode error carries a byte value and an offset
+        typer.echo(f"error: events source unreadable: {type(exc).__name__}", err=True)
+        raise typer.Exit(code=2)
+    except (OSError, ValueError) as exc:
         typer.echo(f"error: events source unreadable: {type(exc).__name__}: {exc}", err=True)
         raise typer.Exit(code=2)
     except Exception as exc:  # noqa: BLE001 - transport errors
