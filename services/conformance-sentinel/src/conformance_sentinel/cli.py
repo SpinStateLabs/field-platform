@@ -54,7 +54,7 @@ def check(
         typer.echo(f"error: sentinel unreachable ({type(exc).__name__})", err=True)
         raise typer.Exit(code=1)
     if resp.status_code != 200:
-        typer.echo(f"error {resp.status_code}: {resp.text}", err=True)
+        typer.echo(f"error: {upstream_error(resp, '/check')}", err=True)
         raise typer.Exit(code=1)
     # S6-13, fail closed: only the exact decision 'ALLOW' exits 0. A body that is not JSON, not an object, has no
     # decision or a decision this CLI does not know is a refusal, never an allow.

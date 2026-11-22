@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from field_agent._transport import AuthedClient
 from field_agent.errors import HeartbeatUnreachable
+from field_core.errors import upstream_error
 
 import os
 from typing import Any
@@ -74,12 +75,14 @@ class LivenessClient:
         if resp.status_code != 200:
             # the status only: the body is the server's (or something on the path), never echoed
             raise HeartbeatUnreachable(
-                f"heartbeat returned {resp.status_code} — liveness unknown, halting"
+                f"{upstream_error(resp, 'heartbeat')} — liveness unknown, halting"
             )
         try:
             return Heartbeat.model_validate(resp.json())
         except ValueError as exc:          # pydantic's ValidationError and a JSON decode error are both ValueErrors
             # the class only: the body is the server's (or something on the path), never echoed
-            raise HeartbeatUnreachable(
-                f"heartbeat answer unusable ({type(exc).__name__}) — liveness unknown, halting"
-            ) from None
+            bad = type(exc).__name__
+        # raised OUTSIDE the except block (C-729, rebuild of PR 556): inside it the error stays on __context__
+        raise HeartbeatUnreachable(
+            f"heartbeat answer unusable ({bad}) — liveness unknown, halting"
+        )
