@@ -351,9 +351,9 @@ def test_i13b_mutating_a_returned_event_does_not_poison_a_later_verify(tmp_path)
 
 
 """
-INPUTS verify() reads (services/sealed-ledger/src/sealed_ledger/store.py, at 35c62fd4):
+INPUTS verify() reads (services/sealed-ledger/src/sealed_ledger/store.py; line numbers omitted, they drift):
 
-  LedgerStore.verify:2271 -> _take_snapshot(tolerant=True) -> _verified:1764 -> Snapshot.verify:1136
+  LedgerStore.verify -> _take_snapshot(tolerant=True) -> _verified -> Snapshot.verify
   key (live-only ledger): Layout (== SegView list, JournalState incl. the journal's raw bytes, error,
   archived) and every live segment's raw bytes (None = file absent).
 
