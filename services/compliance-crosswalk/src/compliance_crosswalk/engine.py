@@ -13,10 +13,11 @@ from field_core.validation import validate_manifest_data
 
 
 #: Unicode categories that cannot appear in text printed into the report or the evidence pack: control (Cc), invisible
-#: format (Cf: marks, zero-width characters, bidirectional overrides) and line or paragraph separator (Zl, Zp). The
-#: signer is REFUSED for holding one (evidence_pack._checked_signer); free text from a caller or a service answer is
-#: instead made one line (S5-17).
-REFUSED_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})
+#: format (Cf: marks, zero-width characters, bidirectional overrides), line or paragraph separator (Zl, Zp) and, from
+#: PR 563 / Q-47 F-Q47-3, an unpaired surrogate (Cs: it cannot be encoded as UTF-8, so a response or a pack file
+#: carrying it was a server error). The signer is REFUSED for holding one (evidence_pack._checked_signer); free text
+#: from a caller or a service answer is instead made one line (S5-17).
+REFUSED_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp", "Cs"})
 ONE_LINE_MAX = 200
 
 
