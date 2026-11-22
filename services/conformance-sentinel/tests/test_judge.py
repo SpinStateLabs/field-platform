@@ -75,6 +75,29 @@ def test_resolve_floor_parsing(monkeypatch):
     assert resolve_floor() == 1.0
 
 
+def test_resolve_floor_refuses_the_permissive_values(monkeypatch, caplog):
+    """S10-23: a negative, -inf or nan floor used to clamp to 0.0, so a conforming=True verdict at ANY confidence
+    passed the scope gate. Each is invalid now and falls back to the default, with one warning that never quotes the
+    value. Out-of-range-high stays the strict clamp; whitespace is tolerated; empty is unset."""
+    for raw, expected in [("-0.5", 0.8), ("-1", 0.8), ("-inf", 0.8), ("nan", 0.8), ("NaN", 0.8),
+                          (" 0.9 ", 0.9), ("", 0.8), ("   ", 0.8), ("0", 0.0), ("1", 1.0),
+                          ("2", 1.0), ("inf", 1.0)]:
+        monkeypatch.setenv("FIELD_JUDGE_CONFIDENCE_FLOOR", raw)
+        assert resolve_floor() == expected, raw
+    assert resolve_floor(default=0.6) == 1.0   # last raw was "inf": strict, not the default
+    monkeypatch.setenv("FIELD_JUDGE_CONFIDENCE_FLOOR", "-0.5")
+    assert resolve_floor(default=0.6) == 0.6   # the caller's default is what is used
+
+
+def test_resolve_floor_warns_once_per_bad_value_without_quoting_it(monkeypatch, caplog):
+    import logging
+    monkeypatch.setenv("FIELD_JUDGE_CONFIDENCE_FLOOR", "-0.12345")
+    with caplog.at_level(logging.WARNING):
+        resolve_floor()
+    msgs = [r.getMessage() for r in caplog.records if "FIELD_JUDGE_CONFIDENCE_FLOOR" in r.getMessage()]
+    assert len(msgs) == 1 and "0.12345" not in msgs[0]
+
+
 def test_judge_conforming_allows_paraphrase(stack):
     mock = _arm(stack, rules={
         "draft the march invoices": (True, 0.95, "paraphrase of 'draft invoices'")})
