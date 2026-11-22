@@ -147,6 +147,12 @@ def test_a_reordered_repeat_with_the_payload_elsewhere_does_not_fire_on_q():
     assert _same([req(1, 0, "/s", "q=a&q=b"), req(2, 30, "/s", f"q=b&q=a&p={SQLI}")]) is None
 
 
+def test_a_changed_benign_parameter_is_not_a_pivot_when_the_payload_is_in_another_name():
+    # R-PR1158 C1 (roley.reviewer M7): q changes a -> b, but q carries no payload; the payload is in z, which no benign
+    # request used, so there is no pivot (only a TAMPERED name with a benign use counts)
+    assert _same([req(1, 0, "/s", "q=a"), req(2, 30, "/s", f"q=b&z={SQLI}")]) is None
+
+
 def test_an_unchanged_repeated_benign_value_set_cites_the_newest_use():
     import agent_incident_retro.clauses as c
 
