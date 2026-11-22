@@ -10,6 +10,7 @@ Every id, key and path here is made up."""
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -146,3 +147,35 @@ def test_a_sibling_directory_sharing_the_manifest_dir_name_prefix_is_outside(env
     assert _post(client, "inside-probe", manifest_ref="good.yaml").status_code == 201
     r = client.patch("/agents/inside-probe", json={"manifest_ref": ref})
     assert r.status_code == 422 and "missing" in r.text
+
+def test_a_relative_ref_through_a_symlink_loop_is_refused_as_missing_not_a_500(env):
+    """roley.reviewer BLOCK on #1209: on Python 3.11/3.12 Path.resolve() raises RuntimeError on a symlink loop, so the
+    containment check answered 500 on POST and OFF-mode PATCH. Now it is a 422, never a 500: "missing" where resolve()
+    raises (3.11/3.12, and the containment refuses it); a Python whose non-strict resolve() returns the looping path keeps
+    it inside the directory, and the resolver then reads the loop as "invalid" (os.open fails with ELOOP)."""
+    client, d, _ = env
+    loop = d / "loop"
+    try:
+        os.symlink(loop, loop)                                   # a link to itself: a loop resolve() cannot finish
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are not supported here")
+    raises = True
+    try:
+        loop.resolve()
+    except (OSError, RuntimeError):
+        pass
+    else:
+        raises = False
+    want = {"missing"} if raises else {"missing", "invalid"}
+    for ref in ("loop", "loop/x.yaml"):
+        r = _post(client, "loop-probe", manifest_ref=ref)
+        assert r.status_code == 422, (ref, r.status_code, r.text)
+        assert r.json()["detail"]["reason"] in want
+    assert _post(client, "loop-host", manifest_ref="good.yaml").status_code == 201
+    for ref in ("loop", "loop/x.yaml"):
+        r = client.patch("/agents/loop-host", json={"manifest_ref": ref})
+        assert r.status_code != 500, (ref, r.text)
+        if raises:      # OFF-mode PATCH runs only the containment; where resolve() returns, the ref is "inside" (200)
+            assert r.status_code == 422 and r.json()["detail"]["reason"] == "missing", (ref, r.text)
+    if raises:
+        assert client.get("/agents/loop-host").json()["manifest_ref"] == "good.yaml"

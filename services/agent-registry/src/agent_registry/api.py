@@ -158,7 +158,9 @@ def _ref_is_inside_manifest_dir(manifest_ref: str) -> bool:
         if target.is_absolute():
             return True
         (base / target).resolve().relative_to(base)
-    except (OSError, ValueError):      # an embedded NUL, an unresolvable path, or outside the base
+    except (OSError, ValueError, RuntimeError):
+        # an embedded NUL, an unresolvable path, or outside the base; RuntimeError: Path.resolve() on a symlink loop on
+        # Python 3.11/3.12 (later versions raise OSError), which was a 500 (roley.reviewer BLOCK on #1209)
         return False
     return True
 
