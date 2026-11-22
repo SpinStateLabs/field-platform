@@ -95,6 +95,7 @@ endpoint): `docker compose ... restart canary-agent`. The tool never runs docker
 from __future__ import annotations
 
 import argparse
+import email.message
 import hashlib
 import http.client
 import json
@@ -155,7 +156,9 @@ RETRY_MAX = 3            # retries after the first attempt
 RETRY_BUDGET_S = 30.0    # budget for the WAITS and the decision to retry; the last attempt may still run
 #                          for the Estate timeout (20 s), so one call is at most about 50 s wall time
 MIN_WAIT_S = 0.05        # floor under every wait: "Retry-After: 0" is never a burst
-RETRY_MARK = "_retries_503"  # set on an Estate.call that already retries 503 itself (see _with_503_retry)
+RETRY_MARK = "_phase_g_503_wrapped"  # set on the call this module wrapped, so wrapping twice is one layer. NOT Estate's own
+#                          process-wide `_retries_503` marker: that is true only after some call really retried, so it is no
+#                          signal at wrap time (see _Retry503Opener: the per-call signal is the stripped Retry-After)
 _sleep = time.sleep      # patched in tests: nothing sleeps
 _clock = time.monotonic
 
@@ -168,6 +171,17 @@ def _retry_after_s(exc: Any, attempt: int) -> float:
     except (TypeError, ValueError):
         v = -1.0
     return max(v, MIN_WAIT_S) if 0 <= v < float("inf") else float(2 ** attempt)
+
+
+def _spent(exc: urllib.error.HTTPError) -> urllib.error.HTTPError:
+    """The per-call signal to the layer above: this opener already retried THIS GET (its ladder is spent),
+    so the 503 it re-raises carries no Retry-After. Estate.call (probe-retry-after) retries a 503 only when
+    it carries Retry-After, so only one layer retries a given 503 (at most 4 requests, never 4 x 4 = 16)."""
+    hdrs = email.message.Message()
+    for key, value in (exc.headers.items() if exc.headers is not None else []):
+        if key.lower() != "retry-after":
+            hdrs[key] = value
+    return urllib.error.HTTPError(exc.url, exc.code, exc.msg, hdrs, exc.fp)
 
 
 class _Retry503Opener:
@@ -188,6 +202,8 @@ class _Retry503Opener:
             except urllib.error.HTTPError as exc:
                 left = RETRY_BUDGET_S - (_clock() - start)
                 if exc.code != 503 or req.get_method() != "GET" or attempt >= RETRY_MAX or left <= 0:
+                    if exc.code == 503 and req.get_method() == "GET":
+                        raise _spent(exc) from None
                     raise
                 _sleep(min(_retry_after_s(exc, attempt), left))
                 attempt += 1
@@ -196,9 +212,10 @@ class _Retry503Opener:
 def _with_503_retry(estate: "ep.Estate") -> "ep.Estate":
     """Make every Estate.call of this instance (and so ep._events / ep._ledger / _count) retry 503.
 
-    Nesting rule: if `estate.call` carries RETRY_MARK (this wrapper sets it on its own, so wrapping
-    twice is one layer; a layer that retries inside ep.Estate.call is expected to set it too), this
-    module adds nothing. The opener swap is undone in a finally, so nothing leaks to other callers."""
+    Nesting: this wrapper owns the retry of a GET 503. Its opener sits under Estate.call and, once its
+    ladder is spent, re-raises the 503 without Retry-After (see _spent), so Estate.call's own Retry-After
+    retry cannot fire on top of it. RETRY_MARK only makes wrapping twice one layer. The opener swap is
+    undone in a finally, so nothing leaks to other callers."""
     plain = estate.call
     if getattr(plain, RETRY_MARK, False):
         return estate
