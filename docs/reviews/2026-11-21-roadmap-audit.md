@@ -458,3 +458,342 @@ Every cited test name exists on main. † marks rows whose test bodies were read
 - A single-account repository cannot record a formal GitHub approval from its own author, so "no review on record" is structural here, not necessarily a sign that no review happened.
 
 — roley.reviewer
+
+## (4) Post-merge reviews of merges with no review on record (roley.reviewer, appended 2026-11-21)
+
+Each review was run on the merge commit, as GO-LIVE-LOOP reviewer fallback (b) requires. The follow-up cards were proposed to the controller through comms. Paths and line numbers are on the reviewed merge commit unless the text names another.
+
+### #1057 post-merge (roley.reviewer, 8eeb4bc)
+
+Status: COMPLETE (2026-11-21). Written incrementally; sections appear in the order they were done.
+
+**Merge sha:** 8eeb4bc72c87546a292361c229c93abb0f2e7d5c. PR merged as fast-forward: head sha == commit on main first-parent chain (`git log --first-parent origin/main` shows 8eeb4bc72 with parent 2ff17d28d; GitHub PR get: head.sha 8eeb4bc, merged_at 2026-11-10T15:11:18Z). HIGH.
+Base 5f33067ac. 4 commits: cb727e90a, 9ea3b1536, 2ff17d28d, 8eeb4bc72. Files: integration/fly/entrypoint.sh (+27), tools/tests/test_fly_identity_c5.py (+163), tools/tests/test_internal_secret_hash_fly_docs.py (+39), docs/ENVIRONMENT.md, docs/runbooks/v1.2-deploy-rollback.md (`git diff --stat 5f33067ac 8eeb4bc72`). HIGH.
+
+#### (3) Tests (venv /tmp/claude-0/venv1057, installed per .github/workflows/ci.yml "Install platform" step: pip 26.2.2, constraints, field-core[dev], 14 services --no-deps, field-agent, agent-incident-retro, fastapi uvicorn httpx pytest; Python 3.13.18)
+- Merge 8eeb4bc: `python -m pytest -q -p no:cacheprovider tools/tests/test_fly_identity_c5.py tools/tests/test_internal_secret_hash_fly_docs.py` -> `129 passed in 91.18s (0:01:31)` HIGH
+- origin/main d2cfab30c (worktree /tmp/claude-0/pm1057main, PYTHONPATH to its field-core src): same command -> `129 passed in 90.97s (0:01:30)` HIGH
+- Between 8eeb4bc and main only integration/fly/entrypoint.sh changed among the touched files (+11, commit 6bc2c80fa #1069: FIELD_HARDEN_SYSCTLS block inserted at line 32, BEFORE the hash check). `git diff --stat 8eeb4bc72 HEAD`. HIGH
+
+#### (1) Entrypoint hash check (integration/fly/entrypoint.sh:107-123 at 8eeb4bc; same block on main shifted +11 lines)
+Probe: block extracted verbatim (`sed` from `fly_hash="${...}"` to `fly_hash=""`, 17 lines) run under `bash -c "set -eu; <block>"` with LC_ALL=C and C.UTF-8, compared with `field_core.operator_health.internal_secret_problem()` on the same value (probe at /tmp/claude-0/pm1057probe/probe.py, made-up values only: "ab"*32 etc.).
+| Input | shell | field-core | value in stderr |
+|---|---|---|---|
+| "ab"*32 (good), blank | accept | accept | n/a |
+| upper case, mixed case | REFUSE | REFUSE | no |
+| 64 hex + "\n", + " ", + "\r" | REFUSE | REFUSE | no |
+| leading space, surrounding ws, tab inside, space only | REFUSE | REFUSE | no |
+| `sha256:` prefix, `0x` prefix | REFUSE | REFUSE | no |
+| Arabic-Indic digits x64, fullwidth digits x64, fullwidth `a` x64 | REFUSE | REFUSE | no |
+| sha256("") lower, sha256("") upper | REFUSE | REFUSE | no |
+| 63, 65, 128 hex; `*`x64; `-n` | REFUSE | REFUSE | no |
+| "0"*64 | accept | accept | n/a |
+Result: 24 values x 2 locales = 48 rows, 0 drift, 0 leaks, every refusal exactly 1 stderr line. HIGH (executed).
+Why it holds: the case pattern enumerates `0123456789abcdef` explicitly (no `[a-f]` range, so no locale collation effect; `[!...]` rejects any other code point incl. newline); `${#var}` length check after; empty-hash literal equals `hashlib.sha256(b"").hexdigest()` (printed by probe). Python side uses `_HEX64_RE.fullmatch` (operator_health.py:455, :524) and `[0-9a-f]` is ASCII-only (not `\d`). HIGH.
+- Refusal text (line 120) interpolates only `$fly_hash_problem`, which is one of two fixed strings; value never printed. HIGH (code + probe).
+- What runs before the check at 8eeb4bc: `set -eu`, `mkdir -p "$FIELD_DATA_DIR"`, `trap`, and `export` lines (lines 12-106). No service, no key file (C-5 block starts line 166). HIGH. On current main, #1069 inserted the opt-in FIELD_HARDEN_SYSCTLS block (main lines 32-41) BEFORE the check: with FIELD_HARDEN_SYSCTLS=1 and a bad hash, sysctl writes happen and >=1 extra stderr line ("harden: ... applied") precedes the refusal, so the documented "one error line" (ENVIRONMENT.md row, runbook (e)) is false under that flag, and no test covers the combination. Harmless side effects (hardening). LOW, attributable to #1069 not #1057. HIGH confidence (code read; not executed).
+- Placeholder acceptance: "0"*64 (and any 64-hex placeholder) passes both checks; /health then reports `internal_secret_sha256_present: true` (operator_health.py:298) and `phase_g_check --stage 2` would read present while no preimage exists, so routes are dead (fail closed, not open). LOW. HIGH confidence.
+
+**"A hash grants nothing" (entrypoint.sh:101) - only conditionally true.**
+1. The hash is unsalted, single-round SHA-256 of the secret (operator_health.py:563-564). Anyone who reads it (any process in the container via its environ, `fly ssh console`, a crash dump/env dump of any of 13 processes) can test candidate secrets offline. HIGH (code).
+2. No minimum length or entropy is enforced: `internal_secret_problem` accepts a 1-character secret; executed: hash of "x" -> None, value "x" -> None. HIGH (executed). The hash-only side cannot check entropy by construction.
+3. No generation command exists in repo: no code produces FIELD_INTERNAL_SECRET (grep of *.py outside tests: only operator_health reads it), and runbook "Internal secret (G22)" (v1.2-deploy-rollback.md:2355-2380) and step (e) give no `openssl rand`/length rule. HIGH.
+4. Cost, assuming ~2.2e10 SHA-256/s on one current GPU (training data, MEDIUM): 94^8 = 6.1e15 -> 2.8e5 s = 77 h; 94^10 = 5.4e19 -> 78 years; 128-bit random -> 4.9e20 years (calc shown in session). So a human-chosen or <= 8-char secret is recoverable from the hash in days; a 128-bit random one is not.
+5. Precondition for exploitation: reading the hash means code exec or shell in the container; on Fly the runbook (c) says the holder is "the rotator only, by file mount in the rotator container", but Fly is one container (entrypoint.sh:2-8), so the value file, if on that machine, is likely readable by the same attacker anyway. LOW confidence (no Fly rotator design in source; not in source).
+Finding F1 (MEDIUM): the claim "a hash grants nothing" is true only for a high-entropy secret, and nothing in code or runbook requires one. Condition: add a generation rule (e.g. 32 random bytes, hex) to runbook (e) and G22 section, and correct the entrypoint comment. Not a code defect in the shell check itself. Pre-existing design (compose already passes the hash to 8 services, docs/ENVIRONMENT.md row), widened by #1057 to all 13 Fly processes.
+
+#### (2) Consumer field_core.operator_health (packages/field-core/src/field_core/operator_health.py)
+- Same rule: `internal_secret_problem` (:516-539) rejects non-`^[0-9a-f]{64}$` (fullmatch) and sha256(""); the shell block reproduces exactly these two; secret-equality checks stay Python-only (needs other secrets), as the comment at entrypoint.sh:103-106 says. 48/48 agreement in probe above. HIGH.
+- Drift risk: two independent implementations (shell literal pattern + hard-coded empty-hash literal vs Python regex + computed hash). The equivalence test `test_the_entrypoint_rule_is_field_cores_rule` checks Python on the same 8 values the shell is tested on (7 bad + good + blank); it does not execute the shell and Python on a shared generated corpus. If Python later ADDS a rule, the shell keeps passing and the service then raises at `install_routes` (:798-800); with the supervisor's `wait -n` (tasks/todo.md:246) the machine still goes down, just later and with a Python traceback instead of the one-line refusal. Fail closed either way. LOW. HIGH confidence.
+- ENFORCE with hash blank: `internal_request_allowed` (:541-570) returns False when neither form is set and mode is ENFORCE -> both internal routes 404 (fail closed); OFF/LOG-ONLY allow with one WARNING; `/health` `internal_secret_sha256_present` false (:298), so `tools/phase_g_check.py:318-323` Stage 2 cannot read present. Belt-and-braces: even a malformed hash that slipped past start is re-checked by fullmatch at request time (:563). HIGH (code read).
+- Exposure scope: compose passes the hash to 8 operator-block services; on Fly it now reaches all 13 processes, while only 8 call `operator_health.install` (ops-console, sealed-ledger, lifecycle-manager, spend-governor, agent-registry, delegation-authority, federation-broker, kill-switch: grep). 5 processes hold it with no use. Unavoidable without per-process env (C-5 style). LOW. HIGH confidence.
+
+#### (5) In-repo callers affected
+- `integration/fly/Dockerfile:60-75` copies and runs entrypoint.sh as ENTRYPOINT: every Fly boot now runs the check. HIGH.
+- `.github/workflows/ci.yml:80` runs entrypoint.sh under bash with stub services (tools/tests). HIGH.
+- `tools/fly_identity_check.py`, `tools/topology_lint.py` read the script (imported by test_fly_identity_c5.py:48-50); tests green, so their parse still holds. MEDIUM (inferred from passing tests, not separately run).
+- `tools/phase_g_check.py:318-323` reads `internal_secret_sha256_present` from /health; behaviour unchanged, but a placeholder hash reads as present (see (1)). HIGH.
+- 8 services calling `operator_health.install` (grep list in (2)) now receive the Fly value. HIGH.
+- Doc drift caused by #1057: `services/lifecycle-manager/README.md:181` cites `fly/entrypoint.sh:271` for `lifecycle serve`; correct at base 5f33067 (line 271) but #1057's +27 lines moved it to 298 (309 on main after #1069). README:170 `entrypoint.sh:64` still correct at 8eeb4bc but stale on main (75) due to #1069. LOW. HIGH confidence (grep -n).
+
+#### (4) Mutants - interim note
+Pass 1 (38 mutants, runner /tmp/claude-0/pm1057probe/mutants.py, results pass1.json): 21 of the 36 "kills" were collection ERRORS (`1 error in 0.06s`), not behavioural kills: the test module's MUTANTS table calls `_mut(old, ...)` at import, which asserts `REAL.count(old) >= 1` (test_fly_identity_c5.py `_mut`), so any mutant that edits a string the table targets breaks collection. Those 21 are re-run in pass 2 with that one assert neutralised (harness only; `test_each_c5_mutant_is_caught` deselected in both passes).
+
+#### (4) Mutants - final (38 mutants, 9 claimed behaviours, >= 4 each; worktrees pm1057, pm1057m1-3 at 8eeb4bc; `git checkout -- .` after each; oracle = the 2 PR test files with `-x`, `test_each_c5_mutant_is_caught` deselected; pass 2 rows ran with the `_mut` anchor assert neutralised)
+
+| # | Behaviour | Mutant | Result | Killing test | Pass |
+|---|---|---|---|---|---|
+| 0 | B1 blank export to every process | export line removed | KILLED | test_the_stage_2_hash_is_exported_blank_to_every_process_by_default | 2 |
+| 1 | B1 blank export to every process | default :-0000 | KILLED | test_absent_secrets_are_byte_identical_to_origin_main | 2 |
+| 2 | B1 blank export to every process | export keyword dropped | KILLED | test_the_stage_2_hash_is_exported_blank_to_every_process_by_default | 2 |
+| 3 | B1 blank export to every process | unset after check | KILLED | test_the_stage_2_hash_is_exported_blank_to_every_process_by_default | 1 |
+| 4 | B2 set value passed through | value dropped to blank | KILLED | test_the_stage_2_hash_is_passed_through_to_every_process | 2 |
+| 5 | B2 set value passed through | last char cut after check | KILLED | test_the_stage_2_hash_is_passed_through_to_every_process | 1 |
+| 6 | B2 set value passed through | upper-cased after check | KILLED | test_the_stage_2_hash_is_passed_through_to_every_process | 1 |
+| 7 | B2 set value passed through | trailing space appended when set | KILLED | test_the_stage_2_hash_is_passed_through_to_every_process | 1 |
+| 8 | B3 refuse non lower-hex | ABCDEF admitted | KILLED | test_a_malformed_stage_2_hash_stops_the_machine_with_one_line_and_no_v | 2 |
+| 9 | B3 refuse non lower-hex | a-z admitted | KILLED | test_a_malformed_stage_2_hash_stops_the_machine_with_one_line_and_no_v | 2 |
+| 10 | B3 refuse non lower-hex | whitespace admitted | SURVIVED | - | 2 |
+| 11 | B3 refuse non lower-hex | only FIRST char checked | SURVIVED | - | 2 |
+| 12 | B3 refuse non lower-hex | only LAST char checked | SURVIVED | - | 2 |
+| 13 | B4 refuse length != 64 | -ne -> -gt (63 accepted) | KILLED | test_a_malformed_stage_2_hash_stops_the_machine_with_one_line_and_no_v | 2 |
+| 14 | B4 refuse length != 64 | -ne -> -lt (65 accepted) | KILLED | test_a_malformed_stage_2_hash_stops_the_machine_with_one_line_and_no_v | 2 |
+| 15 | B4 refuse length != 64 | length check removed | KILLED | test_a_malformed_stage_2_hash_stops_the_machine_with_one_line_and_no_v | 2 |
+| 16 | B4 refuse length != 64 | 65 also accepted | KILLED | test_a_malformed_stage_2_hash_stops_the_machine_with_one_line_and_no_v | 1 |
+| 17 | B5 refuse sha256('') | literal -> zeros | KILLED | test_a_malformed_stage_2_hash_stops_the_machine_with_one_line_and_no_v | 2 |
+| 18 | B5 refuse sha256('') | literal one char changed | KILLED | test_a_malformed_stage_2_hash_stops_the_machine_with_one_line_and_no_v | 2 |
+| 19 | B5 refuse sha256('') | elif -> elif false | KILLED | test_a_malformed_stage_2_hash_stops_the_machine_with_one_line_and_no_v | 2 |
+| 20 | B5 refuse sha256('') | compared to upper-case literal | KILLED | test_a_malformed_stage_2_hash_stops_the_machine_with_one_line_and_no_v | 2 |
+| 21 | B6 one line, never the value | full value printed | KILLED | test_a_malformed_stage_2_hash_stops_the_machine_with_one_line_and_no_v | 2 |
+| 22 | B6 one line, never the value | first 8 chars printed | SURVIVED | - | 2 |
+| 23 | B6 one line, never the value | second stderr line | KILLED | test_a_malformed_stage_2_hash_stops_the_machine_with_one_line_and_no_v | 1 |
+| 24 | B6 one line, never the value | exit 1 -> exit 0 | KILLED | test_a_malformed_stage_2_hash_stops_the_machine_with_one_line_and_no_v | 2 |
+| 25 | B7 refused before anything starts | refusal in subshell | EQUIVALENT | - | 2 |
+| 26 | B7 refused before anything starts | exit removed | KILLED | test_a_malformed_stage_2_hash_stops_the_machine_with_one_line_and_no_v | 2 |
+| 27 | B7 refused before anything starts | key dir made before refusal | KILLED | test_absent_secrets_are_byte_identical_to_origin_main | 1 |
+| 28 | B7 refused before anything starts | check reads wrong var | KILLED | test_a_malformed_stage_2_hash_stops_the_machine_with_one_line_and_no_v | 1 |
+| 29 | B8 shell rule == field-core rule | py regex admits A-F | KILLED | test_the_entrypoint_rule_is_field_cores_rule[ABABABABABABABABABABABABA | 1 |
+| 30 | B8 shell rule == field-core rule | py regex {63,64} | KILLED | test_the_entrypoint_rule_is_field_cores_rule[ababababababababababababa | 1 |
+| 31 | B8 shell rule == field-core rule | py empty-hash check removed | KILLED | test_the_entrypoint_rule_is_field_cores_rule[e3b0c44298fc1c149afbf4c89 | 1 |
+| 32 | B8 shell rule == field-core rule | py fullmatch -> match (trailing \n ok) | SURVIVED | - | 1 |
+| 33 | B8 shell rule == field-core rule | py strips before check | KILLED | test_the_entrypoint_rule_is_field_cores_rule[ababababababababababababa | 1 |
+| 34 | B9 docs say it | ENV row: whole-machine sentence removed | KILLED | test_the_environment_row_names_the_fly_way_and_the_malformed_value_con | 1 |
+| 35 | B9 docs say it | runbook: 'does not yet' re-added | KILLED | test_the_runbook_no_longer_says_the_fly_entrypoint_does_not_pass_it | 1 |
+| 36 | B9 docs say it | runbook: 'never prints the value' removed | KILLED | test_the_runbook_names_the_fly_way_and_the_malformed_value_consequence | 1 |
+| 37 | B9 docs say it | ENV row: 'blank by default' removed | SURVIVED | - | 1 |
+
+Totals per behaviour (counted from the table):
+
+| Behaviour | Killed | Survived | Equivalent | n |
+|---|---|---|---|---|
+| B1 blank export to every process | 4 | 0 | 0 | 4 |
+| B2 set value passed through | 4 | 0 | 0 | 4 |
+| B3 refuse non lower-hex | 2 | 3 | 0 | 5 |
+| B4 refuse length != 64 | 4 | 0 | 0 | 4 |
+| B5 refuse sha256('') | 4 | 0 | 0 | 4 |
+| B6 one line, never the value | 3 | 1 | 0 | 4 |
+| B7 refused before anything starts | 3 | 0 | 1 | 4 |
+| B8 shell rule == field-core rule | 4 | 1 | 0 | 5 |
+| B9 docs say it | 3 | 1 | 0 | 4 |
+| **All** | **31** | **6** | **1** | **38** |
+
+Survivor analysis (each verified by the run above; HIGH unless stated):
+- #10 / #11 / #12 (B3): the char-class check is only ever tested with bad values that are also the wrong length (63/65, "a space inside" and "a trailing space" are 65 chars) or bad at both first and last char ("AB"*32, "g"*64). A shell that checks only the first or last char, or admits whitespace, passes the whole suite. The merged code is correct (probe in (1)); field-core would still refuse such a value at service start (install_routes), so impact of a future regression = later, noisier failure, not an open route. LOW test gap. Missing corpus: a 64-char value with ONE interior bad char (e.g. "ab"*16 + "G" + "b" + "ab"*15), a 64-char value with an interior space.
+- #22 (B6): leak check is `value.strip()` or `value[:16]` in output (problems_hash_refused); printing 8 chars of the value passes. LOW.
+- #32 (B8): the equivalence test has no "64 hex + \n" case; switching Python `fullmatch` to `match` would accept it (`$` matches before a trailing newline; probe: `R.match(h+'\n')` True), and the shell/field-core agreement test would not notice. LOW.
+- #37 (B9): docs test does not pin "blank by default" in the ENV row. INFO.
+- #25 EQUIVALENT: under `set -eu` (entrypoint.sh:12) a refusal inside `( ... )` still aborts the script (verified: `bash -c 'set -eu; ( ...exit 1 ); echo STARTED'` -> rc=1, no STARTED).
+Totals (from table): 38 mutants; 31 killed, 6 survived, 1 equivalent. Kill rate on non-equivalent = 31/37 = 83.8%.
+
+#### Prior post-merge comment on GitHub (read only; not commented)
+A post-merge comment by "don.reviewer" was posted on PR #1057 at 2026-11-21T21:11:42Z (GitHub get_comments; get_reviews returns []), verdict PASS WITH CONDITIONS, 21/21 own mutants killed. So "no review on record" in docs/reviews/2026-11-21-roadmap-audit.md section 3 is now stale for comments, still true for formal GitHub reviews. HIGH. Differences:
+1. It says the PR's parametrised test "pins this on 24 values". Wrong for this repo: `test_the_entrypoint_rule_is_field_cores_rule` is parametrised on `[*BAD_HASHES.values(), GOOD_HASH, ""]` = 7 + 1 + 1 = 9 values (test_fly_identity_c5.py, BAD_HASHES has 7 keys). The 24 figure is from the PR 1056 body ("agree on 24 values"), not from code in this repo. HIGH.
+2. It reports 10 first-run collection errors with "I don't know why". Cause: the module-level MUTANTS table's `_mut()` asserts its anchor string exists in the live script (see (4) interim note). HIGH.
+3. Its mutant set had no partial-character-class mutants; mine shows 3 B3 survivors and the 8-char leak survivor. Its C1 (entropy) matches my F1; I rate it MEDIUM, not LOW, because the PR comment asserts the opposite ("a hash grants nothing") in the shipped script and nothing in code or runbook mitigates it.
+
+### Findings (severity, confidence)
+| ID | Severity | Finding | Source | Confidence |
+|---|---|---|---|---|
+| F1 | MEDIUM | "a hash grants nothing" (entrypoint.sh:101) holds only for a high-entropy secret; unsalted SHA-256, no min length (1-char secret accepted, executed), no generation rule in runbook; <= 8 random printable chars ~77 GPU-hours | (1) items 1-4 | HIGH (code/exec); GPU rate MEDIUM |
+| F2 | LOW | Test corpus misses interior-bad-char 64-length values; 3 char-class mutants survive | (4) #10-12 | HIGH |
+| F3 | LOW | Leak check only catches >= 16-char prefix | (4) #22 | HIGH |
+| F4 | LOW | Shell/Python equivalence test lacks `hex+"\n"`; fullmatch->match drift undetected | (4) #32 | HIGH |
+| F5 | LOW | Placeholder hash (e.g. "0"*64) passes and reads "present" in /health and phase_g_check while routes can never open | (1) | HIGH |
+| F6 | LOW | On main, #1069's FIELD_HARDEN_SYSCTLS block runs before the hash check; with it on, the "one error line" doc claim is false; untested combination (owned by #1069) | (1), (3) | HIGH (code read, not executed) |
+| F7 | LOW | lifecycle-manager README:181 line ref `fly/entrypoint.sh:271` made stale by #1057 | (5) | HIGH |
+| F8 | INFO | Hash reaches 13 Fly processes, 8 use it | (2) | HIGH |
+
+Not found (checked): no value leak in any refusal (48 probe rows + PR tests); no locale effect; unicode digits, `sha256:` prefix, whitespace, CR/LF, empty-hash in either case all refused by both rules; nothing but mkdir/trap/exports runs before the check at 8eeb4bc; ENFORCE + blank hash fails closed (404).
+
+### Verdict on 8eeb4bc: PASS WITH CONDITIONS
+ASSUMPTIONS: merge sha = PR head (fast-forward, verified); CI's install = the venv I built (same commands, Python 3.13 only, not 3.11/3.12/3.14); GPU rate ~2.2e10 SHA-256/s (training data, MEDIUM).
+REASONING: (1) The shipped check is correct on every adversarial input tried, in two locales, and agrees with field-core (48/48). (2) Every failure path is fail-closed: bad shell rule -> field-core refuses at start; blank under ENFORCE -> 404. (3) Tests pass on merge and main (129/129 each). (4) Weaknesses are in test strength (6 surviving mutants) and in an unqualified security claim (F1), not in runtime behaviour. No HIGH finding -> not BLOCK; one MEDIUM -> not plain PASS.
+CONCLUSION: PASS WITH CONDITIONS. Conditions (follow-up cards, none urgent before Stage 2 except C1):
+- C1 (F1, before the Stage 2 go point): runbook (e) and "Internal secret (G22)" state how to generate the secret (e.g. 32 random bytes, hex) and a minimum; fix the entrypoint comment to "a hash of a high-entropy secret grants nothing". Optionally a length floor in `internal_secret_problem` for the value form.
+- C2 (F2-F4): add to BAD_HASHES a 64-char value with one interior upper-case char, one with an interior space, and `"ab"*32 + "\n"`; run the shell and Python rules over the SAME corpus; tighten the leak check to any 8-char window of the value.
+- C3 (F5-F7): reject or warn on an all-zero hash; resolve the FIELD_HARDEN_SYSCTLS/one-line wording on main; fix README line refs (or drop line numbers).
+Overall confidence in verdict: HIGH for correctness of the merged check; MEDIUM for the brute-force cost estimate.
+Artifacts: /tmp/claude-0/pm1057probe/{probe.py,mutants.py,mutants2.py,pass1.json,mutants2.json,table.md}.
+
+### #1073 post-merge (roley.reviewer, e143038)
+
+_Merge sha e143038e0bd35d1842d76d3babd8fdfaaed5fcb3 (squash, parent 750824b8). Source: `git log origin/main --grep='#1073'`. Files: README.md, engine.py, test_f2_fail_closed.py, test_verdict_no_token_echo.py (+105/-4)._
+
+**Tests (merge e143038, venv /tmp/claude-0/venv1073, Python 3.13.18, CI install steps from .github/workflows/ci.yml L30-50):**
+- PR tests `test_verdict_no_token_echo.py test_f2_fail_closed.py`: `19 passed, 1 warning in 2.56s`
+- Full suite `cd services/conformance-sentinel && python -m pytest -q tests`: `412 passed, 1 warning in 46.13s`
+
+**Dynamic leak probe (in-process stack from tests/conftest.py, fake/minted ids; probe file tests/test_zz_probe_pm1073.py in worktree only, deleted at end).** Searched response body, headers, captured logs (DEBUG, all loggers) and sentinel-written ledger rows (`conformance.*`, `sentinel.*` in events.jsonl) for: full id, first 8, last 8, sha256 hex, sha256[:12].
+
+| Path | Status | Full/prefix/suffix/sha64 found | token_ref (sha256[:12]) |
+|---|---|---|---|
+| ALLOW | 200 | none | body (by design) |
+| BLOCK D.scope | 200 | none | body |
+| ESCALATE E.escalation_trigger | 200 | none | body |
+| D.revoked | 200 | none from /check (a log hit came from the probe's own `POST /tokens/{id}/revoke` URL, delegation-authority side) | body |
+| D.expired | 200 | none | body |
+| unknown fake id (D.revoked fail-closed) | 200 | none | body |
+| LOG_ONLY shadow | 200 | none | body |
+| L.unreachable step 1 | 200 | none | body |
+| F2 failed allow append | 200 | none | body |
+| delegation unreachable | 200 | none | body |
+| 11 x 422 variants (missing field, wrong types, dict key, extra field named by id, invalid JSON, list body) | 422 | none (field_core.http_errors redaction, api.py L66) | none |
+| 5xx (registry raises msg containing id) | 500 | none (`Internal Server Error`) | none |
+| lone-surrogate token_id (ENFORCE and LOG_ONLY) | 500 | none | none |
+| caller puts id in `context.source` | 200 | **ledger** (caller_context allow-list) | body |
+
+Pre-PR control (parent 750824b8 engine.py): ALLOW and L.unreachable bodies contained full/prefix/suffix -> fix confirmed effective (HIGH, probe output).
+
+**Relays (static read, merge sha):**
+- force-gateway `_authorize` (services/force-gateway/src/force_gateway/api.py L552-588) copies only decision, clause_id, reasons, agent_id, action, retry_after_seconds into its 403 body; `gateway.shadowed` ledgers only `would_be`. `SentinelClient.check` (L359-376) error text carries status code / exception type, not the request body. Never relayed `context.token_id` even pre-PR. HIGH.
+- claude-approver `_check` (services/claude-approver/src/claude_approver/core.py L448-505) relays decision, clause, joined reasons, shadowed. No context relay. HIGH.
+- ops-console `/api/check` (services/ops-console/src/ops_console/api.py L866-870) proxies the sentinel verdict VERBATIM: it was the one in-repo relay that carried the full id pre-PR; it now carries token_ref. Its 422 is redacted (install_validation_handler, L435). HIGH.
+- Scorecard (measure.py L110-122) reads only `decision`, `context.would_be`, `context.shadowed`; cli.py L181-187 posts token_id but never prints the verdict context. No leak. HIGH.
+- No in-repo code reads `verdict.context.token_id` (`git grep` over src, plugins, integration: only hit is the new test's docstring). Affected in-repo callers: ops-console `/api/check` (output shape change: `token_id` -> `token_ref`,`token_presented`), sentinel CLI `check` (prints verdict), field-agent `field_client.py` L197 / `governed.py` L103 (send token_id, read decision only), force-gateway, claude-approver, integration/demo/fixtures/upgrade-smoke/upgrade_flow.py L175-182, plugins/field-agent/templates/rest_api.sh L23. None break. MEDIUM-HIGH (static grep; external consumers unknown).
+
+**Mutation testing (engine.py only, worktree /tmp/claude-0/pm1073, `git checkout -- .` after each; runner asserts a clean tree at the end). Suite for kill/survive = PR tests (`test_verdict_no_token_echo.py`, `test_f2_fail_closed.py`); every survivor was re-run against the full `tests/` dir (438 = 412 + 26 probe tests) and still survived.**
+
+| # | Behaviour claimed | Mutant | Result |
+|---|---|---|---|
+| M01 | B1 verdict has no id | re-add `token_id` to main context | KILLED |
+| M02 | B1 | add `id[-8:]` to main context | **SURVIVED** |
+| M03 | B1 | add `id[:8]` to main context | **SURVIVED** |
+| M04 | B1 | ALLOW reason names the id | KILLED |
+| M05 | B1 (ledger rows) | add `token_id` to sentinel ledger payload | **SURVIVED** |
+| M06 | B1 | add `len(id)` to main context | **SURVIVED** |
+| M07 | B2 log-only shadow | re-add `token_id` to shadow ctx | KILLED |
+| M08 | B2 | shadow reason names the id | KILLED |
+| M09 | B2 | shadow `token_ref` = raw id | KILLED |
+| M10 | B2 | shadow `token_ref` = `id[:12]` | KILLED |
+| M11 | B3 F2 BLOCK | re-add `token_id` to F2 ctx | KILLED |
+| M12 | B3 | F2 reason names the id | KILLED |
+| M13 | B3 | F2 ctx drops `_token_context` | KILLED |
+| M14 | B3 | F2 `token_ref` = `id[-12:]` | KILLED |
+| M15 | B4 ref = sha256[:12] | `[:12]` -> `[:16]` | KILLED |
+| M16 | B4 | sha256 -> md5 | KILLED |
+| M17 | B4 | first 12 -> last 12 hex | KILLED |
+| M18 | B4 | salted hash | KILLED |
+| M19 | B5 presented / no token | `token_presented` always True | KILLED |
+| M20 | B5 | no-token ref `''` not None | KILLED |
+| M21 | B5 | `presented = token_id is not None` (`""` counts as presented) | **SURVIVED** |
+| M22 | B5 | no-token ref = sha256('')[:12] | KILLED |
+| M23 | B6 forged/inactive id | inactive reason names the id | KILLED |
+| M24 | B6 | inactive path `extra_context={"token_id": id}` | KILLED |
+| M25 | B6 | delegation-unreachable reason names the id | **SURVIVED** |
+| M26 | B6 | inactive reason names `id[:8]` | **SURVIVED** |
+
+Totals (counted from the table): 26 mutants, 19 KILLED, 7 SURVIVED (M02, M03, M05, M06, M21, M25, M26). Per behaviour: B1 2/6 killed, B2 4/4, B3 4/4, B4 4/4, B5 3/4, B6 2/4.
+Cause: `_assert_clean` checks only `token not in r.text` (full-string match) and `"token_id" not in ctx`; no test checks prefixes/suffixes/length, the ledger rows, or the delegation-unreachable path (test_verdict_no_token_echo.py L27-31, L79-86). The code at the merge sha does not leak in any of these (probe above); the gap is regression protection only.
+
+**Other suites on the merge sha (callers/relays):** force-gateway `573 passed`, claude-approver `387 passed`, ops-console `471 passed`, field-agent `453 passed` (each `python -m pytest -q tests`, 1 warning each). HIGH.
+
+#### Objections (FORCE [O])
+1. Tests pin full-string absence only; a partial echo (prefix, suffix, length) or a ledger-row echo would merge green (M02/M03/M05/M06/M26 survive).
+2. Two paths still copy upstream text into `reasons` without filtering: `token inactive: {intro.get('reason')}` (engine.py L563) and `delegation-authority unreachable: {exc}` (L554). Today neither contains the id (probe rows D.revoked/unknown/delegation-unreachable). If delegation-authority ever puts the id in `reason`, the sentinel would echo it again.
+3. `token_ref` is unsalted and deterministic. Anyone who holds the token list (delegation `/tokens`, ops-console) can map a ref back to its token. By design (README L192-193), and not a credential: uuid4 has 122 random bits (field_core/delegation.py L26), so the 48-bit ref cannot be reversed by brute force.
+4. A lone-surrogate `token_id` returns 500. Pre-PR it also returned 500 (crash during response encoding, parent 750824b8). Post-PR it crashes earlier, in `_token_context`, at engine.py L63. The probe showed no leak. ENFORCE fails closed; in LOG_ONLY the caller gets a 5xx and no shadow ALLOW. force-gateway refuses with 503 (`SentinelUnavailable`, api.py L367-368). claude-approver denies (core.py L478-481).
+
+#### Findings
+| ID | Sev | Finding | Source | Conf |
+|---|---|---|---|---|
+| F1 | MEDIUM (test gap, no live leak) | 7/26 mutants survive the full suite. Partial, length and ledger echoes are unpinned | mutant table above; test_verdict_no_token_echo.py L27-31 | HIGH |
+| F2 | LOW | Upstream `reason` and exception text go into `reasons` unbounded and unfiltered (L554, L563). Defence in depth: strip `req.token_id` from relayed text, or relay `token_status` only | engine.py L549-564 | HIGH (code), LOW (exploitability today) |
+| F3 | LOW (pre-existing) | Lone-surrogate `token_id` returns 500 before and after the PR. The PR adds a new crash site at L63. Fix with `encode("utf-8","surrogatepass")` or a validator | probe rows; traceback engine.py L552->L267->L63 | HIGH |
+| F4 | INFO | Caller-supplied `context.source` etc. reaches the ledger (caller_context allow-list), so a caller can put an id there itself. Caller misuse, not an echo | ledger_context.py L25-64; probe row | HIGH |
+| N1 | MEDIUM (NEW, out of #1073 scope) | incident-replay `/replay` JSON returns the full `token_id` of every AuthorityGrant. Its markdown prints `id[:8]…`. A post-mortem is a quoted report, the same class as #1072 | incident_replay/engine.py L197-205, L464-465, L593, L641; api.py L44 | HIGH (code read; not run) |
+| N2 | INFO (by design, out of scope) | delegation-authority `/introspect` echoes `token_id` (IntrospectionResult.token_id). The caller is the authority's own client, and the sentinel drops the field. `/tokens/{id}/revoke` puts the id in the URL path, so it reaches access logs | delegation_authority/api.py L446-467; field_core/delegation.py L80 | HIGH |
+| N3 | INFO (out of scope) | ops-console lists full ids from delegation `/tokens` (operator surface). Its revoke route has the id in the path. `/api/check` now relays only token_ref | ops_console/api.py L549, L617, L855-870 | HIGH |
+| N4 | INFO (out of scope) | lifecycle-manager ledgers `token_id` in its expiry finding payload | lifecycle_manager/engine.py L637 | MEDIUM (not run) |
+
+#### Verdict: **PASS WITH CONDITIONS** on e143038
+ASSUMPTIONS: in-process TestClient stack is representative of the deployed wiring (same create_app, field_core handlers); external (out-of-repo) consumers of `context.token_id` are unknown.
+REASONING: (1) The id, its prefix, suffix and sha64 are absent from the body, headers, logs and sentinel ledger rows on all 10 decision paths, 11 x 422 and both 5xx paths. The pre-PR control leaked. (2) No relay copies `context`, except ops-console, which now carries only token_ref. (3) All caller suites pass. (4) The regression guard is weak (F1).
+CONCLUSION: the fix works and nothing needs reverting. Conditions, as follow-up and not blocking: (a) extend `_assert_clean` to check `id[:8]`, `id[-8:]`, the sentinel ledger rows and the delegation-unreachable path, then re-run M02/M03/M05/M25/M26; (b) F2 sanitise; (c) open a separate issue for N1. Confidence: HIGH for the no-leak result at the merge sha, MEDIUM for completeness beyond the paths enumerated.
+
+Worktree /tmp/claude-0/pm1073 removed after the review; probe file never committed. No GitHub comments, pushes or deployed-service requests.
+
+### #1078 post-merge (roley.reviewer, cb7a94f)
+
+Status: COMPLETE (see end)
+
+#### Corrections to the brief
+- C1. #1077 is not "prior cache work on main": `gh api repos/SpinStateLabs/field-platform/pulls/1077` -> "sealed-ledger: parse each segment's bytes once per change, not once per read (T6-B) | closed | merged=false". Prior merged work is #1075 (95cd9647, T6 harness, no fix) and #1076 (787de47d, T7 parse+verify cache). HIGH.
+- C2. Merge sha confirmed: `git log origin/main --grep='#1078'` -> cb7a94f8dcc64489cde69ba87b9b7267001eaaa7; REST merged_at=2026-11-21T02:44:47Z; `/pulls/1078/reviews` length 0. HIGH.
+- C3. docs/reviews/2026-11-21-roadmap-audit.md does not exist at cb7a94f (added later on main); on origin/main its section (3) line 453 lists #1078 review "none". HIGH.
+
+#### Suite on cb7a94f (CI command)
+- `pytest -q packages/field-core/tests services/sealed-ledger/tests` (venv /tmp/claude-0/venv1078, Python 3.13.18, ci.yml:34-50 install incl. constraints) -> last line `3334 passed, 6 skipped, 2 warnings in 130.56s (0:02:10)`; exit 0; wall 133 s. Log: /tmp/claude-0/reports/pm1078-suite.log. HIGH.
+
+#### Attack cases (executable: /tmp/claude-0/pm1078-attacks/test_attack_1078.py, 20 cases; 18 pass = safe, 2 fail = finding)
+Run: `python -m pytest -q test_attack_1078.py` -> `2 failed, 18 passed`. Each case asserts store.verify() == uncached Snapshot.verify() == fresh LedgerStore(p).verify(), and ok=False when damaged.
+| # | Vector | Result | Conf |
+|---|---|---|---|
+| A1a | warm cache -> archive (test helper) -> flip byte in archive copy | ok=False, == uncached == fresh. SAFE | HIGH |
+| A1b | warm -> real `archive_closed_segments` (retention apply) -> flip byte in retention event | ok=False. SAFE | HIGH |
+| A1c | retention-evidenced segment, archive copy deleted | ok=True cached AND uncached: design (store.py:1287-1292 skips the copy when a live retention event names n+sha256), not a cache defect. INFO | HIGH |
+| A2 | warm -> rotate -> warm -> same-size flip in newly closed segment | ok=False. SAFE | HIGH |
+| A3 x5 | closed segment: same size+same mtime (os.utime restored), same size new mtime, last line truncated, line duplicated, file deleted | all ok=False, == uncached. SAFE (key is full bytes, store.py:1776-1777, never stat) | HIGH |
+| A4a | 4 verify threads vs archive then unlink of copy; any call STARTED after damage that says ok=True | 0 such calls. SAFE | MEDIUM (timing-based) |
+| A4b | 4 verify threads vs same-size tamper of unarchived closed seg | 0. SAFE | MEDIUM |
+| A5a | same bytes, new inode | cache hit, == uncached. Correct | HIGH |
+| A5b | journal `archived_to` re-pointed to attacker dir with forged empty copy | ok=False (journal bytes are in Layout key via JournalState.raw, store.py:757-758; archived bypass). SAFE | HIGH |
+| A5c | in-process caller mutates a LedgerEvent returned by `store.events()`, then an append | **FAIL**: cached verify ok=False "segment 3: hash mismatch at index 10 ... (record was mutated)" while fresh store ok=True. T7 parse cache shares LedgerEvent objects (store.py:1727-1737 `list(events)` copies the list, not the models; LedgerEvent is not frozen, field_core/ledger.py:61-62). Fail-closed (false break, never false ok shown). Not reachable over HTTP (responses are serialized); no in-repo mutator found (grep of sealed_ledger/src). LOW | HIGH (repro) |
+| A6 | restart after same-size tamper | ok=False. SAFE (cache is in-memory only, store.py:1535-1538) | HIGH |
+| A7 | second writer PROCESS appends 3, then same-size tamper of its line | ok=False, == uncached. SAFE | HIGH |
+| A8 | GET /events unfiltered + filtered, then /verify; tamper; filtered /events re-warms parse cache with tampered bytes; then unparseable tamper | /verify ok=False, reason == uncached. SAFE | HIGH |
+| A9 | /health after same-size in-place edit of open segment's last hash | **FAIL**: /health keeps serving the old head_hash (and `ok: true`) while /verify ok=False. Cause: health_info keys on (size, inode) of open file + journal size (store.py:1594-1604, 1982-1992). Pre-existing (not #1078, not the verify cache); `ok` is hard-coded liveness (api.py:371). estate_probe compares /health head against /events (tools/estate_probe.py:444-450) so it would flag the mismatch. LOW | HIGH (repro) |
+| C1 | open-segment tail truncated by one line | ok=True cached AND uncached, length 10. Inherent to a hash chain with no anchor check in /verify; not #1078 | HIGH |
+| C2 | last open event rewritten with recomputed hash | ok=True cached AND uncached. Inherent (Snapshot.verify, store.py:1136-1236, checks no signature/anchor); not #1078 | HIGH |
+
+Core question answer: no case found where the CACHE makes /verify say ok=True for a chain an uncached verification calls broken. /verify does say ok=True for a truncated or re-hashed open-segment tail, and for a deleted retention-evidenced archive copy, with or without the cache.
+
+#### Mutants (worktree only, `git checkout -- .` after each; runner /tmp/claude-0/pm1078-attacks/mutate.py, raw /tmp/claude-0/reports/pm1078-mutants.json)
+ATK = attack file with the 2 baseline-failing cases (A5c, A9) deselected (baseline `18 passed, 2 deselected`). Full = whole sealed-ledger suite, run only where T7+T8 left the mutant alive.
+| Behaviour | Mutant | T8 file | T7 file | Full suite | ATK |
+|---|---|---|---|---|---|
+| B1 archived bypass | M1.1 guard deleted | KILL (2 failed, 5 passed) | live (11 passed) | n/a (killed by T7/T8) | KILL (2 failed, 16 passed) |
+| B1 archived bypass | M1.2 guard `and False` | KILL (2 failed, 5 passed) | live (11 passed) | n/a (killed by T7/T8) | KILL (2 failed, 16 passed) |
+| B1 archived bypass | M1.3 bypass only when >1 archived | KILL (2 failed, 5 passed) | live (11 passed) | n/a (killed by T7/T8) | KILL (2 failed, 16 passed) |
+| B1 archived bypass | M1.4 inverted (`not archived`) | KILL (3 failed, 4 passed) | KILL (1 failed, 10 passed) | n/a (killed by T7/T8) | KILL (2 failed, 16 passed) |
+| B1 archived bypass | M1.5 keyed on pending instead | KILL (2 failed, 5 passed) | live (11 passed) | n/a (killed by T7/T8) | KILL (2 failed, 16 passed) |
+| B2 bytes in key | M2.1 bytes compare dropped | live (7 passed) | KILL (2 failed, 9 passed) | n/a (killed by T7/T8) | KILL (10 failed, 8 passed) |
+| B2 bytes in key | M2.2 sizes only (stat-like) | live (7 passed) | KILL (1 failed, 10 passed) | n/a (killed by T7/T8) | KILL (5 failed, 13 passed) |
+| B2 bytes in key | M2.3 all->any | live (7 passed) | live (11 passed) | KILL (5 failed: concurrency/stress tests, e.g. test_ledger_readers.py::test_readers_during_rotate_and_archive_never_see_a_short_ok_chain) | KILL (10 failed, 8 passed) |
+| B2 bytes in key | M2.4 open segment only | live (7 passed) | live (11 passed) | **SURVIVES** (`1078 passed, 5 skipped` in 115.69s) | KILL (7 failed, 11 passed) |
+| B2 reuse kept | M2.5 never stores (no reuse) | KILL (1 failed, 6 passed) | KILL (1 failed, 10 passed) | n/a (killed by T7/T8) | live (18 passed) |
+| B3 layout in key | M3.1 layout compare dropped | KILL (1 failed, 6 passed) | live (11 passed) | n/a (killed by T7/T8) | live (18 passed) |
+| B3 layout in key | M3.2 watch only | KILL (1 failed, 6 passed) | live (11 passed) | n/a (killed by T7/T8) | live (18 passed) |
+| B3 layout in key | M3.3 seg count only | KILL (1 failed, 6 passed) | live (11 passed) | n/a (killed by T7/T8) | live (18 passed) |
+| B3 layout in key | M3.4 seg paths only | KILL (1 failed, 6 passed) | live (11 passed) | n/a (killed by T7/T8) | live (18 passed) |
+| B4 newline guard | M4.1 guard removed | KILL (1 failed, 6 passed) | live (11 passed) | n/a (killed by T7/T8) | live (18 passed) |
+| B4 newline guard | M4.2 guard `or True` | KILL (1 failed, 6 passed) | live (11 passed) | n/a (killed by T7/T8) | live (18 passed) |
+| B4 newline guard | M4.3 endswith '}' instead | KILL (1 failed, 6 passed) | live (11 passed) | n/a (killed by T7/T8) | live (18 passed) |
+| B4 newline guard | M4.4 strip before check | KILL (1 failed, 6 passed) | live (11 passed) | n/a (killed by T7/T8) | live (18 passed) |
+
+Totals (counted from the table): 18 mutants across 4 behaviours (B1 5, B2 5, B3 4, B4 4). Killed by in-repo tests: 17/18. Killed by ATK: 9/18. Killed by either: 18/18. Survivor of the in-repo suite: M2.4.
+
+#### Findings (severity, confidence)
+1. MEDIUM (test gap, HIGH conf). No in-repo test pins CLOSED-segment bytes in the /verify cache key. Mutant M2.4 (`zip(cached[1][-1:], snap.raw[-1:])` at store.py:1777: only the open segment's bytes compared) passes all 1078 sealed-ledger tests; under it a same-size edit of a closed segment of an unarchived rotated ledger is answered ok=True from the cache. The merged code is correct (A3 x5 pass); the regression guard is missing. T7's same-size test is open-segment only (tests/test_ledger_head_cache_t7.py:128-150) and its rotation test never tampers a closed segment (:206-217). Fix: add A3 (warm, same-size flip in seg 2 with mtime restored, assert == uncached and ok=False).
+2. LOW (HIGH conf, repro A5c). T7 parse cache shares mutable LedgerEvent instances across callers (store.py:1728, 1737 copy the list only; field_core/ledger.py:61-62 model not frozen). An in-process caller mutating an event from `store.events()` makes the next recomputed verify report a false break (fresh store ok=True). Fail-closed; HTTP callers unaffected (serialized responses); no in-repo mutator found. `test_each_reader_gets_its_own_list` (t7:188-192) tests list isolation only. Fix: freeze LedgerEvent in the cache (model_copy on hand-out, or frozen model) or document.
+3. LOW, pre-existing, not #1078 (HIGH conf, repro A9). /health `head_hash`/`event_count` are keyed on (size, inode) of the open file + journal size (store.py:1594-1604, 1982-1992); a same-size in-place edit leaves /health serving the old head while /verify says ok=False. `ok` on /health is constant liveness (api.py:371), never integrity. /health does not touch the verify cache at all, so the brief's "/health still reporting from the cache" is only true of this stat-keyed health cache.
+4. INFO (HIGH conf, C1/C2/A1c). /verify answers ok=True, cached or not, for: a truncated open-segment tail; a re-hashed rewrite of the open tail; a deleted archive copy whose segment+sha256 a live retention event names (store.py:1287-1292, by design). None is a cache defect; they bound what "ok" means for every caller below.
+5. LOW perf (MEDIUM conf, inferred from store.py:1772-1773). Once any segment is archived (the steady state after the first retention apply) the verify-result cache is never used, so every /verify re-hashes all live events (the parse cache still applies). This reverses part of the T6/T7 latency win on archived ledgers; not measured here.
+
+#### Claims in the #1078 commit message, checked
+- "archive-copy byte flip and unlink ... fail before this change": M1.1 (guard deleted = pre-change) -> T8 `2 failed, 5 passed`. CONFIRMED, HIGH.
+- "journal head_hash edit ... kills a key-on-segment-bytes-only mutant": M3.1 killed by T8 only. CONFIRMED, HIGH.
+- "newline guard ... kills the guard-removed mutant": M4.1 killed by T8 only. CONFIRMED, HIGH.
+- "The only reads outside the key are in _verify_archived ... so the bypass is complete": Snapshot.verify (store.py:1136-1236) reads files only via `_verify_archived` (read_shared at :1293), which returns None when nothing is archived (:1282-1283). CONFIRMED by reading, MEDIUM-HIGH.
+- Diff touches only store.py `_verified` docstring + 2-line guard, README, and the new test file (`git show --stat cb7a94f8`: 3 files, +147/-2). No API shape change. HIGH.
+
+#### In-repo /verify callers affected (all over HTTP; none use LedgerStore in-process)
+- attestation-reporter: src/attestation_reporter/engine.py:445-461 (GET /verify + /health; INTACT/BROKEN from `ok`).
+- incident-replay: src/incident_replay/engine.py:125 (/verify), :130 (/health), :404 (`integrity_ok = bool(verification.get("ok"))`).
+- tools/estate_probe.py:435-450 (/health then /events then /verify; cross-checks /health head against /events, so finding 3 would surface as an inconsistency).
+- ops-console: src/ops_console/api.py:551 (`ledger_verify=_section(app.state.ledger, "/verify", "verify")`).
+Effect of #1078 on them: on archived ledgers, a fresh verification every call (correct, possibly slower); unchanged otherwise. HIGH.
+
+#### Verdict on cb7a94f: PASS WITH CONDITIONS
+No executable case made the cache produce ok=True where an uncached verification says broken (20 attack cases; 18 safe, 2 failures are findings 2 and 3, neither a false ok). Conditions: (1) add the closed-segment same-size test (kills M2.4) before more T-series cache work lands; (2) decide on finding 2 (freeze or copy events handed out of the parse cache). Follow-up, not blocking: document /health's non-integrity semantics (finding 3) and measure finding 5.
+
+Status: COMPLETE. Worktree /tmp/claude-0/pm1078 removed after the review; attack file and mutant runner kept at /tmp/claude-0/pm1078-attacks/.

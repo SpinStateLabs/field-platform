@@ -147,3 +147,7 @@ README with Enforced-vs-Declared table and LIMITS section.
 "Force Field Protocol" is the umbrella. "The F.O.R.C.E. Framework" and
 "The F.I.E.L.D. Framework" name the acronym structures. It is never
 "Force Field Framework."
+
+## License
+
+Business Source License 1.1. See [LICENSE](LICENSE). Non-production use is permitted; production use requires a commercial license from Spin State Labs (don@spinstatelabs.ca). Each version converts to Apache License 2.0 on the Change Date (2030-11-03).

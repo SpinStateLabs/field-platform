@@ -203,8 +203,13 @@ at a time, and whether the whole module then failed.
   command's relayed output is masked for it, as for the secret. A key file
   named on the command line that is unreadable, empty, not UTF-8 or not one
   key token is refused (exit 2) before anything is sent; one named by
-  `FIELD_OPERATOR_KEY_FILE` that is unusable prints a warning and the run
-  carries no identity (it never falls back to `FIELD_OPERATOR_KEY`).
+  `FIELD_OPERATOR_KEY_FILE` that is unusable prints
+  `warning: FIELD_OPERATOR_KEY_FILE is <problem>; no operator identity is sent`
+  and the run carries no identity, UNLESS an operator flag is also given
+  (`--operator-id` or `--operator-key-file`): then it is refused (exit 2,
+  `--operator-key-file is <problem>; nothing sent`, the flag name appears even
+  though the file came from the variable). It never falls back to
+  `FIELD_OPERATOR_KEY`.
 - The pair is sent ONLY on `POST /delegation/tokens` (the mint) and
   `POST /delegation/tokens/{id}/revoke`: never on a token read, a token list or
   a ledger append (RT1-10). With a key present, a cleartext base that is not
@@ -225,7 +230,11 @@ at a time, and whether the whole module then failed.
   forward and records nothing. Under an armed DOA roster the id must be an
   active row covering the agent's scope (the job rows of
   `manifests/doa-roster.example.yaml`; they were folded in from the former
-  companion `doa-roster.jobs.example.yaml`, R2-04). A roster regenerated with
+  companion `doa-roster.jobs.example.yaml`, R2-04). The ACTIVE job rows there are
+  `job-provision-gb10` and `job-renewal-rog`; `job-renewal-gb10` is only a
+  commented-out template whose `allowed_scope` the operator fills in from the
+  agent's manifest, so until then an armed roster refuses the GB10 cron mint
+  with 403 D.grantor. A roster regenerated with
   `tools/generate_doa_roster.py` has no job rows unless it is run with
   `--job-rows manifests/doa-roster.example.yaml` (or `--job-rows` naming the
   estate's current roster): without them the next job mint is 403 D.grantor
@@ -389,7 +398,7 @@ Exit status: `0` renewed, not due, or `--check`; `1` failed; `2` refused
 A not-due day, which is most days (GETs only, no writes). The ids and dates below are illustrative:
 
 ```
-renew_token 1.5 2026-09-13T18:35:01Z agent=volatility-trader base=http://127.0.0.1:18080 store=env-file /home/spinner/vt/secrets.env key VT_FIELD_TOKEN_ID
+renew_token 1.5 phase-g 2026-09-13T18:35:01Z agent=volatility-trader base=http://127.0.0.1:18080 store=env-file /home/spinner/vt/secrets.env key VT_FIELD_TOKEN_ID
 store: VT_FIELD_TOKEN_ID holds token 1a2b3c4d
 lock: acquired /home/spinner/vt/.secrets.env.renew-lock and /home/spinner/vt/.lock
 journal: none
