@@ -295,8 +295,10 @@ def sweep(
             ),
         )
     except UnreadableRoster as exc:   # a CSV the csv module cannot read: named, not a traceback
+        # exit 2, "no verdict", like a roster with no owners: main's README table and its pin
+        # (test_readme_exit_codes: sweep is {0, 2, 3}) keep exit 1 for an uncaught error only
         typer.echo(f"error: {exc}", err=True)
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=2)
     except LifecycleError as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=2)

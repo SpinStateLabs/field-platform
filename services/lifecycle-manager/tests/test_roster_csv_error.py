@@ -57,7 +57,7 @@ def test_the_cli_sweep_prints_an_error_line_not_a_traceback(tmp_path, monkeypatc
     roster.write_bytes(text.encode("utf-8"))
     ledger = _patch_cli_clients(monkeypatch, [agent("a", "Verifier")])
     result = CliRunner().invoke(app, ["sweep", "--roster", str(roster)])
-    assert result.exit_code == 1
+    assert result.exit_code == 2       # main's sweep exit table: 2 = no verdict (rebuild of PR 738)
     assert isinstance(result.exception, SystemExit)          # a clean exit, not a propagated exception
     assert "error: owners.csv line" in result.output and "unreadable CSV" in result.output
     assert SECRET not in result.output

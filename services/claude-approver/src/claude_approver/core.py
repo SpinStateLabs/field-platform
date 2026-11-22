@@ -277,13 +277,22 @@ class UsageCursor:
     def load(self) -> None:
         if self._loaded:
             return
-        self._loaded = True
+        try:
+            self._read()
+        except Exception:
+            self.data, self.error = {}, "usage cursor is corrupt"   # anything unforeseen disables posting too
+        self._loaded = True   # only after the outcome (data or error) is recorded: a failed first load is never an empty, error-free cursor
+
+    def _read(self) -> None:
         try:
             text = self.path.read_text(encoding="utf-8")
         except FileNotFoundError:
             return
         except OSError:
             self.error = "usage cursor unreadable"
+            return
+        except UnicodeDecodeError:
+            self.error = "usage cursor is corrupt"
             return
         try:
             raw = json.loads(text)

@@ -55,6 +55,10 @@ from sealed_ledger.store import (
 ANCHOR_KEY_ENV = "FIELD_LEDGER_ANCHOR_KEY"
 ARCHIVE_DIR_ENV = "FIELD_LEDGER_ARCHIVE_DIR"
 _UNSET: Any = object()
+# S5-10: caps on the free text that lands in the hash chain (a hostile or buggy caller otherwise writes megabytes into
+# every event, forever). The append PAYLOAD is deliberately not capped here: that is a separate decision.
+NAME_MAX = 200
+REASON_MAX = 2000
 
 #: B-GL-heavy-route-inflight: how many whole-ledger requests (GET /verify, GET /events with no filter) one ledger
 #: process runs at once. Default 1; 0 = no limit (the queueing that preceded this). A request past the limit is
@@ -120,8 +124,8 @@ EVENT_TYPE_PATTERN = r"^[a-z0-9_.-]+$"
 
 
 class AppendRequest(BaseModel):
-    event_type: str = Field(min_length=1, pattern=EVENT_TYPE_PATTERN)
-    agent_id: str | None = None
+    event_type: str = Field(min_length=1, max_length=NAME_MAX, pattern=EVENT_TYPE_PATTERN)
+    agent_id: str | None = Field(None, max_length=NAME_MAX)
     payload: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("payload")
@@ -136,6 +140,13 @@ class AppendRequest(BaseModel):
     caller_ts: str | None = None
     caller_signature: str | None = None
 
+    @field_validator("event_type")
+    @classmethod
+    def _event_type_not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("event_type must not be blank")
+        return v
+
     def caller_claim(self) -> dict[str, Any] | None:
         """The three caller fields, or None when the body carried none."""
         claim = {"caller_id": self.caller_id, "caller_ts": self.caller_ts,
@@ -144,17 +155,17 @@ class AppendRequest(BaseModel):
 
 
 class RotateRequest(BaseModel):
-    operator: str = Field(min_length=1)
-    reason: str = Field(min_length=1)
+    operator: str = Field(min_length=1, max_length=NAME_MAX)
+    reason: str = Field(min_length=1, max_length=REASON_MAX)
 
 
 class HoldRequest(BaseModel):
-    by: str = Field(min_length=1)
-    reason: str = Field(min_length=1)
+    by: str = Field(min_length=1, max_length=NAME_MAX)
+    reason: str = Field(min_length=1, max_length=REASON_MAX)
 
 
 class HoldReleaseRequest(BaseModel):
-    by: str = Field(min_length=1)
+    by: str = Field(min_length=1, max_length=NAME_MAX)
 
 
 class HoldStatus(BaseModel):
@@ -165,7 +176,7 @@ class HoldStatus(BaseModel):
 class RetentionApplyRequest(BaseModel):
     days: int = Field(ge=0, le=MAX_RETENTION_DAYS,
                       description="archive closed segments closed more than this many days ago")
-    operator: str = Field(min_length=1)
+    operator: str = Field(min_length=1, max_length=NAME_MAX)
     archive_dir: str | None = Field(
         None, description="default FIELD_LEDGER_ARCHIVE_DIR, else FIELD_DATA_DIR/ledger-archive"
     )
@@ -614,7 +625,7 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
         try:
             hold = _store().hold_status()
         except OSError as exc:
-            raise HTTPException(status_code=503, detail=f"ledger busy: hold marker unreadable: {exc}") from exc
+            raise HTTPException(status_code=503, detail=f"ledger busy: hold marker unreadable ({type(exc).__name__})") from exc
         return HoldStatus(held=hold is not None, hold=hold)
 
     @app.post("/hold", status_code=201)
@@ -674,8 +685,10 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except (LedgerBusy, SigningRequired) as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
-        except (LedgerCorrupt, OSError) as exc:
+        except LedgerCorrupt as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+        except OSError as exc:                  # S5-10: the OS text carries the server path
+            raise HTTPException(status_code=500, detail=f"retention apply failed ({type(exc).__name__})") from exc
         return RetentionApplyResult(**result)
 
     @app.get("/retention/check", response_model=RetentionCheck)

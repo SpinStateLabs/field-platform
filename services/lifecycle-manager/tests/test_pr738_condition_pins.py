@@ -1,5 +1,8 @@
-"""PR 738 reviewer-6 conditions (V1, V6, V9, V11-V13, V20): pin the roster cap, the interval floor,
-the ASCII-digit rule, the floor warning and the empty-roster refusal with literal values."""
+"""PR 738 reviewer-6 conditions (V1, V6, V9, V11-V13, V20): pin the roster cap, the interval rule, the ASCII-digit
+rule and the empty-roster refusal with literal values.
+
+Rebuild of PR 738: PR 605's 60 s FIELD_LIFECYCLE_EVERY floor was dropped by the controller's ruling (a) on #1202, so the
+interval pins below state main's rule (1 to 9 ASCII digits are taken as given; anything else is 0 = scheduler OFF)."""
 
 import logging
 
@@ -28,7 +31,7 @@ def _many_short_rows(total):
 
 def test_the_literal_limits_are_pinned():
     assert lm_api.ROSTER_CSV_MAX_CHARS == 1048576
-    assert lm_api.MIN_ENV_EVERY_S == 60
+    assert not hasattr(lm_api, "MIN_ENV_EVERY_S")      # no floor (ruling (a) on #1202)
 
 
 def test_the_cap_is_enforced_for_short_rows_exactly_at_one_mebibyte(tmp_path, monkeypatch):
@@ -40,17 +43,17 @@ def test_the_cap_is_enforced_for_short_rows_exactly_at_one_mebibyte(tmp_path, mo
     assert over.status_code == 422
 
 
-@pytest.mark.parametrize("raw, expected", [("59", 60), ("30", 60), ("60", 60), ("61", 61)])
-def test_the_floor_is_the_literal_sixty_seconds(raw, expected, monkeypatch):
+@pytest.mark.parametrize("raw, expected", [("1", 1), ("30", 30), ("59", 59), ("60", 60), ("61", 61)])
+def test_a_short_interval_is_taken_as_given(raw, expected, monkeypatch):
     monkeypatch.setenv("FIELD_LIFECYCLE_EVERY", raw)
     assert TestClient(build()).get("/health").json()["every"] == expected
 
 
-def test_a_raised_interval_logs_a_warning_naming_the_variable(monkeypatch, caplog):
+def test_a_short_interval_logs_no_floor_warning(monkeypatch, caplog):
     monkeypatch.setenv("FIELD_LIFECYCLE_EVERY", "30")
     with caplog.at_level(logging.WARNING, logger="lifecycle_manager"):
         build()
-    assert "FIELD_LIFECYCLE_EVERY" in caplog.text and "floor" in caplog.text
+    assert "floor" not in caplog.text
 
 
 # Arabic-Indic and fullwidth decimal digits: str.isdecimal() is true and int() accepts them.
