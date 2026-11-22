@@ -3,6 +3,8 @@ text can add markdown structure at ANY of the post-mortem's interpolation sites.
 (raw HTML, an inline link, a backtick that tries to break out of a code span) the rendered markdown parses (markdown-it,
 CommonMark + tables, raw HTML ON, as an HTML-passing renderer does) to the SAME structure as the same site holding
 plain text: no html_inline or html_block token, no link, no extra heading, list, table cell or code span.
+Table cells are also compared by TEXT (R-PR1163 C1): CommonMark drops the excess cells an unescaped pipe makes, so a
+count alone cannot see a cell split; every cell must read exactly as it does when the forge's pipes are a stand-in.
 
 markdown-it-py is pinned in integration/constraints.txt (typer -> rich -> markdown-it-py); it is imported directly so a
 missing parser fails this file instead of skipping it."""
@@ -62,18 +64,26 @@ def _agent(**field):
 
 
 #: The 11 sites of PR 521 (and the grant timestamps the review found unwrapped): site id -> how to put `v` there.
+#: 00a/00b, 04c-04f, 05f, 11e and 11f were added from R-PR1163 C1 (mutants C8, S2, S1, T5 survived without them).
 SITES = {
+    "00a-window-since": lambda v: {"window": {"since": v, "until": TS}},
+    "00b-window-until": lambda v: {"window": {"since": TS, "until": v}},
     "01-title-agent_id": lambda v: {"agent_id": v},
     "02-integrity-detail": lambda v: {"ledger_integrity_ok": False, "ledger_integrity_status": "broken",
                                       "ledger_integrity_detail": v},
     "03-integrity-note": lambda v: {"integrity_notes": [v]},
     "04a-agent-record-name": lambda v: _agent(name=v),
     "04b-agent-record-manifest_ref": lambda v: _agent(manifest_ref=v),
+    "04c-agent-record-agent_id": lambda v: _agent(agent_id=v),
+    "04d-agent-record-owner": lambda v: _agent(owner=v),
+    "04e-agent-record-domain": lambda v: _agent(domain=v),
+    "04f-agent-record-status": lambda v: _agent(status=v),
     "05a-grant-table-granted_by": lambda v: {"authority": [grant(granted_by=v)]},
     "05b-grant-table-token_id": lambda v: {"authority": [grant(token_id=v)]},
     "05c-grant-table-issued_at": lambda v: {"authority": [grant(issued_at=v)]},
     "05d-grant-table-expires_at": lambda v: {"authority": [grant(expires_at=v)]},
     "05e-grant-table-revoked_at": lambda v: {"authority": [grant(revoked=True, revoked_at=v)]},
+    "05f-grant-table-scope": lambda v: {"authority": [grant(scope=["read x", v])]},
     "06a-timeline-summary": lambda v: {"timeline": [entry(summary=v)]},
     "06b-timeline-event_type": lambda v: {"timeline": [entry(event_type=v)]},
     "06c-timeline-ts": lambda v: {"timeline": [entry(ts=v)]},
@@ -87,6 +97,8 @@ SITES = {
     "11b-accountable-token_id": lambda v: {"accountable_grant": grant(token_id=v)},
     "11c-accountable-issued_at": lambda v: {"accountable_grant": grant(issued_at=v)},
     "11d-accountable-revoked_at": lambda v: {"accountable_grant": grant(revoked=True, revoked_at=v)},
+    "11e-accountable-expires_at": lambda v: {"accountable_grant": grant(expires_at=v)},
+    "11f-accountable-scope": lambda v: {"accountable_grant": grant(scope=["read x", v])},
 }
 IGNORED = {"text", "text_special"}       # what a value IS may change; the structure around it may not
 
@@ -108,6 +120,46 @@ def test_no_site_can_add_structure(site, kind):
     got, want = structure(forged), structure(benign)
     assert got == want, (site, kind, {k: (got[k], want[k]) for k in set(got) | set(want) if got[k] != want[k]})
     assert "html_inline" not in got and "html_block" not in got and "link_open" not in got and "image" not in got
+
+
+#: Same width as "|", so the [:8] / [:19] cuts land in the same place for the stand-in as for the forge.
+PIPE_STAND_IN = "\u00a6"
+
+
+def cells(md: str) -> list[list[str]]:
+    """Every table row's cells as their rendered text (text, escapes and code spans); an escaped pipe reads "|"."""
+    toks = PARSER.parse(md)
+    rows: list[list[str]] = []
+    for i, tok in enumerate(toks):
+        if tok.type == "tr_open":
+            rows.append([])
+        elif tok.type in ("th_open", "td_open"):
+            inline = toks[i + 1]
+            assert inline.type == "inline", inline.type
+            text = "".join(c.content for c in (inline.children or [])
+                           if c.type in ("text", "text_special", "code_inline"))
+            rows[-1].append(text.replace("\\|", "|"))
+    return rows
+
+
+@pytest.mark.parametrize("site", sorted(SITES))
+@pytest.mark.parametrize("kind", sorted(FORGES))
+def test_no_site_can_move_text_between_table_cells(site, kind):
+    forge = FORGES[kind]
+    stand_in = forge.replace("|", PIPE_STAND_IN)
+    want = [[c.replace(PIPE_STAND_IN, "|") for c in row]
+            for row in cells(render_markdown(postmortem(**SITES[site](stand_in))))]
+    got = cells(render_markdown(postmortem(**SITES[site](forge))))
+    assert got == want, (site, kind, got, want)
+
+
+def test_the_pipe_check_sees_a_split_cell():
+    # The check above is not vacuous: an unescaped pipe in a cell changes the cell text even where the count holds.
+    plain = "| Role | Party |\n|---|---|\n| a \\| FAKE \\| b | x |\n"
+    split = "| Role | Party |\n|---|---|\n| a | FAKE | b | x |\n"
+    assert cells(plain)[1] == ["a | FAKE | b", "x"]
+    assert cells(split)[1] == ["a", "FAKE"]
+    assert structure(plain) == structure(split)          # the old structure-only check could not tell them apart
 
 
 def test_the_kill_reason_section_forge_from_the_review_renders_as_text():
