@@ -126,6 +126,7 @@ unchanged here).
 
 | Guarantee | Status | How |
 |---|---|---|
+| `PUT /caps` refuses an over-long text field: `agent_id` over 128 characters, `currency` or `on_breach` over 200 (the S2-2 bounds of `/spend` and `/usage`), plus the model's numeric bounds (each limit `> 0` and `<= MAX_AMOUNT`, `period`, `escalate_at_pct` 1-100); a 422 that never repeats the text | **Enforced in code** | `api.py` `SpendCapRequest` (Backlog B9; `tests/test_backlog_b9_caps_put_bounds.py`) |
 | Integer arithmetic; no float drift at limit boundaries | **Enforced in code** | cents-int comparisons (`spent*100 >= limit*pct`); adversarial test |
 | Threshold escalation fires **before** the cap, once per crossing | **Enforced in code** | dedup on open escalations: the check and the insert are one store call (one lock hold, one `BEGIN IMMEDIATE` transaction), so concurrent crossings open and ledger exactly one escalation per (agent, kind); a partial unique index backs it wherever the database holds no pre-v1.2 duplicates (`tests/test_escalation_atomicity.py`) |
 | A resolved escalation keeps its first resolver | **Enforced in code** | `UPDATE … WHERE resolved=0`; exactly one `spend.escalation_resolved` note; retries and refused (409) resolves write none (`tests/test_escalation_atomicity.py`, `tests/test_governor_store_concurrency.py`) |

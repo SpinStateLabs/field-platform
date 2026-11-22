@@ -16,7 +16,7 @@ import uuid
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, HTTPException
 
@@ -72,6 +72,18 @@ from spend_governor.usage import (
 MAX_NOTE_LEN = 1000  # the ledger copy is still cut to 300 (pinned by test_usage_55_and_notes)
 MAX_LABEL_LEN = 200   # action, model
 MAX_ID_LEN = 128      # agent_id, the registry id style
+
+
+class SpendCapRequest(SpendCapConfig):
+    """The body of ``PUT /caps/{agent_id}`` (Backlog B9): the stored cap model plus the S2-2 text bounds that
+    ``/spend`` and ``/usage`` apply, so a cap write cannot store an unbounded agent_id, currency or on_breach.
+    The numeric bounds (``gt=0, le=MAX_AMOUNT``, period, escalate_at_pct) are inherited unchanged. The bounds live
+    on the request only: ``SpendCapConfig`` itself stays unbounded so a row stored before them still reads back
+    (as C-316 does for over-bound limits)."""
+
+    agent_id: str = Field(min_length=1, max_length=MAX_ID_LEN)
+    currency: Annotated[Utf8Str, Field(max_length=MAX_LABEL_LEN)] = "USD"
+    on_breach: Annotated[Utf8Str, Field(max_length=MAX_LABEL_LEN)] = "halt"
 
 
 class SpendRequest(BaseModel):
@@ -366,11 +378,13 @@ def create_app(
     guard_escalation = op_health.guard("escalation")
 
     @app.put("/caps/{agent_id}", response_model=SpendCapConfig)
-    def set_cap(agent_id: str, cap: SpendCapConfig,
+    def set_cap(agent_id: str, cap: SpendCapRequest,
                 _op: object = Depends(guard_caps)) -> SpendCapConfig:
         if cap.agent_id != agent_id:
             raise HTTPException(422, "agent_id in path and body must match")
-        return _store().set_cap(cap)
+        # Backlog B9: the body was validated as SpendCapRequest (text bounds + the model's numeric bounds); the
+        # store gets a plain SpendCapConfig re-validated from it, so no bound is skipped on the write path.
+        return _store().set_cap(SpendCapConfig.model_validate(cap.model_dump()))
 
     @app.get("/caps/{agent_id}", response_model=SpendCapConfig)
     def get_cap(agent_id: str) -> SpendCapConfig:
