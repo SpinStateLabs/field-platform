@@ -332,10 +332,14 @@ UNREADABLE_MARK = "UNREADABLE"
 
 def _unreadable_entry(row: sqlite3.Row) -> FederationContract:
     """What ``GET /contracts`` shows for a row that cannot be rebuilt: INACTIVE, no key, and placeholder scopes that
-    name the problem. Built from the two text columns only, so it cannot fail the way the row did."""
+    name the problem. Built from the two text columns only, so it cannot fail the way the row did. A column longer
+    than ``NAME_MAX`` (a row written before the bound existed) is cut to fit and ends in an ellipsis: otherwise the
+    entry itself fails validation and ``GET /contracts`` is a 500 again (R-PR687 C2)."""
     def text(column: str) -> str:
         v = row[column]
-        return v if isinstance(v, str) and v.strip() else "(unreadable)"
+        if not (isinstance(v, str) and v.strip()):
+            return "(unreadable)"
+        return v if len(v) <= NAME_MAX else v[: NAME_MAX - 1] + "\u2026"
     return FederationContract(
         contract_id=text("contract_id"),
         counterparty_org=text("counterparty_org"),

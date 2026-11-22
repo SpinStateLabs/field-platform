@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 
 from federation_broker.api import create_app
 from federation_broker.engine import (
-    BrokerEngine, ContractStore, ContractUnreadable, UNREADABLE_MARK, _contract_from_row,
+    NAME_MAX, BrokerEngine, ContractStore, ContractUnreadable, UNREADABLE_MARK, _contract_from_row,
 )
 from field_core.clients import LedgerClient
 from sealed_ledger.api import create_app as create_ledger_app
@@ -120,9 +120,11 @@ def test_an_unreadable_winner_does_not_fall_through_to_a_readable_second_row(sta
 
 
 def test_an_inactive_unreadable_row_does_not_block_the_orgs_active_contract(stack):
+    # the inactive row sorts FIRST, so a for_org that stopped filtering on active=1 would resolve to it and BLOCK
+    # (R-PR687 C4: the old ids FED-OLD / FED-NEW put the active row first and hid that mutant)
     client, store, _ = stack
-    row(store, "FED-OLD", scopes="not json", active=0)
-    row(store, "FED-NEW")
+    row(store, "FED-A-OLD", scopes="not json", active=0)
+    row(store, "FED-Z-NEW")
     assert outbound(client).json()["decision"] == "ALLOW"
 
 
@@ -150,3 +152,34 @@ def test_a_readable_store_is_unchanged(stack):
     row(store, "FED-1")
     assert [c["allowed_scopes"] for c in client.get("/contracts").json()] == [[SCOPE]]
     assert outbound(client).json()["decision"] == "ALLOW"
+
+
+# R-PR687 C2: a row written before main's NAME_MAX bound (id or org longer than 256 characters) must still list as a
+# degraded entry, not 500 GET /contracts; and its crossings stay BLOCKed.
+@pytest.mark.parametrize("field", ["contract_id", "counterparty_org"])
+@pytest.mark.parametrize("scopes", [None, "not json"], ids=["valid-json", "bad-json"])
+def test_an_over_long_legacy_id_or_org_still_lists_degraded(stack, field, scopes):
+    client, store, _ = stack
+    long = "L" * 300
+    if field == "contract_id":
+        row(store, long, scopes=scopes)
+    else:
+        row(store, "FED-LONG-ORG", org=long, scopes=scopes)
+    r = client.get("/contracts")
+    assert r.status_code == 200
+    entry = r.json()[0]
+    assert entry["active"] is False and entry["allowed_scopes"] == [UNREADABLE_MARK]
+    assert len(entry[field]) <= NAME_MAX and entry[field].startswith("L" * 200)
+    if field == "contract_id":
+        assert outbound(client).json()["decision"] == "BLOCK"
+
+
+# R-PR687 C3: the degraded entry never serves the stored key text (pins counterparty_pubkey_pem=None).
+def test_the_degraded_entry_drops_a_stored_key(stack):
+    client, store, _ = stack
+    marker = "-----BEGIN PUBLIC KEY-----\nzz-stored-key-marker\n-----END PUBLIC KEY-----\n"
+    row(store, "FED-KEYED", scopes="not json", key=marker)
+    r = client.get("/contracts")
+    assert r.status_code == 200
+    assert r.json()[0]["counterparty_pubkey_pem"] is None
+    assert "zz-stored-key-marker" not in r.text
