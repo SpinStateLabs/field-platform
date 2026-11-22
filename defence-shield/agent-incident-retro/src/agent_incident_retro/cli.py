@@ -50,6 +50,8 @@ def _load_config(path: Optional[Path], **overrides) -> RetroConfig:
             data = json.loads(path.read_text(encoding="utf-8"))
         except OSError as exc:      # missing, a directory, unreadable (invalid JSON stays a ValueError)
             raise ValueError(f"--config: cannot read the file ({type(exc).__name__})") from None
+        except RecursionError:      # nested deeper than the JSON decoder allows (verify() refuses the same way)
+            raise ValueError("--config: the file nests too deeply") from None
         if not isinstance(data, dict):
             raise ValueError("--config: the file must hold a JSON object")
     for key, value in overrides.items():
@@ -97,7 +99,10 @@ def scan(
         report_path, pack_path = write_outputs(
             result, out, key.read_text(encoding="utf-8"), _now_iso(), list(logs), force=force
         )
-    except (ValueError, OSError) as exc:    # OSError covers FileExistsError, FileNotFoundError, a directory key...
+    except OSError as exc:      # FileExistsError, FileNotFoundError, a directory key...: the class only, never a path
+        typer.echo(f"error: could not read or write a file: {type(exc).__name__}", err=True)
+        raise typer.Exit(1)
+    except ValueError as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(1)
     total_lines = sum(i.lines for i in result.inputs)
