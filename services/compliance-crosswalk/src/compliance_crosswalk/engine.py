@@ -141,10 +141,11 @@ def _evidenced(
         ok = sources.registry_record is not None
         return ok, "registry record found" if ok else "agent not in registry"
     if control.control_id == "FC-I-01":
-        ok = bool(sources.registry_record and sources.registry_record.get("owner"))
+        owner = (sources.registry_record or {}).get("owner")
+        ok = isinstance(owner, str) and bool(owner.strip())  # blank is no owner; a non-str is none
         return ok, "human owner on registry record" if ok else "no owner on record"
     if control.control_id == "FC-L-01":
-        ok = bool(sources.ledger_verify and sources.ledger_verify.get("ok"))
+        ok = (sources.ledger_verify or {}).get("ok") is True  # a JSON true, not "false" / 1 / "yes"
         return ok, (
             "ledger chain verified"
             if ok
@@ -161,7 +162,7 @@ def _evidenced(
         return n > 0, f"{n} delegation token(s) for agent"
     if control.control_id == "FC-D-02":
         n = events.get("delegation.revoke", 0)
-        revoked = sum(1 for t in (sources.tokens or []) if t.get("revoked"))
+        revoked = sum(1 for t in (sources.tokens or []) if t.get("revoked") is True)
         ok = n > 0 or revoked > 0
         return ok, f"{n} revoke event(s), {revoked} revoked token(s)"
     if control.control_id == "FC-E-03":
