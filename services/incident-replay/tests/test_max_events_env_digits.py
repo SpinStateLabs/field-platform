@@ -23,3 +23,16 @@ def test_plain_digits_still_work(monkeypatch, raw, expected):
 def test_out_of_range_still_falls_back(monkeypatch, raw):
     monkeypatch.setenv("FIELD_REPLAY_MAX_EVENTS", raw)
     assert engine_mod.max_timeline_events() == 5000
+
+
+@pytest.mark.parametrize("raw", ["1" * 4301, "1" * 5000, "0" * 5000 + "100"], ids=["4301", "5000", "padded"])
+def test_a_value_past_the_int_digit_limit_falls_back_instead_of_raising(monkeypatch, raw):
+    monkeypatch.setenv("FIELD_REPLAY_MAX_EVENTS", raw)
+    assert engine_mod.max_timeline_events() == 5000
+
+
+def test_the_digit_bound_is_nine_digits_and_zero_padding_counts(monkeypatch):
+    monkeypatch.setenv("FIELD_REPLAY_MAX_EVENTS", "000000100")
+    assert engine_mod.max_timeline_events() == 100
+    monkeypatch.setenv("FIELD_REPLAY_MAX_EVENTS", "0000000100")
+    assert engine_mod.max_timeline_events() == 5000

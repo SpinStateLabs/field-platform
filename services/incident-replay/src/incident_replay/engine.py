@@ -95,7 +95,7 @@ def max_timeline_events() -> int:
     import re
 
     raw = os.environ.get("FIELD_REPLAY_MAX_EVENTS", "").strip()
-    if not re.fullmatch(r"[0-9]+", raw):   # ASCII digits only: int() takes "5_000", "+100" and Unicode digits
+    if not re.fullmatch(r"[0-9]{1,9}", raw):   # 1-9 ASCII digits only: int() takes "5_000", "+100", Unicode digits, and raises past 4300 digits
         return MAX_TIMELINE_EVENTS
     value = int(raw)
     if 1 <= value <= _MAX_TIMELINE_EVENTS_CEILING:

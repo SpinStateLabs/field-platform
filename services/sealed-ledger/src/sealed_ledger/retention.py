@@ -56,7 +56,9 @@ def estate_retention_days() -> tuple[int | None, str | None]:
     text = raw.strip()
     # ASCII digits only (an optional minus keeps the ">= 1" refusal below): int() would also take "3_65", "+30" and
     # any Unicode decimal digit, so a typo or a mis-encoded value would become a retention floor
-    if not re.fullmatch(r"-?[0-9]+", text):
+    # at most 9 digits (zero padding counts; 999999999 days is ~2.7 million years): an unbounded run past CPython's
+    # 4300-digit int() limit would raise ValueError out of GET /retention/check, which is always 200
+    if not re.fullmatch(r"-?[0-9]{1,9}", text):
         return None, f"{RETENTION_ENV}={text[:40]!r} is not an integer"
     days = int(text)
     if days < 1:
