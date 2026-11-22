@@ -100,9 +100,17 @@ def test_a_wrong_shaped_tokens_reply_is_dropped_not_a_validation_error(served, b
     assert collect_evidence("x").tokens is None
 
 
-@pytest.mark.parametrize("key,field", [("/verify", "ledger_verify"), ("/caps/", "governor_cap")])
 @pytest.mark.parametrize("bad", [[1], "text", 5])
-def test_a_wrong_shaped_dict_reply_is_dropped(served, key, field, bad):
+def test_a_wrong_shaped_dict_reply_is_dropped(served, bad):
     _, replies = served
-    replies[key] = bad
-    assert getattr(collect_evidence("x"), field) is None
+    replies["/caps/"] = bad
+    assert collect_evidence("x").governor_cap is None
+
+
+@pytest.mark.parametrize("bad", [[1], "text", 5])
+def test_a_wrong_shaped_verify_reply_is_an_answered_gap_not_unavailable(served, bad):
+    # rebuild of PR 1093: None now means "busy or unreachable" (unevidenced, no gap); a 200 that is not a JSON
+    # object is an answer the crosswalk cannot read, so it stays a gap (FC-L-01 False), never a crash
+    _, replies = served
+    replies["/verify"] = bad
+    assert collect_evidence("x").ledger_verify == {"http_status": 200}
