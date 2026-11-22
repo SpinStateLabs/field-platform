@@ -331,3 +331,107 @@ def test_C2_the_enumerated_path_does_not_read_the_registry_a_second_time_per_dom
     c, posts = _console(_good(3))
     c.post("/api/fleet/halt", json=HALT)
     assert posts.registry_reads == ["None"]                          # one listing, no per-domain reads
+
+
+# --- review round 3 on PR 1144 (roley.reviewer A1-A3, surviving mutants) -----------------------------------------------
+
+
+@pytest.mark.parametrize("aid", ["domain/d1", "a/b", "../x", "..", ".", "UPPER", "has space", "a?b", "a#b", "a%2Fb",
+                                 "x" * 129, "-lead", "trail\n"])
+def test_A1_a_fallback_id_must_be_one_valid_path_segment_otherwise_it_is_reported_not_killed(aid):
+    rows = _good(2) + [{"agent_id": aid, "domain": ["bad"], "status": "active"}]
+    c, posts = _console(rows)
+    out = c.post("/api/fleet/halt", json=HALT).json()
+    assert posts.agents == [], f"an id that is not a single valid segment reached /kill/: {posts.agents}"
+    assert sorted(posts) == ["d0", "d1"], "and the whole-domain route must not have been hit for it either"
+    assert out["bad_rows"] == 1 and out["all_ok"] is False and out["skipped_rows"][0]["agent_id"] is None
+    assert aid not in str(out)
+
+
+@pytest.mark.parametrize("aid", [None, "", "   ", 42, ["x"], {"a": 1}, "x" * 129, "Bad/Id"])
+def test_A2_a_row_with_a_good_domain_and_an_unusable_agent_id_is_reported_ledgered_and_not_green(aid):
+    row = {"domain": "prod", "status": "active"}
+    if aid is not None:
+        row["agent_id"] = aid
+    c, posts = _console(_good(1) + [row])
+    out = c.post("/api/fleet/halt", json=HALT).json()
+    assert out["bad_rows"] == 1 and out["all_ok"] is False and out["agent_errors"] >= 1
+    assert "prod" in posts                                  # the domain halt is still sent
+    assert [x["reason"] for x in out["skipped_rows"]] == ["agent_id is not usable"]
+    [ev] = [e for e in posts.events if e["event_type"] == "fleet.halt.skipped_rows"]
+    assert ev["payload"]["count"] == 1
+
+
+@pytest.mark.parametrize("domain", [0, False, [], {}, 0.0], ids=["zero", "false", "empty-list", "empty-dict", "float"])
+def test_A3_a_falsy_non_string_domain_is_malformed_never_general(domain):
+    rows = _good(1) + [{"agent_id": "z", "domain": domain, "status": "active"}]
+    c, posts = _console(rows)
+    out = c.post("/api/fleet/halt", json=HALT).json()
+    assert "general" not in posts
+    assert posts.agents == ["z"] and out["bad_rows"] == 1 and out["all_ok"] is False
+    assert out["skipped_rows"][0]["agent_id"] == "z"
+
+
+def test_A3_a_missing_or_null_domain_is_still_the_default_general_domain():
+    rows = _good(1) + [{"agent_id": "n1", "status": "active"}, {"agent_id": "n2", "domain": None, "status": "active"}]
+    c, posts = _console(rows)
+    out = c.post("/api/fleet/halt", json=HALT).json()
+    assert sorted(posts) == ["d0", "general"] and out["bad_rows"] == 0
+    assert out["all_ok"] is False or out["all_ok"] is True      # general's report is built from rows with domain == "general"
+
+
+def test_mutant_3_a_domain_with_no_expected_agents_and_no_ids_in_the_report_is_not_ok():
+    c, posts = _console([], kill_answer=lambda d: (200, {"results": [{"outcome": "killed"}]}))
+    out = c.post("/api/fleet/halt", json={**HALT, "domains": ["ghost"]}).json()
+    assert posts == ["ghost"] and out["all_ok"] is False
+    c2, _ = _console([], kill_answer=lambda d: (200, {"results": []}))
+    assert c2.post("/api/fleet/halt", json={**HALT, "domains": ["ghost"]}).json()["all_ok"] is False
+
+
+def test_mutant_10_a_fallback_answer_naming_another_agent_is_not_ok():
+    rows = _good(1) + [{"agent_id": "odd1", "domain": 5, "status": "active"}]
+    c, posts = _console(rows)
+
+    def kill(request):
+        if request.url.path.startswith("/kill/domain/"):
+            return httpx.Response(200, json={"results": [{"agent_id": "g0", "outcome": "killed"}]})
+        return httpx.Response(200, json={"agent_id": "someone-else", "previous_status": "active"})
+    c.app.state.killswitch = ServiceClient(client=httpx.Client(transport=httpx.MockTransport(kill), base_url="http://t"),
+                                           base_url="http://t")
+    out = c.post("/api/fleet/halt", json=HALT).json()
+    assert out["agent_kills"] == [{"agent_id": "odd1", "ok": False, "status": 200}]
+
+
+def test_mutant_11_a_fallback_202_is_not_ok():
+    rows = _good(1) + [{"agent_id": "odd1", "domain": 5, "status": "active"}]
+    c, posts = _console(rows)
+
+    def kill(request):
+        if request.url.path.startswith("/kill/domain/"):
+            return httpx.Response(200, json={"results": [{"agent_id": "g0", "outcome": "killed"}]})
+        return httpx.Response(202, json={"agent_id": "odd1"})
+    c.app.state.killswitch = ServiceClient(client=httpx.Client(transport=httpx.MockTransport(kill), base_url="http://t"),
+                                           base_url="http://t")
+    assert c.post("/api/fleet/halt", json=HALT).json()["agent_kills"][0]["ok"] is False
+
+
+def test_A5_a_skipped_retired_outcome_does_not_confirm_a_registry_active_agent():
+    c, _ = _console(_agents("prod", ["p1"]),
+                    kill_answer=lambda d: (200, {"results": [{"agent_id": "p1", "outcome": "skipped_retired"}]}))
+    assert c.post("/api/fleet/halt", json=HALT).json()["all_ok"] is False
+
+
+def test_A6_the_ledgered_fallback_list_is_capped_like_the_skipped_list():
+    rows = _good(1) + [{"agent_id": f"odd{i}", "domain": 5, "status": "active"} for i in range(80)]
+    c, posts = _console(rows)
+    c.post("/api/fleet/halt", json=HALT)
+    [ev] = [e for e in posts.events if e["event_type"] == "fleet.halt.skipped_rows"]
+    assert ev["payload"]["count"] == 80 and len(ev["payload"]["skipped"]) == 50 and len(ev["payload"]["fallback_kills"]) == 50
+    assert len(posts.agents) == 80
+
+
+def test_A7_many_duplicate_skipped_ids_are_killed_once_each():
+    rows = _good(1) + [{"agent_id": "dup", "domain": 5, "status": "active"} for _ in range(500)]
+    c, posts = _console(rows)
+    out = c.post("/api/fleet/halt", json=HALT).json()
+    assert posts.agents == ["dup"] and out["bad_rows"] == 500

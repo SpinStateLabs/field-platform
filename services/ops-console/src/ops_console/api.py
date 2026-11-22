@@ -356,11 +356,13 @@ MAX_LISTED_SKIPPED = 50
 
 
 def _result_ids(data: Any) -> set[str] | None:
-    """The agent ids named by a kill-switch domain report (in the body, or in a non-2xx answer's ``detail``); None when
-    there is no ``results`` list."""
+    """The agent ids a kill-switch domain report CONFIRMS as halted (outcome killed or already_killed), in the body or in
+    a non-2xx answer's ``detail``; None when there is no ``results`` list."""
     for cand in (data, data.get("detail") if isinstance(data, dict) else None):
         if isinstance(cand, dict) and isinstance(cand.get("results"), list):
-            return {r["agent_id"] for r in cand["results"] if isinstance(r, dict) and isinstance(r.get("agent_id"), str)}
+            return {r["agent_id"] for r in cand["results"]
+                    if isinstance(r, dict) and isinstance(r.get("agent_id"), str)
+                    and r.get("outcome") in ("killed", "already_killed")}
     return None
 
 
@@ -885,7 +887,7 @@ def create_app(
         domains = req.domains
         explicit = bool(domains)                  # the caller named the domains: the registry is read per domain below
         skipped: list[dict[str, Any]] = []        # registry rows that could not be placed in a domain (id when known)
-        fallback_ids: list[str] = []              # skipped rows with a usable agent_id: killed one by one
+        fallback_ids: dict[str, None] = {}        # skipped rows with a VALID agent_id (AGENT_ID_RE): killed one by one
         expected: dict[str, set[str]] = {}        # domain -> the non-retired agent ids the registry listed for it
         if not domains:
             status, agents = app.state.registry.get("/agents")
@@ -906,15 +908,23 @@ def create_app(
                 if a.get("status") == "retired":
                     continue
                 aid = a.get("agent_id")
-                aid = aid if isinstance(aid, str) and aid.strip() and len(aid) <= 128 else None
-                d = a.get("domain") or "general"
+                # a usable id is ONE valid path segment (AGENT_ID_RE, at most 128 chars): anything else (a "/" would
+                # reach the whole-domain route, C-936 F-C936-1) is reported but never used to build a URL
+                aid = aid if isinstance(aid, str) and len(aid) <= 128 and AGENT_ID_RE.fullmatch(aid) else None
+                # a missing key or null is the default domain; any other non-string (0, False, [], {}) or a blank or
+                # slashed string is malformed, never silently "general"
+                d = a["domain"] if a.get("domain") is not None else "general"
                 if not isinstance(d, str) or not d.strip() or "/" in d:
                     skipped.append({"agent_id": aid, "reason": "domain is not a usable string"})
-                    if aid is not None and aid not in fallback_ids:
-                        fallback_ids.append(aid)
+                    if aid is not None:
+                        fallback_ids[aid] = None
                     continue
                 found.add(d)
-                if aid is not None:
+                if aid is None:
+                    # a good domain but no usable agent_id: the domain halt still covers the agent, but this row cannot
+                    # be named, so it is reported, ledgered and keeps the page not-green
+                    skipped.append({"agent_id": None, "reason": "agent_id is not usable"})
+                else:
                     expected.setdefault(d, set()).add(aid)
             domains = sorted(found)
         bad_rows = len(skipped)
@@ -954,7 +964,7 @@ def create_app(
                        "error": "the kill-switch answer for this domain could not be read"}
             results.append(row)
         agent_kills = []
-        for aid in fallback_ids:
+        for aid in fallback_ids:   # (an ordered set: each id once)
             st, data = app.state.killswitch.post(
                 f"/kill/{_seg(aid)}", json={"operator": req.operator, "reason": req.reason}, **okw)
             good = st in (200, 201) and isinstance(data, dict) and data.get("agent_id") == aid
@@ -966,7 +976,8 @@ def create_app(
                     "fleet.halt.skipped_rows",
                     {"operator": req.operator, "reason": req.reason, "count": len(skipped),
                      "skipped": skipped[:MAX_LISTED_SKIPPED],
-                     "fallback_kills": [{"agent_id": k["agent_id"], "ok": k["ok"]} for k in agent_kills]},
+                     "fallback_kills": [{"agent_id": k["agent_id"], "ok": k["ok"]}
+                                        for k in agent_kills[:MAX_LISTED_SKIPPED]]},
                     None)
             except Exception:  # noqa: BLE001
                 pass
