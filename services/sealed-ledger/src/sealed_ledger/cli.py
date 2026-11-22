@@ -630,7 +630,25 @@ def _served_base_url(offline: bool) -> str | None:
             "error: set FIELD_LEDGER_URL, or pass --offline with the service stopped", err=True
         )
         raise typer.Exit(code=2)
+    if _url_has_userinfo(url):
+        # fixed text, the URL is never echoed (as for --events-url, S3-16): the perimeter secret rides a header
+        typer.echo("error: FIELD_LEDGER_URL must not carry credentials (user:pass@); nothing was sent", err=True)
+        raise typer.Exit(code=2)
     return url
+
+
+def _origin(url: str) -> str:
+    """scheme://host[:port] of a URL: never its userinfo, path, query or fragment."""
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname or ""
+        host = f"[{host}]" if ":" in host else host     # an IPv6 literal keeps its brackets
+        port = f":{parts.port}" if parts.port else ""
+        return f"{parts.scheme}://{host}{port}"
+    except ValueError:
+        return "<unparseable URL>"
 
 
 def _call_served(base_url: str, method: str, route: str, body: dict | None = None,
@@ -645,43 +663,30 @@ def _call_served(base_url: str, method: str, route: str, body: dict | None = Non
         with httpx.Client(base_url=base_url, headers=auth_headers(), timeout=timeout) as client:
             return client.request(method, route.lstrip("/"), json=body)
     except httpx.HTTPError as exc:
-        typer.echo(f"error: ledger at {_safe_url(base_url)} unreachable: "
-                   f"{type(exc).__name__}: {exc}", err=True)
+        # the class and the origin only: httpx's text can carry the whole URL
+        typer.echo(f"error: ledger at {_origin(base_url)} unreachable: {type(exc).__name__}", err=True)
         raise typer.Exit(code=2)
     except (httpx.InvalidURL, ValueError):  # e.g. FIELD_LEDGER_URL=http://[::1 ; never echoed
         typer.echo("error: FIELD_LEDGER_URL is not a usable URL", err=True)
         raise typer.Exit(code=2)
 
 
-def _safe_url(url: str) -> str:
-    """scheme://host[:port]/path of a URL, never its userinfo, query or fragment."""
-    from urllib.parse import urlsplit
-
+def _served_detail(resp) -> str:
     try:
-        parts = urlsplit(url)
-        host = parts.hostname or ""
-        port = f":{parts.port}" if parts.port else ""
-        return f"{parts.scheme}://{host}{port}{parts.path}"
+        body = resp.json()
     except ValueError:
-        return "<unparseable URL>"
+        body = None
+    detail = body.get("detail") if isinstance(body, dict) else None   # a list or a string body has no detail
+    return str(detail) if detail is not None else resp.text
 
 
 def _served_json(resp, what: str):
-    """The JSON body of a served 2xx, or one stderr line and exit 2 (never a traceback)."""
+    """The JSON body of a served 2xx, or one stderr line and exit 2 (never a traceback, never the body)."""
     try:
         return resp.json()
     except ValueError:
-        typer.echo(f"error: ledger answered {resp.status_code} to {what} but the body is not JSON",
-                   err=True)
+        typer.echo(f"error: ledger answered {resp.status_code} to {what} but the body is not JSON", err=True)
         raise typer.Exit(code=2)
-
-
-def _served_detail(resp) -> str:
-    try:
-        detail = resp.json().get("detail")
-    except ValueError:
-        detail = None
-    return str(detail) if detail is not None else resp.text
 
 
 @app.command()
@@ -947,7 +952,10 @@ def retention_check_cmd(
             typer.echo(f"error: retention check failed ({resp.status_code}): {_served_detail(resp)}",
                        err=True)
             raise typer.Exit(code=2)
-        result = resp.json()
+        result = _served_json(resp, "retention check")
+        if not isinstance(result, dict):
+            typer.echo("error: ledger answered 200 to retention check but the body is not a JSON object", err=True)
+            raise typer.Exit(code=2)
     else:
         from field_core.clients import RegistryClient
         from sealed_ledger.retention import retention_check
@@ -1081,7 +1089,7 @@ def verify_witness_cmd(
     secret = None
     if secret_file is not None:
         try:
-            secret = secret_file.read_text(encoding="utf-8").strip()
+            secret = secret_file.read_text(encoding="utf-8-sig").strip()
         except (OSError, UnicodeError) as exc:
             # the exception text is NEVER echoed: a UnicodeDecodeError says "byte 0xff in position 25" (a byte and the
             # length of the secret before it)

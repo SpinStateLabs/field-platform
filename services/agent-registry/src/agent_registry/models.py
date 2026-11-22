@@ -87,6 +87,26 @@ class AgentUpdate(BaseModel):
     domain: Domain | None = None
     manifest_ref: ManifestRef | None = None
     status: AgentStatus | None = None
+    # Compare-and-set (kill-path hardening): apply the patch only if the row's updated_at still equals this ISO 8601
+    # timestamp (the one a previous read or write of the row returned); otherwise 412. Not a column: it is never
+    # stored and never listed in the ledger's field list.
+    if_updated_at: str | None = Field(default=None, max_length=64)
+
+    @field_validator("if_updated_at")
+    @classmethod
+    def _parseable(cls, value: str | None) -> str | None:
+        if value is not None:
+            parse_updated_at(value)
+        return value
+
+
+def parse_updated_at(value: str) -> datetime:
+    """An ISO 8601 timestamp as an aware UTC datetime (``Z`` accepted, naive taken as UTC); ValueError otherwise."""
+    text = value.strip()
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    parsed = datetime.fromisoformat(text)
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
 
 class ShadowCandidate(BaseModel):

@@ -36,9 +36,17 @@ class _Kill:
         return self.answers[domain]
 
 
+class _Reg:
+    """The registry: every domain holds the one agent ``a`` (explicit domains are now checked against it: PR 1144 C2)."""
+
+    def get(self, path, params=None, **kw):
+        return 200, [{"agent_id": "a", "name": "a", "owner": "O", "domain": (params or {}).get("domain", "x"),
+                      "status": "active"}]
+
+
 def _console(kill):
     dead = ServiceClient(client=_Dead(), base_url="http://dead")
-    app = create_app(registry=dead, ledger=dead, killswitch=kill, delegation=dead, governor=dead, sentinel=dead,
+    app = create_app(registry=_Reg(), ledger=dead, killswitch=kill, delegation=dead, governor=dead, sentinel=dead,
                      lifecycle=dead, attest=dead, crosswalk=dead, federation=dead, replay=dead, gateway=dead)
     return TestClient(app)
 
