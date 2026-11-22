@@ -76,3 +76,16 @@ def test_empty_and_missing_lists_still_count_zero():
     assert _metrics(_body(offending=[], unresolvable=[]))[COUNT].value == 0
     assert _metrics(_body())[COUNT].value == 0
     assert _metrics(_body(offending=None, unresolvable=None))[COUNT].value == 0
+
+
+FALSY_BAD = [{}, "", 0, False, 0.0]
+
+
+@pytest.mark.parametrize("bad", FALSY_BAD, ids=repr)
+def test_a_falsy_wrong_shaped_value_fails_closed_not_to_zero(bad):
+    """Reviewer condition N1 on PR 519: `or []` published {} / "" / 0 / False as zero offenders."""
+    for key in ("offending", "unresolvable"):
+        m = _metrics(_body(**{key: bad}))
+        assert m[COUNT].status == "unavailable" and m[COUNT].value is None, (key, bad)
+        assert "not a list of records" in (m[COUNT].note or "")
+        assert m[POLICY].value == 365

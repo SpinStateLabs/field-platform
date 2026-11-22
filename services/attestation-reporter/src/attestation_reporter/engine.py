@@ -311,8 +311,10 @@ class PackEngine:
         if data.get("status") == "unavailable":
             return policy, unavailable(count_name, "manifests",
                                        "the ledger could not read the agent registry at generation time")
-        raw_offending = data.get("offending") or []
-        raw_unresolvable = data.get("unresolvable") or []
+        # A missing key or null means "none listed"; any other value must be a list of
+        # records, falsy or not: `or []` turned {} / "" / 0 / False into a published zero.
+        raw_offending = [] if data.get("offending") is None else data["offending"]
+        raw_unresolvable = [] if data.get("unresolvable") is None else data["unresolvable"]
         for raw in (raw_offending, raw_unresolvable):
             # a wrong-shaped list fails this ONE metric closed (as _metric does), not build()
             if not isinstance(raw, list) or _non_records(raw):
