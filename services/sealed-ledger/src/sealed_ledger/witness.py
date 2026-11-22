@@ -39,6 +39,7 @@ import os
 import re
 import socket
 import threading
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -57,6 +58,22 @@ from sealed_ledger.store import NoAnchorKey, Snapshot
 
 ANCHOR_REMOTE = "anchor.remote"
 REMOTE_ESTATE = "fly"
+ESTATE_NAME_MAX = 64
+#: Fixed text: the rejected name is never echoed.
+ESTATE_NAME_REFUSAL = "--estate must be 1 to 64 characters with no whitespace, control or invisible (format) character"
+
+
+def checked_estate(name: str) -> str:
+    """``name`` if it is a plain estate name, else ``ValueError(ESTATE_NAME_REFUSAL)``.
+
+    The name goes into the signed anchor.remote payload and ``verify-witness --estate`` selects by exact equality, so a
+    name that differs invisibly (a trailing space, a zero-width or bidi character) is witnessed under a name no later
+    verify finds. Whitespace (``isspace``: Zs, Zl, Zp included), control (Cc) and format (Cf, e.g. zero-width and bidi) characters are
+    refused. Nothing is stripped or normalised: a bad name is refused as it is."""
+    if (not isinstance(name, str) or not 1 <= len(name) <= ESTATE_NAME_MAX
+            or any(ch.isspace() or unicodedata.category(ch) in ("Cc", "Cf") for ch in name)):
+        raise ValueError(ESTATE_NAME_REFUSAL)
+    return name
 FLY_SECRET_FILE_ENV = "FIELD_WITNESS_FLY_SECRET_FILE"
 DIRECTION_2_NOT_LIVE = "direction 2 not live (D5)"
 HTTP_TIMEOUT_S = 10.0
@@ -210,6 +227,7 @@ class Witness:
     _secrets: list[str] = field(default_factory=list, repr=False)
 
     def __post_init__(self) -> None:
+        self.local_estate = checked_estate(self.local_estate)
         self.fly_url = require_https(self.fly_url)
 
     # -- logging: every line goes through here, and no secret survives it ------------------
