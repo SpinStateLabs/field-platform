@@ -40,17 +40,9 @@ sys.path.insert(0, str(HERE))
 import estate_probe as ep  # noqa: E402
 import stage_controller as sc  # noqa: E402
 
-#: (label, /health path, service name): the eight operator-block services (the console owns the proxy root).
-OPERATOR_BLOCK_SERVICES = (
-    ("registry", "/registry/health", "agent-registry"),
-    ("ledger", "/ledger/health", "sealed-ledger"),
-    ("delegation", "/delegation/health", "delegation-authority"),
-    ("killswitch", "/killswitch/health", "kill-switch"),
-    ("governor", "/governor/health", "spend-governor"),
-    ("federation", "/federation/health", "federation-broker"),
-    ("lifecycle", "/lifecycle/health", "lifecycle-manager"),
-    ("console", "/health", "ops-console"),
-)
+# One definition: the stage 0 check owns the table; this module reuses it so the two cannot drift.
+from phase_g_stage0_check import OPERATOR_BLOCK_SERVICES  # noqa: E402
+
 GATE = "G18"
 SECONDS_PER_HOUR = 3600.0
 #: The shortest window that counts as a Stage 1 window (the runbook's Stage 2 entry states it). A shorter one, or one
