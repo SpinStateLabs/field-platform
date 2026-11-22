@@ -238,10 +238,14 @@ def test_authn_source_never_logs_or_prints():
     src = inspect.getsource(authn)
     for word in ("print(", "logger"):
         assert word not in src, word
-    # The one log line allowed (PR 839: a non-ASCII FIELD_SHARED_SECRET is warned about) names the two variables only:
-    # no key, no header value, no read-tier name ever reaches a log call.
+    # The two log lines allowed, exact text, each naming the variables only: no key, no header value, no read-tier name
+    # ever reaches a log call. PR 839: a non-ASCII FIELD_SHARED_SECRET; main (kept by the rebuild of PR 828): a
+    # FIELD_SHARED_SECRET with surrounding whitespace or a control character (the fact only, never the value or length).
     calls = [ln.strip() for ln in src.splitlines() if "log." in ln and "logging.getLogger" not in ln]
-    assert calls == ['log.warning("%s holds a non-ASCII character; callers must send its UTF-8 bytes in %s", ENV_VAR, HEADER)']
+    assert calls == [
+        'log.warning("%s holds a non-ASCII character; callers must send its UTF-8 bytes in %s", ENV_VAR, HEADER)',
+        'log.warning("%s holds leading/trailing whitespace or a control character; callers cannot send it", ENV_VAR)',
+    ]
 
 
 # ------------------------------------------------------------ review C-783 (F-C783-1, -2, -4)
