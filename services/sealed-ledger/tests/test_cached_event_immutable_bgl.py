@@ -254,3 +254,20 @@ def test_read_only_event_equals_a_plain_event_on_either_side_and_is_unhashable()
     assert ro.payload == {"a": [1]}
     with pytest.raises(Exception):
         ro.payload = {}
+
+
+def test_of_builds_exactly_what_pydantic_model_construct_builds():
+    """``of`` sets pydantic's instance slots directly (cheaper than model_construct); pin it to the public API."""
+    plain = LedgerEvent(event_id="1", ts="t", event_type="x", prev_hash="p", hash="h", signature="s",
+                        payload={"a": [1, {"b": 2}]})
+    frozen_payload = ReadOnlyLedgerEvent.of(plain).payload
+    ref = ReadOnlyLedgerEvent.model_construct(_fields_set=set(plain.model_fields_set),
+                                              **{**plain.__dict__, "payload": frozen_payload})
+    got = ReadOnlyLedgerEvent.of(plain)
+    assert got == ref and got.model_fields_set == ref.model_fields_set == plain.model_fields_set
+    assert got.__pydantic_extra__ is None and got.__pydantic_private__ is None
+    assert got.model_dump() == ref.model_dump() == plain.model_dump()
+    assert got.model_dump_json() == ref.model_dump_json() == plain.model_dump_json()
+    assert got.model_fields_set is not plain.model_fields_set
+    assert set(got.__dict__) == set(LedgerEvent.model_fields)
+    assert got.model_copy().payload == got.payload and copy.deepcopy(got) == got

@@ -172,9 +172,18 @@ class ReadOnlyLedgerEvent(LedgerEvent):
     def of(cls, event: LedgerEvent) -> "ReadOnlyLedgerEvent":
         """A read-only copy of ``event`` (a LedgerEvent that was already validated; nothing is re-validated,
         and ``event``, payload included, is not aliased or touched)."""
+        # What ``model_construct`` does, minus its per-field defaulting loop (about 2x cheaper per event; it is
+        # on the first hand-out of every cached event). Pinned against ``model_construct`` by a test, because it
+        # sets pydantic's own four instance slots.
         fields = dict(event.__dict__)
         fields["payload"] = _deep_freeze(fields["payload"])
-        return cls.model_construct(_fields_set=set(event.model_fields_set), **fields)
+        new = cls.__new__(cls)
+        setter = object.__setattr__
+        setter(new, "__dict__", fields)
+        setter(new, "__pydantic_fields_set__", set(event.__pydantic_fields_set__))
+        setter(new, "__pydantic_extra__", None)
+        setter(new, "__pydantic_private__", None)
+        return new
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, LedgerEvent):
