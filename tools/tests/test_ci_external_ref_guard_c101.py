@@ -234,7 +234,7 @@ def test_the_old_pattern_missed_what_the_report_said(tmp_path):
     assert all(hits(argv, MUST_MATCH[n], tmp_path) for n in report)
 
 
-# --- C-52 LOW follow-up: the guard step cannot be softened --------------------------------------------------------
+# --- C-52 LOW follow-up: the guard step's known softeners are refused (a bounded allow/deny list, not a proof) --------------------------------------------------------
 # The grep tests above read the step's script; they would stay green if the step were made non-fatal around it. This is
 # an ALLOW-LIST over the air-gapped step, the fly-image-smoke job that holds it and the workflow defaults (the C-91
 # intent: that step and its job, not every step of ci.yml). A deny-list of spellings (`|| true`, `set +e`, ...) misses
@@ -251,6 +251,8 @@ BASH_ENV_NAMES = {"BASH_ENV", "SHELLOPTS", "BASHOPTS"}
 SCRIPT_BANNED = (
     (re.compile(r"(^|[\s;&|(])set\s", re.M), "a `set` command (set +e, set +o errexit, ...)"),
     (re.compile(r"(^|[\s;&|(])trap\s", re.M), "a `trap`"),
+    (re.compile(r"(^|[\s;&|(])shopt\s"), "a `shopt` command (shopt -u -o errexit, ...)"),
+    (re.compile(r"(^|[\s;&|(])(ba|da)?sh\s+\+[A-Za-z]*e"), "a `bash +e` / `sh +e` wrapper"),
     (re.compile(r"\bexit\s+0\b"), "exit 0"),
 )
 
@@ -310,6 +312,8 @@ SOFT_MUTANTS = {
     "|| exit 0": ('exit 1\n          fi\n          if [ "$rc" -ne 1 ]', 'exit 1\n          fi || exit 0\n          if [ "$rc" -ne 1 ]'),
     "set +e": (GREP_HEAD, "          set +e\n" + GREP_HEAD),
     "set +o errexit": (GREP_HEAD, "          set +o errexit\n" + GREP_HEAD),
+    "shopt -u -o errexit": (GREP_HEAD, "          shopt -u -o errexit\n" + GREP_HEAD),
+    "a bash +e -c wrapper": (GREP_HEAD, "          bash +e -c 'true'\n" + GREP_HEAD),
     "trap": (GREP_HEAD, "          trap 'exit $((0))' EXIT\n" + GREP_HEAD),
     "the status capture moved off the grep line": ('root.flat" || rc=$?', 'root.flat"'),
     "a bare exit 0 before the grep": (GREP_HEAD, "          exit 0\n" + GREP_HEAD),
