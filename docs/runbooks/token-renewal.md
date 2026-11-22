@@ -937,8 +937,8 @@ Expect:
   library is used);
 - `True` three times;
 - `f51e659ed618255c19e8196feb4b873295d831674f42319a1a13743d9782b0cb` for ssl-verify-token.ps1;
-- `500961351b6ec1b199b1554f97512a7d70c36ac06b6526751847531db495e21b` for field-rest.ps1
-  (re-pinned for B14: the hard-coded home paths became `$HOME`-based, behaviour unchanged when `HOME` is as expected below; an installed copy must be refreshed from the repository before the next skill run and the next scheduled renewal. Earlier re-pin for C-285: `FIELD_PROXY_URL` is now required, no default; an installed copy must be refreshed from the repository and the variable set in the user environment before the next skill run AND the next scheduled renewal (`ssl-verify-token.ps1` dot-sources this file, so an unset variable stops the verifier); earlier re-pin 2026-09-13, §6.1);
+- `839d9de614afed708550fd15589ecccaef0ea981824c6fea73a67a09321e8152` for field-rest.ps1
+  (re-pinned for B14 on current main (with #1304's shim change): the hard-coded home paths became `$HOME`-based, behaviour unchanged when `HOME` is as expected below; an installed copy must be refreshed from the repository before the next skill run and the next scheduled renewal. Earlier re-pin for C-285: `FIELD_PROXY_URL` is now required, no default; an installed copy must be refreshed from the repository and the variable set in the user environment before the next skill run AND the next scheduled renewal (`ssl-verify-token.ps1` dot-sources this file, so an unset variable stops the verifier); earlier re-pin 2026-09-13, §6.1);
 - two empty lines (no user-level `FIELD_TOKENS_FILE` or
   `FIELD_CLIENT_POSTURE`: a Task Scheduler run inherits the user environment);
 - `HOME=[C:\Users\donal]`, exactly, case included: the shim then resolves its

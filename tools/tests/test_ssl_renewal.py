@@ -18,7 +18,7 @@ verification starts, and a sentinel in log_only mode (a real
 conformance-sentinel process started with FIELD_SENTINEL_MODE=log_only, not a
 rewritten answer). The tool itself talks to the harness directly.
 
-Nothing here reads C:\\Users\\donal\\.field-local or sends anything to
+Nothing here reads $HOME\\.field-local or sends anything to
 10.0.0.62: FIELD_TOKENS_FILE, FIELD_SECRET_FILE and FIELD_PROXY_URL always point
 into tmp_path and the harness, and the manifest copy's endpoints are rewritten
 to a dead local port. The few runs that need FIELD_TOKENS_FILE missing or unset
@@ -111,8 +111,8 @@ def _wait_up(url: str, proc: subprocess.Popen, what: str) -> None:
 
 
 def _safe_env(env: dict) -> dict:
-    """field-rest.ps1 used to fall back to C:\\Users\\donal\\.field-local\\tokens-gb10.json when
-    FIELD_TOKENS_FILE named a file that does not exist, and still does when FIELD_TOKENS_FILE is unset.
+    """field-rest.ps1 used to fall back to one account's .field-local\\tokens-gb10.json when
+    FIELD_TOKENS_FILE named a file that does not exist, and when it was unset (B14 removed that fallback).
     Every PowerShell run of the real shim here must therefore name an existing token file in tmp, a secret
     file outside .field-local and a loopback estate, so no regression or mutant of the shim can reach the
     real file. Learned the hard way: a mutant verifier that loaded the real shim, in a test that had not
@@ -562,12 +562,11 @@ def _code_lines(source: str) -> str:
 
 
 def _decoy_shim(tmp: Path, real_tokens: Path, home: Path) -> Path:
-    """A copy of the REAL shim whose only change is its path literals (the rog-command token file
-    becomes `real_tokens`, the $HOME default `home`, the default secret file a tmp path), so a run
-    whose FIELD_TOKENS_FILE is missing or unset can never reach C:\\Users\\donal\\.field-local."""
+    """A copy of the REAL shim whose only change is its path defaults (the $HOME token default becomes
+    `home`, the $HOME secret default a tmp path; `real_tokens` is a decoy no run may read), so a run
+    whose FIELD_TOKENS_FILE is missing or unset can never reach $HOME\\.field-local."""
     source = (TOOLS / "field-rest.ps1").read_text(encoding="utf-8")
-    swaps = {r"C:\Users\donal\.field-local\tokens-gb10.json": str(real_tokens),
-             r"C:\Users\donal\.field-local\gb10-estate-secret": str(tmp / "decoy-default-secret"),
+    swaps = {r"Join-Path $HOME '.field-local\gb10-estate-secret'": f"Join-Path '{tmp}' 'decoy-default-secret'",
              r"Join-Path $HOME '.field-local\tokens-gb10.json'": f"Join-Path '{home}' 'tokens-gb10.json'"}
     for old, new in swaps.items():
         assert old in source, old
@@ -604,7 +603,7 @@ def test_the_verifier_makes_no_call_unless_the_shim_reads_exactly_the_tokens_fil
     FIELD_PROXY_URL: refused before any call, even when that other file holds the same token."""
     e, token = case.e, case.e.mint(DAY)
     case.tokens_file(token)
-    real = case.tmp / "decoy-real-tokens.json"  # stands in for the rog-command file the shim falls back to
+    real = case.tmp / "decoy-real-tokens.json"  # planted where the removed fallback pointed: never read
     case.tokens_file(token, path=real)
     shim = _decoy_shim(case.tmp, real, home=case.tmp / "decoy-home")
     env = case.env()
@@ -615,7 +614,7 @@ def test_the_verifier_makes_no_call_unless_the_shim_reads_exactly_the_tokens_fil
         case.tokens_file(token, path=Path(expected))
     elif shim_reads == "its default (no FIELD_TOKENS_FILE)":
         del env["FIELD_TOKENS_FILE"]
-        expected = str(real)
+        expected = str(case.tmp / "decoy-home" / "tokens-gb10.json")   # the $HOME default only (B14)
     elif shim_reads == "the same file spelled in another case":  # the runbook promises an exact comparison
         env["FIELD_TOKENS_FILE"] = expected = str(case.store).swapcase()
         assert Path(expected).is_file()  # one file on Windows, two spellings
@@ -770,7 +769,7 @@ def test_the_runbook_task_table_names_granted_non_escalating_actions_one_day_apa
     assert sorted(int(r[2]) for r in rows) == [9, 10]  # first due runs one day apart, both before 2026-10-01
     minutes = sorted(int(r[3][:2]) * 60 + int(r[3][3:]) for r in rows)
     assert minutes[1] - minutes[0] >= 15
-    assert secrets == ["", ' --secret-file "C:\\Users\\donal\\.field-local\\gb10-estate-secret"']
+    assert secrets == ["", ' --secret-file "$HOME\\.field-local\\gb10-estate-secret"']
     for placeholder in ("{agent}", "{action}", "{within}", "{secret}", "{new_token}"):
         assert placeholder in template
 
