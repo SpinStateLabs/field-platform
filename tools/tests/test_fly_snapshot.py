@@ -355,3 +355,22 @@ def test_a_second_json_value_on_a_later_line_is_refused():
 def test_input_with_no_json_exits_2_even_with_an_id():
     for text in ("", "no json here", "Done.\n[not json\n"):
         assert run(["check", "--id", "vs_a"] + NOWARG, text)[0] == 2, text
+
+
+def test_a_bracket_line_two_or_more_lines_after_the_value_is_refused():
+    # review C1 (mutant 9): the "second value" check must look at EVERY later line, not only the next one
+    nl = chr(10)
+    for gap in (1, 2, 3, 5):
+        text = LIST + nl + ("log line" + nl) * (gap - 1) + "[1]"
+        assert run(["check", "--id", "vs_old"] + NOWARG, text)[0] == 2, gap
+    with pytest.raises(ValueError):
+        fs.load_json(LIST + nl + "log" + nl + "log" + nl + '{"id": "x"}')
+
+
+def test_crlf_line_endings_are_accepted_around_a_pretty_value_and_trailing_log_lines():
+    # review C1 (mutant 10): a carriage return after the value is whitespace, not "text after the value"
+    cr = chr(13) + chr(10)
+    pretty = json.dumps(json.loads(LIST), indent=2).replace(chr(10), cr)
+    assert run(["check", "--id", "vs_old"] + NOWARG, "Updating..." + cr + pretty + cr + "done" + cr)[0] == 0
+    assert run(["check", "--id", "vs_old"] + NOWARG, LIST + cr)[0] == 0
+    assert fs.load_json(LIST + cr + "INFO done" + cr) is not None
