@@ -25,8 +25,10 @@ def one_line(value: Any, limit: int = ONE_LINE_MAX) -> str:
     table cell edge) becomes a space, runs of whitespace collapse, and the result is capped at ``limit`` characters
     (ending in an ellipsis when it was cut). So it cannot start a new line, heading, table row, ``Signer:`` line or
     signature block: a forged ``\n\n## Signature\n\nSigner: Ann`` stays inside the one line it was printed on.
-    It does NOT escape inline Markdown (``**bold**``, links, ``![image](...)``) or raw inline HTML (``<details>``,
-    ``<!-- -->``, ``<script>``): a renderer that reads those as markup still renders them, inside that one line."""
+    It does NOT escape inline Markdown (``**bold**``, links, ``![image](...)``) or raw inline HTML: the text stays on
+    one line of the Markdown, but a renderer that passes raw HTML still reads it as markup, and an unclosed raw-text
+    tag (``<script>``, ``<style>``, ``<textarea>``, ``<title>``, ``<xmp>``, ``<plaintext>``) hides EVERYTHING after it
+    in the rendered page, the signature block included."""
     text = "".join(
         " " if (c == "|" or unicodedata.category(c) in REFUSED_CATEGORIES) else c for c in str(value)
     )
