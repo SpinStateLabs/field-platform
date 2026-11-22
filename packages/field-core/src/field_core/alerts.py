@@ -81,12 +81,14 @@ ENV_TOKEN_FILE = "FIELD_NTFY_TOKEN_FILE"
 ENV_TOKEN = "FIELD_NTFY_TOKEN"
 DEFAULT_BASE_URL = "https://ntfy.sh"
 
+#: Every pattern below ends in ``\Z`` (end of string), not ``$``: ``$`` also matches before a final newline, so
+#: ``'prod\n'`` would pass as an estate and reach the alert body line by line.
 #: ntfy topic names: letters, numbers, underscores and dashes, up to 64
 #: characters (https://docs.ntfy.sh/publish/#picking-a-topic).
-TOPIC_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+TOPIC_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}\Z")
 #: without an access token the topic is the only secret: refuse short ones.
 MIN_TOPIC_LEN_WITHOUT_TOKEN = 20
-_TOKEN_RE = re.compile(r"^[A-Za-z0-9._~+/=-]{8,256}$")
+_TOKEN_RE = re.compile(r"^[A-Za-z0-9._~+/=-]{8,256}\Z")
 MAX_CONFIG_FILE_BYTES = 4096
 _LOOPBACK_NAMES = {"localhost"}
 
@@ -101,9 +103,9 @@ MAX_BODY_BYTES = 1024
 
 WITHHELD = "(withheld: failed content check)"
 _FIELD_RE = {
-    "estate": re.compile(r"^[A-Za-z0-9._@:-]{1,64}$"),
-    "subject": re.compile(r"^[A-Za-z0-9._@:-]{1,64}$"),
-    "detail": re.compile(r"^[ -~]{1,200}$"),
+    "estate": re.compile(r"^[A-Za-z0-9._@:-]{1,64}\Z"),
+    "subject": re.compile(r"^[A-Za-z0-9._@:-]{1,64}\Z"),
+    "detail": re.compile(r"^[ -~]{1,200}\Z"),
 }
 
 # content_problem patterns
