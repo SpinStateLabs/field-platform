@@ -236,13 +236,45 @@ def _l01_gaps(payload):
     return [g for g in payload["gaps"] if g["control_id"] == "FC-L-01"]
 
 
-def test_pack_unavailable_ledger_is_not_collected_with_no_gap():
+def test_pack_unavailable_ledger_is_not_collected_and_a_not_checked_gap():
+    """don.reviewer C1 (rebuild of PR 1093), flipped from the old no-gap pin (his mutant M8): not checked is not
+    failed (evidenced stays None, no 'not-evidenced' gap), but it is a gap of its own kind, in the JSON and the
+    Markdown alike."""
+    from compliance_crosswalk.evidence_pack import LEDGER_NOT_CHECKED_GAP
+
     md, payload = _pack(EvidenceSources(registry_record={"owner": "x"}, ledger_verify=None))
-    assert _l01_gaps(payload) == []
+    assert _l01_gaps(payload) == [{"control_id": "FC-L-01", "kind": "not-checked", "detail": LEDGER_NOT_CHECKED_GAP}]
     row = next(c for c in payload["controls"] if c["control_id"] == "FC-L-01")
     assert row["evidenced"] is None
     line = next(ln for ln in md.splitlines() if ln.startswith("| FC-L-01 "))
     assert line.rstrip().endswith("| not-collected |")
+    assert f"- FC-L-01 — not checked: {LEDGER_NOT_CHECKED_GAP}" in md.splitlines()
+
+
+_FULL = dict(
+    registry_record={"agent_id": "a", "owner": "AP Team Lead"},
+    ledger_event_types={"kill.drill.complete": 1, "delegation.revoke": 1},
+    tokens=[{"token_id": "t", "revoked": True}],
+    governor_cap={"agent_id": "a", "limit_cents": 50000},
+)
+
+
+def test_an_unanswered_verify_can_never_head_the_pack_no_gaps():
+    """A provoked 503 on /verify must not read like a verified chain: with every other artifact the same, the
+    unanswered run has exactly one more gap (FC-L-01 not-checked) and never the 'No gaps recorded' headline."""
+    md_ok, ok = _pack(EvidenceSources(ledger_verify={"ok": True, "length": 10}, **_FULL))
+    md_un, un = _pack(EvidenceSources(ledger_verify=None, **_FULL))
+    assert ("No gaps recorded" in md_ok) == (ok["gaps"] == [])      # the headline follows the gaps list
+    assert "No gaps recorded" not in md_un
+    extra = [g for g in un["gaps"] if g not in ok["gaps"]]
+    assert [(g["control_id"], g["kind"]) for g in extra] == [("FC-L-01", "not-checked")]
+    assert [g for g in ok["gaps"] if g not in un["gaps"]] == []
+
+
+def test_an_offline_pack_has_no_not_checked_gap():
+    # nothing collected at all (manifest-only): FC-L-01 is "evidence not collected", as before, not "not checked"
+    _, payload = _pack(None)
+    assert not [g for g in payload["gaps"] if g["kind"] == "not-checked"]
 
 
 def test_pack_failed_and_answered_not_verified_ledger_are_gaps():

@@ -104,6 +104,9 @@ def _has_placeholder(value: Any) -> bool:
 # declaration-only and must never read as estate-evidenced.
 GATE_CONTROL_IDS = ("FC-E-04", "FC-E-05", "FC-E-06")
 GATE_NOTE = "declared, enforced locally by the Claude Code gate, no estate evidence"
+#: FC-L-01 when evidence was collected but the ledger gave no /verify answer (503 busy, unreachable): not checked,
+#: neither verified nor failed. The evidence pack keys its "not-checked" gap on this exact detail.
+LEDGER_VERIFY_NOT_CHECKED = "ledger verify unavailable (busy or unreachable) - chain not verified; retry"
 GATE_NOTE_UNDECLARED = ("not declared in the manifest, so the Claude Code gate enforces nothing for this key "
                         "(a manifest that is not governed by the gate legitimately omits it); no estate evidence")
 
@@ -172,9 +175,11 @@ def _evidenced(
         return ok, "human owner on registry record" if ok else "no owner on record"
     if control.control_id == "FC-L-01":
         if sources.ledger_verify is None:
-            # No /verify answer (503 busy, refused, unreachable): the chain was not checked, which
-            # is not a failed check. Unevidenced (None), not False, so no evidence-pack gap.
-            return None, "ledger verify unavailable (busy or unreachable) - chain not verified; retry"
+            # No /verify answer (503 busy, refused, unreachable): the chain was not checked, which is
+            # not a failed check, so unevidenced (None), not False. It is still never silent: the
+            # evidence pack records a "not-checked" gap for it (don.reviewer C1 on the rebuild of PR
+            # 1093: the 503 can be provoked, so "no gaps" must never be the headline then).
+            return None, LEDGER_VERIFY_NOT_CHECKED
         verify = sources.ledger_verify
         if "ok" not in verify and "http_status" in verify:
             # The ledger answered (not 503) but gave no usable verdict: not verified, a gap.
