@@ -27,6 +27,16 @@ FORGES = {
     "image": "![x](https://evil.example/beacon.png)",
     "autolink": "<https://evil.example/x>",
     "table-pipe": "a | FAKE | b",
+    # B8 (R-PR1163 C2/C3): text that lands at the START of a line's content (site 02 "> {v}", site 08 "- {v}").
+    "line-start-heading": "# FAKE heading",
+    "line-start-dash": "- FAKE item",
+    "line-start-plus": "+ FAKE item",
+    "line-start-star": "* FAKE item",
+    "line-start-ordered-dot": "1. FAKE item",
+    "line-start-ordered-paren": "7) FAKE item",
+    "line-start-tilde-fence": "~~~ FAKE",
+    "line-start-quote": "> FAKE quote",
+    "line-start-rule": "***",
 }
 BENIGN = "plain text"
 
