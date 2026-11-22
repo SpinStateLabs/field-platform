@@ -57,6 +57,7 @@ services/kill-switch/src/kill_switch/api.py::create_app._signal_endpoint::reply-
 services/kill-switch/src/kill_switch/api.py::create_app.kill_domain::api-reply = 1 | pending-405 | PR 405 replaces the echoed text with a class name
 services/kill-switch/src/kill_switch/api.py::create_app.liveness::api-reply = 1 | pending-405 | PR 405 replaces the echoed text with a class name
 services/kill-switch/src/kill_switch/api.py::create_app.revive::api-reply = 2 | pending-405 | PR 405 replaces the echoed text with a class name
+services/kill-switch/src/kill_switch/cli.py::_domain_failure_report::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/kill-switch/src/kill_switch/cli.py::_fail::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/kill-switch/src/kill_switch/cli.py::agent::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/kill-switch/src/kill_switch/cli.py::checkin::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
@@ -84,14 +85,12 @@ services/sealed-ledger/src/sealed_ledger/api.py::create_app.place_hold::api-repl
 services/sealed-ledger/src/sealed_ledger/api.py::create_app.release_hold::api-reply = 3 | allow | DEBT: text of an in-process or upstream failure reaches an API caller; decision for the owner
 services/sealed-ledger/src/sealed_ledger/api.py::create_app.retention_apply::api-reply = 4 | allow | DEBT: text of an in-process or upstream failure reaches an API caller; decision for the owner
 services/sealed-ledger/src/sealed_ledger/api.py::create_app.rotate::api-reply = 3 | allow | DEBT: text of an in-process or upstream failure reaches an API caller; decision for the owner
-services/sealed-ledger/src/sealed_ledger/cli.py::_call_served::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/sealed-ledger/src/sealed_ledger/cli.py::_check_caller_signatures::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/sealed-ledger/src/sealed_ledger/cli.py::append::cli = 2 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/sealed-ledger/src/sealed_ledger/cli.py::export::cli = 2 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/sealed-ledger/src/sealed_ledger/cli.py::hold_place::cli = 2 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/sealed-ledger/src/sealed_ledger/cli.py::hold_release::cli = 2 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/sealed-ledger/src/sealed_ledger/cli.py::retention_apply::cli = 3 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
-services/sealed-ledger/src/sealed_ledger/cli.py::retention_check_cmd::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/sealed-ledger/src/sealed_ledger/cli.py::rotate::cli = 2 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/sealed-ledger/src/sealed_ledger/cli.py::verify::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/sealed-ledger/src/sealed_ledger/cli.py::verify_export::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
