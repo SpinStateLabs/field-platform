@@ -453,7 +453,7 @@ def workflow_problems(texts: dict[str, str]) -> list[str]:
 def shipped_workflows(root: Path = ROOT) -> dict[str, str]:
     wf, ac = root / ".github" / "workflows", root / ".github" / "actions"
     files = [*wf.glob("*.yml"), *wf.glob("*.yaml"), *ac.glob("**/action.yml"), *ac.glob("**/action.yaml")]
-    return {str(p.relative_to(root)) if p.parent != wf else p.name: p.read_text(encoding="utf-8") for p in sorted(files)}
+    return {p.relative_to(root).as_posix() if p.parent != wf else p.name: p.read_text(encoding="utf-8") for p in sorted(files)}
 
 
 def _mutate_workflow(old: str, new: str, extra: str = "") -> dict[str, str]:
