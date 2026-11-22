@@ -67,8 +67,8 @@ _LOCK_POLL_SECONDS = 0.05
 
 
 class StaleStoreError(RuntimeError):
-    """The stale-flags file exists but cannot be trusted: unreadable, not UTF-8 JSON, a key given twice, or a value of
-    the wrong type. It is NOT an empty store: an empty store would reopen the evidence-pack gate that a stale flag closes
+    """The stale-flags file exists but cannot be trusted: unreadable, not UTF-8 JSON, a key given twice, a value of
+    the wrong type, a top-level key the store never writes, or no ``active`` key. It is NOT an empty store: an empty store would reopen the evidence-pack gate that a stale flag closes
     (``json.loads`` keeps the LAST of a duplicate key, so a second ``"active"`` used to read as "no flags"). The file is
     never rewritten on this path, so a standing flag stays in it until a NAMED human clears it. The message is fixed:
     the file's name and what is wrong, never the file's text and never the underlying exception's text. A RuntimeError
@@ -173,6 +173,11 @@ def _dump_text(payload: dict) -> str:
     return text
 
 
+# Every top-level key _persist writes (the only writer). An existing file with a key outside this set, or without
+# `active`, is damaged: a misspelled "active" ("Active", "actives") would otherwise read as an empty store.
+_STORE_KEYS = frozenset({"corpus_version", "active", "history", "sources", "last_check"})
+
+
 class StaleStore:
     """Persisted stale flags per framework, with a named-review history.
 
@@ -217,6 +222,10 @@ class StaleStore:
             raise self._damaged(f"not valid UTF-8 JSON: {type(exc).__name__}") from None
         if not isinstance(data, dict):
             raise self._damaged("the top level is not an object")
+        if "active" not in data:
+            raise self._damaged("the 'active' key is missing")
+        if not set(data) <= _STORE_KEYS:
+            raise self._damaged("a top-level key is not one this store writes")
         active, history = data.get("active", {}), data.get("history", [])
         sources, last_check = data.get("sources", {}), data.get("last_check")
         if not isinstance(active, dict) or not all(isinstance(v, dict) for v in active.values()):

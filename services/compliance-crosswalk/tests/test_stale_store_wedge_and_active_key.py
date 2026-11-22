@@ -137,6 +137,13 @@ REFUSED = {
     "top-null": "null",
     "not-json": MARK,
     "truncated": '{"active": {"osfi-e23": ' + MARK,
+    "flag-under-capital-Active": json.dumps({"Active": {"osfi-e23": FLAG}}),
+    "flag-under-actives-beside-empty-active": json.dumps({"active": {}, "actives": {"osfi-e23": FLAG}}),
+    "unknown-key-beside-flag": json.dumps({"active": {"osfi-e23": FLAG}, "extra": MARK}),
+    "no-active-key-only-history": json.dumps({"history": [], "sources": {}, "last_check": None}),
+    "empty-object": "{}",
+    "marker-as-the-key-name": json.dumps({"active": {}, MARK + "-key": 1}),
+    "marker-as-the-only-key-name": json.dumps({MARK + "-only": {"osfi-e23": FLAG}}),
     "empty-file": "",
     "not-utf8": b"\xff\xfe" + MARK.encode(),
 }
@@ -154,7 +161,8 @@ def test_a_duplicate_key_or_wrong_type_is_a_named_refusal_that_never_echoes_the_
     assert exc.value.__cause__ is None and (exc.value.__context__ is None or exc.value.__suppress_context__)
 
 
-@pytest.mark.parametrize("name", ["duplicate-active-last-wins", "duplicate-active-first-empty", "active-empty-list"])
+@pytest.mark.parametrize("name", ["duplicate-active-last-wins", "duplicate-active-first-empty", "active-empty-list",
+                                  "flag-under-capital-Active", "flag-under-actives-beside-empty-active"])
 def test_the_evidence_pack_is_refused_while_the_flag_stands_in_a_refused_file(path, name):
     raw(path, REFUSED[name])
     with pytest.raises(error_type()):
@@ -233,7 +241,7 @@ def test_the_flag_comes_back_only_through_the_named_human_path(path):
 
 
 def test_a_file_without_the_optional_keys_loads_as_before(path):
-    raw(path, json.dumps({"corpus_version": "x"}))
+    raw(path, json.dumps({"corpus_version": "x", "active": {}}))      # the minimal valid file: `active` is required
     store = StaleStore(path)
     assert store.active() == [] and store.last_check() is None and store.sources() == {}
 
@@ -245,7 +253,8 @@ def test_a_valid_store_round_trips_unchanged(path):
 
 
 # --- HTTP and CLI: a fixed refusal, the pack is not generated -------------------------------------------------------------
-@pytest.mark.parametrize("name", ["duplicate-active-last-wins", "active-empty-list"])
+@pytest.mark.parametrize("name", ["duplicate-active-last-wins", "active-empty-list", "flag-under-capital-Active",
+                                  "flag-under-actives-beside-empty-active"])
 def test_http_refuses_with_a_fixed_503_and_generates_no_pack(path, monkeypatch, name):
     raw(path, REFUSED[name])
     monkeypatch.setenv("FIELD_DATA_DIR", str(path.parent))
@@ -258,7 +267,8 @@ def test_http_refuses_with_a_fixed_503_and_generates_no_pack(path, monkeypatch, 
         assert MARK not in r.text and str(path.parent) not in r.text and "osfi-e23" not in r.text
 
 
-@pytest.mark.parametrize("name", ["duplicate-active-last-wins", "active-empty-list"])
+@pytest.mark.parametrize("name", ["duplicate-active-last-wins", "active-empty-list", "flag-under-capital-Active",
+                                  "flag-under-actives-beside-empty-active"])
 def test_cli_refuses_with_one_fixed_line_and_exit_2(path, monkeypatch, name):
     raw(path, REFUSED[name])
     before = path.read_bytes()
@@ -277,3 +287,28 @@ def test_cli_refuses_with_one_fixed_line_and_exit_2(path, monkeypatch, name):
         assert len(out.splitlines()) == 1 and "Traceback" not in out and MARK not in out
         assert res.exception is None or isinstance(res.exception, SystemExit)
     assert path.read_bytes() == before
+
+
+# --- N1 (don.reviewer, review 6009990074): an unknown or misspelled top-level key is a damaged file, not an empty store ---
+def test_every_key_the_writer_emits_is_allowed_and_a_new_store_is_not_refused(path):
+    """The writer's own output must load: the allowed set is whatever _persist writes. A missing file is a new store."""
+    assert not path.exists()
+    StaleStore(path)                                                  # no file: a new store, not a refusal
+    regwatch.run_check(StaleStore(path), FakeFetcher())
+    StaleStore(path).mark("osfi-e23", "r")
+    assert set(json.loads(path.read_text(encoding="utf-8"))) == staleness._STORE_KEYS
+    assert [f["framework"] for f in StaleStore(path).active()] == ["osfi-e23"]
+    raw(path, json.dumps({"active": {}}))                             # the smallest valid existing file
+    assert StaleStore(path).active() == []
+
+
+def test_a_flag_under_a_misspelled_key_gives_http_409_never_200_and_never_a_pack_when_spelled_right(path, monkeypatch):
+    monkeypatch.setenv("FIELD_DATA_DIR", str(path.parent))
+    client = TestClient(create_app(), raise_server_exceptions=False)
+    body = {"signer": SIGNER, "manifest": resolved_manifest()}
+    raw(path, json.dumps({"active": {"osfi-e23": FLAG}}))
+    assert client.post("/pack", json=body).status_code == 409         # the right spelling: the flag blocks
+    for doc in ({"Active": {"osfi-e23": FLAG}}, {"active": {}, "actives": {"osfi-e23": FLAG}}):
+        raw(path, json.dumps(doc))
+        r = client.post("/pack", json=body)
+        assert r.status_code == 503 and "markdown" not in r.text, (doc, r.status_code)
