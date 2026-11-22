@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from field_core.authn import auth_headers
+from field_core.guarded_operator import perimeter_headers
+from conformance_sentinel import headers as _headers
 from field_core.errors import upstream_error
 
 import os
@@ -47,7 +48,7 @@ def check(
             json={"agent_id": agent_id, "action": action, "token_id": token_id,
                   "irreversible": irreversible},
             timeout=15.0,
-            headers=auth_headers(),
+            headers=perimeter_headers(),
         )
     except _HTTP_ERRORS as exc:
         typer.echo(f"error: sentinel unreachable ({type(exc).__name__})", err=True)
@@ -112,7 +113,7 @@ def clauses() -> None:
     """List the clauses the sentinel enforces. Exit 1 on a refusal, an unreachable service or a body of the wrong shape:
     a 401 body must never print as if it were a clause."""
     try:
-        resp = httpx.get(f"{_base()}/clauses", timeout=10.0, headers=auth_headers())
+        resp = httpx.get(f"{_base()}/clauses", timeout=10.0, headers=perimeter_headers())
     except httpx.HTTPError as exc:   # the class only: the text of a transport error can carry the URL
         typer.echo(f"error: sentinel unreachable ({type(exc).__name__})", err=True)
         raise typer.Exit(code=1)
@@ -180,9 +181,9 @@ def score(
 
     registry_base = os.environ.get("FIELD_REGISTRY_URL", "http://127.0.0.1:8001").rstrip("/")
     delegation_base = os.environ.get("FIELD_DELEGATION_URL", "http://127.0.0.1:8003").rstrip("/")
-    sentinel = httpx.Client(base_url=_base(), timeout=15.0, headers=auth_headers())
-    registry = httpx.Client(base_url=registry_base, timeout=10.0, headers=auth_headers())
-    delegation = httpx.Client(base_url=delegation_base, timeout=10.0, headers=auth_headers())
+    sentinel = _headers.sentinel_client(_base())
+    registry = _headers.registry_client(registry_base)
+    delegation = _headers.delegation_client(delegation_base)
 
     try:
         try:
