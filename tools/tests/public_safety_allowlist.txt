@@ -66,6 +66,8 @@ tools/tests/test_estate_probe_heavy_guard.py::private-ipv4 = 7 | fixture: a refu
 tools/tests/test_estate_probe_heavy_guard.py::private-ipv6 = 1 | fixture: a refusal or validation test needs this sample shape; synthetic, never an estate value (added since the guard, C-560 rebuild of PR 851)
 tools/tests/test_gb10_caddy_tls.py::private-ipv4 = 1 | fixture: a TLS test needs a private-range sample address
 tools/tests/test_health_under_load.py::private-ipv4 = 1 | fixture: a refusal or validation test needs this sample shape; synthetic, never an estate value (added since the guard, C-560 rebuild of PR 851)
+tools/tests/test_operator_key_loopback_only_g19.py::private-ipv4 = 21 | fixture: a refusal or validation test needs this sample shape; synthetic, never an estate value (added since the guard, C-560 rebuild of PR 851)
+tools/tests/test_operator_key_loopback_only_g19.py::private-ipv6 = 2 | fixture: a refusal or validation test needs this sample shape; synthetic, never an estate value (added since the guard, C-560 rebuild of PR 851)
 tools/tests/test_stage2_estate_readonly.py::private-ipv4 = 1 | fixture: a refusal or validation test needs this sample shape; synthetic, never an estate value (added since the guard, C-560 rebuild of PR 851)
 # Kind `reword` (C-675 part 2, reviewer C-659 F-C659-2): lines that stated an estate's live setting, image or arming state before the
 # estate-state-phrase class existed. Such an entry may fall as lines are reworded to the design fact or condition and never rise; a new

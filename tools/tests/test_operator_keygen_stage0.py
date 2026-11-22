@@ -105,14 +105,14 @@ def test_check_prints_ids_status_and_fingerprints_only(tmp_path, capsys):
     assert kg.main(["--check", str(f)]) == 0
     cap = capsys.readouterr()
     out = cap.out
-    assert re.search(r"^\s+don\s+active\s+fingerprint " + doc[0]["key_sha256"][:8] + "$", out, re.M)
-    assert re.search(r"^\s+svc-registry\s+revoked\s+fingerprint " + doc[1]["key_sha256"][:8] + "$",
+    assert re.search(r"^\s+don\s+active\s+fingerprint " + doc[0]["key_sha256"][:16] + "$", out, re.M)
+    assert re.search(r"^\s+svc-registry\s+revoked\s+fingerprint " + doc[1]["key_sha256"][:16] + "$",
                      out, re.M)
     assert "rows: 2 (active 1, revoked 1)" in out
     assert hashlib.sha256(f.read_bytes()).hexdigest()[:16] in out
     assert not HEX64.search(out + cap.err)             # no full hash anywhere
     for r in doc:
-        assert r["key_sha256"][8:16] not in out         # nothing beyond the fingerprint
+        assert r["key_sha256"][16:24] not in out         # nothing beyond the fingerprint
     assert "fok_" not in out                           # --check makes no key
     assert "Don Hagell" not in out and "registry." not in out and "ledger_attribute" not in out
 
