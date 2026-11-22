@@ -90,7 +90,7 @@ def test_a_failed_transition_keeps_exit_1_even_when_the_write_fails(tmp_path):
 
 
 def test_sweep_with_a_markdown_path_that_is_a_directory_prints_the_json_and_exits_4(tmp_path, monkeypatch):
-    report = SimpleNamespace(expiring=[], reattestation_due=[], orphans=[], retention_policy=None,
+    report = SimpleNamespace(expiring=[], reattestation_due=[], orphans=[], unreadable_timestamps=[], retention_policy=None,
                              witness=None, model_dump_json=lambda indent=None: '{"sweep": "json"}')
 
     class SweepEngine:

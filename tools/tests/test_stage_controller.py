@@ -398,10 +398,13 @@ def test_the_go_sentence_is_never_recorded_only_its_length_and_a_hash_prefix(tmp
 
 
 def test_the_go_sentence_is_not_taken_from_the_environment(tmp_path, monkeypatch):
+    # With a build sha, so a live run gets past build_sha_required (rebuild of PR 840): the refusal must be the go
+    # sentence's own, or a controller that took no go sentence at all would pass this test (R-STACK, mutant G25-2).
     monkeypatch.setenv("FIELD_GO_SENTENCE", GO)
-    ctl = sc.Controller(_records(tmp_path, gates=("G18", "G22")), Driver())
-    with pytest.raises(sc.Refused):
+    ctl = sc.Controller(_records(tmp_path, gates=("G18", "G22")), Driver(), estate="gb10", env={}, build_sha="a" * 40)
+    with pytest.raises(sc.Refused) as ei:
         ctl.run(2, live=True)
+    assert ei.value.reason == "go_sentence_missing"
 
 
 # ------------------------------------------------------------------------ records
@@ -794,6 +797,13 @@ def test_a_stage_three_abort_or_rollback_makes_stage_two_not_clean(later, tmp_pa
         sc.Controller(records, Driver(), estate="gb10", env=_env(ntfy)).run(3, go_sentence=GO)
     assert ei.value.reason == "stage_2_not_clean"
     records.append("stage_done", stage=2)                       # Stage 2 re-armed and recorded: clean again
+    if later != "rolled_back":
+        # Stage 3's own run is still unresolved (RT-HARD-3 on main: an abort with no terminal row is in progress, a
+        # failed rollback waits for a hand): Stage 2 being clean does not lift that, `record ack-rollback --stage 3` does.
+        with pytest.raises(sc.Refused) as ei:
+            sc.Controller(records, Driver(), estate="gb10", env=_env(ntfy)).run(3, go_sentence=GO)
+        assert ei.value.reason == ("stage_in_progress" if later == "abort" else "rollback_failed_unresolved")
+        records.append("rollback_ack", stage=3)
     assert sc.Controller(records, Driver(), estate="gb10", env=_env(ntfy)).run(3, go_sentence=GO).status == "dry-run"
 
 
