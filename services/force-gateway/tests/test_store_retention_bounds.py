@@ -1,43 +1,16 @@
-"""S6-22 (the part that is safe to ship): ``FORCE_TELEMETRY_RETAIN`` and an explicit ``retain`` are capped at ``MAX_RETAIN``.
+"""S6-22, what is left of PR 721 on current main (test-only; reviewer-sub-F BLOCK on #1245, controller ruling): main's later
+pinned behaviour wins (tests/test_store_retain.py): ``FORCE_TELEMETRY_RETAIN`` is used as read (no upper cap, 0 and
+negatives clamp to 1) and an explicit ``retain`` is kept as given, so PR 721's ``MAX_RETAIN`` cap is NOT carried.
 
-NOT shipped, and why (pinned below as a characterisation): pruning ``drift_scores`` as the card specified cannot be done by
-deleting old rows alone. ``DriftTracker`` is rebuilt at start by replaying every row, and its baseline, completed windows,
-``alerts_fired`` and ``alert_active`` all depend on the WHOLE history since the last judge change. A tracker replayed from
-only the newest rows has a different baseline and loses an active alert."""
+What is carried is PR 721's characterisation of why ``drift_scores`` is not pruned: deleting old rows alone cannot do it.
+``DriftTracker`` is rebuilt at start by replaying every row, and its baseline, completed windows, ``alerts_fired`` and
+``alert_active`` all depend on the WHOLE history since the last judge change. A tracker replayed from only the newest rows
+has a different baseline and loses an active alert."""
 
 from __future__ import annotations
 
-import pytest
-
 from force_gateway.drift import DriftTracker
-from force_gateway.store import DEFAULT_RETAIN, MAX_RETAIN, GatewayStore, checked_retain, resolve_retain
-
-ENV = "FORCE_TELEMETRY_RETAIN"
-
-
-def test_the_cap_is_stated():
-    assert MAX_RETAIN == 1_000_000 and DEFAULT_RETAIN < MAX_RETAIN
-
-
-@pytest.mark.parametrize("raw,expect", [("99999999999999999999", MAX_RETAIN), ("1000001", MAX_RETAIN),
-                                        ("1000000", 1_000_000), ("20000", 20_000), ("1", 1), ("0", 1), ("-5", 1),
-                                        ("-99999999999999999999", 1), (" 7 ", 7)])
-def test_resolve_retain_is_one_to_the_cap(monkeypatch, raw, expect):
-    monkeypatch.setenv(ENV, raw)
-    assert resolve_retain() == expect
-
-
-@pytest.mark.parametrize("raw", ["", "abc", "1.5", "1e3", "inf", "nan"])
-def test_junk_is_the_default(monkeypatch, raw):
-    monkeypatch.setenv(ENV, raw)
-    assert resolve_retain() == DEFAULT_RETAIN
-
-
-@pytest.mark.parametrize("n,expect", [(10**30, MAX_RETAIN), (0, 1), (-1, 1), (500, 500), (MAX_RETAIN + 1, MAX_RETAIN)])
-def test_the_explicit_retain_gets_the_same_check(tmp_path, n, expect):
-    s = GatewayStore(tmp_path / "t.sqlite3", retain=n)
-    assert s.retain == expect == checked_retain(n)
-    s.close()
+from force_gateway.store import GatewayStore
 
 
 def test_the_store_still_prunes_to_a_small_retain(tmp_path):
