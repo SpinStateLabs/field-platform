@@ -147,24 +147,19 @@ def s_pivot(s: Session, window_s: float) -> ClauseHit | None:
     a payload within the window (the A6 'search, then tamper' pattern)."""
     refs: list[LineRef] = []
     pairs = 0
-    # (path, parameter) -> [latest benign use, latest benign use whose values differ
-    # from the latest one's], as (order, values, request); `values` is every value of
-    # the name in that request, in order (param_values, S10-31). Each payload request
-    # is answered in O(parameters): the latest use is a hit when some value of the name
-    # in the payload request is absent from its values, else the older, differing one
-    # is tried (it can be when the payload request also repeats a benign value).
-    benign: dict[tuple[str, str], list] = {}
+    # (path, parameter) -> the latest benign use, as (order, values, request); `values` is
+    # the SET of every value of the name in that request (param_values keeps repeats,
+    # S10-31). A payload request is a hit on the latest use when some value of a tampered
+    # name is absent from that set: O(1) per value, so a request is answered in O(its own
+    # values), never O(benign values x payload values) however many repeats either holds
+    # (rebuild of PR 964, don.reviewer C1). Only the latest use is kept: a benign request
+    # is not hostile, so it never holds a payload value, and the latest use of the name is
+    # always a hit (the older-use fallback of main's index could not fire; reviewer N1).
+    benign: dict[tuple[str, str], tuple] = {}
     for n, r in enumerate(s.requests):
         if not r.is_hostile:
             for k, v in param_values(r.query).items():
-                slot = benign.get((r.path, k))
-                if slot is None:
-                    benign[(r.path, k)] = [(n, v, r), None]
-                elif slot[0][1] == v:
-                    slot[0] = (n, v, r)
-                else:
-                    slot[1] = slot[0]
-                    slot[0] = (n, v, r)
+                benign[(r.path, k)] = (n, frozenset(v), r)
             continue
         if not r.is_payload:
             continue
@@ -174,14 +169,12 @@ def s_pivot(s: Session, window_s: float) -> ClauseHit | None:
         r_vals = param_values(r.query)
         best = None
         for k in tampered:
-            slot = benign.get((r.path, k))
-            if slot is None:
+            cand = benign.get((r.path, k))
+            if cand is None:
                 continue
             # S10-31: a hit when ANY value of the name in the payload request is absent from ALL the values of that
-            # benign use (`q=<payload>&q=cat` against a benign `q=cat` is a pivot); else the older, differing use
-            hostile_vals = r_vals.get(k, ())
-            cand = next((c for c in slot if c is not None and any(v not in c[1] for v in hostile_vals)), None)
-            if cand is not None and (best is None or cand[0] > best[0]):
+            # benign use (`q=<payload>&q=cat` against a benign `q=cat` is a pivot); set membership, never a list scan
+            if any(v not in cand[1] for v in r_vals.get(k, ())) and (best is None or cand[0] > best[0]):
                 best = cand
         if best is not None and (r.ts - best[2].ts).total_seconds() <= window_s:
             refs.extend([best[2].ref, r.ref])

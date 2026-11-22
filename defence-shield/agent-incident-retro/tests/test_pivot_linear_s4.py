@@ -147,11 +147,36 @@ def test_a_reordered_repeat_with_the_payload_elsewhere_does_not_fire_on_q():
     assert _same([req(1, 0, "/s", "q=a&q=b"), req(2, 30, "/s", f"q=b&q=a&p={SQLI}")]) is None
 
 
-def test_an_unchanged_repeated_benign_value_set_keeps_one_slot_and_cites_the_newest_use():
+def test_an_unchanged_repeated_benign_value_set_cites_the_newest_use():
     import agent_incident_retro.clauses as c
 
     reqs = [req(1, 0, "/s", "q=a&q=b"), req(2, 10, "/s", "q=a&q=b"), req(3, 30, "/s", f"q={SQLI}&q=a")]
     got = _same(reqs)
     assert got is not None and [r.line for r in got.lines] == [2, 3]
-    # the same value set twice refreshes the latest-use slot; it never becomes the "older, differing" one
+    # the index keeps the latest benign use per (path, name); every value of a repeated name is kept
     assert c.param_values("q=a&q=b") == {"q": ["a", "b"]}
+
+
+def test_pivot_value_comparisons_do_not_grow_with_benign_times_payload_repeats(monkeypatch):
+    """don.reviewer C1 on the rebuild of PR 964: a benign request and a payload request each repeating one name N times
+    must not cost N x N value comparisons (a list scan per payload value); the benign values are a set. A work count,
+    not a wall clock: every value is a str subclass that counts its == calls."""
+    import agent_incident_retro.clauses as c
+
+    eq_calls = {"n": 0}
+
+    class Counted(str):
+        __hash__ = str.__hash__
+
+        def __eq__(self, other):
+            eq_calls["n"] += 1
+            return str.__eq__(self, other)
+
+    real = c.param_values
+    monkeypatch.setattr(c, "param_values", lambda q: {k: [Counted(v) for v in vs] for k, vs in real(q).items()})
+    n = 2000
+    benign = req(1, 0, "/s", "&".join(f"q=v{i}" for i in range(n)))
+    # every benign value first, the payload last: a list scan finds each of them after i comparisons
+    payload = req(2, 10, "/s", "&".join([f"q=v{i}" for i in range(n)] + [f"q={SQLI}"]))
+    assert s_pivot(sess([benign, payload]), 300.0) is not None
+    assert eq_calls["n"] <= 10 * n, eq_calls["n"]  # the list scan made about n * n / 2 (2 000 000) comparisons
