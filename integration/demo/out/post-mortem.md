@@ -6,7 +6,7 @@
 ## Agent
 - **invoicing-agent** — Invoice Drafting Copilot
 - Owner: AP Team Lead (demo) · Domain: finance · Status: active
-- Manifest: `C:/Users/donal/My Drive/Spin State Labs/Projects/FORCE-FIELD/field-platform/integration/demo/manifests/invoicing-agent.yaml`
+- Manifest: `<repo>/integration/demo/manifests/invoicing-agent.yaml`
 
 ## Who granted authority
 | Token | Granted by | Scope | Issued | Expires | Revoked |
