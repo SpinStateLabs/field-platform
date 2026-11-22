@@ -121,7 +121,7 @@ def _error_text(status: int, data: Any) -> str:
 
 #: What the page reads of a failed drill (console.html ``drillReportOf``): numbers, a boolean and a short status. The
 #: report's free-text ``note`` and ``endpoint_result`` are not relayed (C-651 F-C651-3).
-DRILL_REPORT_FIELDS = ("agent_id", "kill_confirmed_ms", "heartbeat_confirmed_ms", "restored", "restored_status", "total_ms")
+DRILL_REPORT_FIELDS = ("agent_id", "kill_confirmed_ms", "heartbeat_confirmed_ms", "restored", "restored_status", "restore_skipped", "total_ms")
 
 
 def _drill_report_only(status: int, data: Any) -> Any:
@@ -833,8 +833,14 @@ def create_app(
 
     @app.post("/api/agents/{agent_id}/drill")
     def drill(agent_id: str, action: OperatorAction, request: Request) -> Any:
-        return _proxy(app.state.killswitch, f"/drill/{_seg(agent_id)}",
+        data = _proxy(app.state.killswitch, f"/drill/{_seg(agent_id)}",
                       action.model_dump(), failure=_drill_report_only, **_operator_kw(request))
+        failed = _drill_not_restored(data)
+        if failed:
+            # fail closed: a 2xx drill answer that does not say restored=true (an older kill-switch, a shape this
+            # console does not know) is an error on the page, never a success
+            raise HTTPException(502, detail=failed)
+        return data
 
     @app.post("/api/agents/bulk")
     def bulk(req: BulkAction, request: Request) -> dict:

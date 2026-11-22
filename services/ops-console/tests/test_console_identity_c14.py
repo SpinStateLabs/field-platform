@@ -52,7 +52,7 @@ def wire(monkeypatch):
         seen.append(request)
         if request.url.path == "/agents":
             return httpx.Response(200, json=[{"agent_id": "a1", "domain": "finance", "status": "active"}])
-        return httpx.Response(200, json={"ok": True, "killed": [], "already_killed": [], "results": []})
+        return httpx.Response(200, json={"ok": True, "restored": True, "killed": [], "already_killed": [], "results": []})
 
     real = httpx.Client
 

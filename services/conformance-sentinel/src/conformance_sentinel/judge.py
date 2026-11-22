@@ -34,6 +34,10 @@ JUDGE_MODEL_DEFAULT = "claude-sonnet-5"
 # treat as adversarial padding.
 MAX_ACTION_CHARS = 500
 
+#: The literal markers AnthropicJudgeClient.judge wraps the untrusted action in. Text that carries either one could
+#: close the data block and write instructions after it (S5-14); inner whitespace and case are tolerated.
+_DELIMITER = re.compile(r"<\s*<\s*<\s*ACTION\s*_?\s*(START|END)\s*>\s*>\s*>", re.IGNORECASE)
+
 _SCREEN_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("ignore-previous", re.compile(
         r"(ignore|disregard|forget)\s+(all\s+|any\s+)?(previous|prior|above|earlier)",
@@ -48,6 +52,7 @@ _SCREEN_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("verdict-coercion", re.compile(
         r"(respond|answer|reply|output)\s+.{0,30}(conforming|allow|json)",
         re.IGNORECASE)),
+    ("delimiter-forgery", _DELIMITER),
 ]
 
 
@@ -143,6 +148,10 @@ class AnthropicJudgeClient:  # pragma: no cover — Declared-untested without ke
             raise JudgeError(str(exc)) from None
 
     def judge(self, action: str, scope: list[str], agent_id: str) -> JudgeVerdict:
+        # S5-14: nothing interpolated into the prompt may carry the data-block markers (the action is screened by
+        # the engine, but scope entries and the agent id are not): refuse before any upstream call; the engine escalates
+        if any(_DELIMITER.search(t) for t in (action, agent_id, *scope)):
+            raise JudgeError("judge input carries the prompt's own delimiters — refused before any model call")
         entries = "\n".join(f"  {i}. {s}" for i, s in enumerate(scope, 1))
         user = (
             f"DELEGATED SCOPE (agent '{agent_id}'):\n{entries}\n\n"
