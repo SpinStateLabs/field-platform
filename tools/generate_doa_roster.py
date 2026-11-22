@@ -77,15 +77,14 @@ from pathlib import Path, PurePosixPath
 
 import yaml
 
-from delegation_authority.doa import DoaRoster, DoaRosterError, GrantorRow, load_roster
+from delegation_authority.doa import MAX_TTL_DAYS, DoaRoster, DoaRosterError, GrantorRow, load_roster
 from field_core.clients import resolve_manifest_detail
 from field_core.delegation import DelegationToken
 
 EXIT_WRITTEN = 0
 EXIT_REFUSED = 2
-#: --max-ttl-days bound (about ten years). Well inside the service's own limit (a mint's timedelta overflows far
-#: above it), so every roster this tool writes also loads and mints.
-MAX_TTL_DAYS = 3650
+# --max-ttl-days is bounded by the service's own limit (delegation_authority.doa.MAX_TTL_DAYS, imported above, not
+# a second literal), so every roster this tool writes also loads and mints.
 
 
 #: Phase G job identities (design v0.4 section 2.2.1) are named `job-<purpose>-<host>`.

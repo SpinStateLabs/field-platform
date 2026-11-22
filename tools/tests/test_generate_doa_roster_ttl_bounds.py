@@ -18,6 +18,7 @@ TOOLS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOLS))
 
 import generate_doa_roster as gen  # noqa: E402
+from delegation_authority import doa  # noqa: E402
 from delegation_authority.doa import load_roster  # noqa: E402
 from field_core.templates_api import template_data  # noqa: E402
 
@@ -48,17 +49,17 @@ def _run(tmp_path: Path, *extra: str) -> tuple[int, str, Path]:
     return code, se.getvalue(), out
 
 
-@pytest.mark.parametrize("days", ["0", "-1", "3651", str(10**12)])
-def test_a_value_outside_1_to_3650_is_refused_and_nothing_is_written(tmp_path, days):
+@pytest.mark.parametrize("days", ["0", "-1", str(doa.MAX_TTL_DAYS + 1), str(10**12)])
+def test_a_value_outside_the_services_bound_is_refused_and_nothing_is_written(tmp_path, days):
     code, err, out = _run(tmp_path, "--max-ttl-days", days)
     assert code == 2
-    assert err.startswith("REFUSED (nothing written)") and "--max-ttl-days" in err and "3650" in err
+    assert err.startswith("REFUSED (nothing written)") and "--max-ttl-days" in err and str(doa.MAX_TTL_DAYS) in err
     assert not out.exists() and not out.parent.exists()
-    fixed = "--max-ttl-days must be an integer from 1 to 3650"
+    fixed = f"--max-ttl-days must be an integer from 1 to {doa.MAX_TTL_DAYS}"
     assert days not in err.replace(fixed, "") and str(tmp_path) not in err   # neither the value nor any path
 
 
-@pytest.mark.parametrize("days", [1, 3650])
+@pytest.mark.parametrize("days", [1, doa.MAX_TTL_DAYS])
 def test_the_bounds_themselves_write_a_roster_the_service_loads(tmp_path, days):
     code, err, out = _run(tmp_path, "--max-ttl-days", str(days))
     assert code == 0, err
@@ -82,4 +83,4 @@ def test_the_bound_is_checked_before_any_input_is_read(tmp_path):
 
 
 def test_the_generator_bound_is_inside_the_services_own_bound():
-    assert gen.MAX_TTL_DAYS == 3650 and 1 <= gen.MAX_TTL_DAYS <= 999_999_999
+    assert gen.MAX_TTL_DAYS <= doa.MAX_TTL_DAYS
