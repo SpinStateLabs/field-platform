@@ -12,14 +12,16 @@ from __future__ import annotations
 from field_core.authn import auth_headers
 
 import hashlib
+import json
 import logging
 import math
+import re
 import threading
 from datetime import datetime, timezone
 from decimal import ROUND_FLOOR, Decimal, InvalidOperation
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from field_core.clients import (
     AgentNotRegisteredError,
@@ -40,18 +42,44 @@ from conformance_sentinel.mode import SentinelMode
 from conformance_sentinel.routing import needs_semantic_judgment
 
 
+# S5-13: caps on what a caller can put into every verdict's ledger payload and the governor /spend body.
+AGENT_ID_MAX = 200
+TOKEN_ID_MAX = 200
+ACTION_MAX = 2000
+CONTEXT_MAX_KEYS = 50
+CONTEXT_MAX_BYTES = 16 * 1024
+
+#: The registry's own id pattern (agent_registry.models). An id outside it cannot be registered, so it is answered as
+#: R.unregistered WITHOUT a registry call: RegistryClient builds f"{base}/agents/{agent_id}" unquoted, and an id like
+#: 'x/../health' or 'a?b=1' would otherwise address another route.
+_REGISTRY_ID = re.compile(r"[a-z0-9][a-z0-9._-]*")
+
+
 class CheckRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    agent_id: str = Field(min_length=1)
-    action: str = Field(min_length=1, description="Proposed action, e.g. 'draft invoices'")
+    agent_id: str = Field(min_length=1, max_length=AGENT_ID_MAX)
+    action: str = Field(min_length=1, max_length=ACTION_MAX, description="Proposed action, e.g. 'draft invoices'")
     token_id: str | None = Field(
-        default=None, description="Delegation token presented by the agent"
+        default=None, max_length=TOKEN_ID_MAX, description="Delegation token presented by the agent"
     )
     irreversible: bool = Field(
         default=False, description="Caller marks one-way actions (send, delete, pay)"
     )
     context: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("context")
+    @classmethod
+    def _context_is_bounded(cls, v: dict[str, Any]) -> dict[str, Any]:
+        if len(v) > CONTEXT_MAX_KEYS:
+            raise ValueError(f"context holds more than {CONTEXT_MAX_KEYS} keys")
+        try:
+            size = len(json.dumps(v, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+        except (TypeError, ValueError, RecursionError):
+            raise ValueError("context is not plain JSON") from None
+        if size > CONTEXT_MAX_BYTES:
+            raise ValueError(f"context is larger than {CONTEXT_MAX_BYTES} bytes")
+        return v
 
 
 def _token_context(token_id: str | None) -> dict[str, Any]:
@@ -73,6 +101,27 @@ def _caller_payload(req: CheckRequest) -> dict[str, Any]:
     return {"caller_context": ctx} if ctx else {}
 
 
+class UpstreamAnswerError(ConnectionError):
+    """An upstream answered with a status or a body shape this client refuses. The text is built HERE from a service
+    name and a status code or a fixed body-shape phrase (never the body), so a verdict reason may show it; it stays a
+    ConnectionError for every caller."""
+
+
+def _why(exc: BaseException) -> str:
+    """What a verdict reason may say about a failed call: the exception CLASS, never its text (an httpx error's text
+    carries the URL, userinfo included, and this reason is returned by POST /check and ledgered). The exceptions whose
+    text is built in this service from a name and a status code (the judge's JudgeError, UpstreamAnswerError) keep it."""
+    from conformance_sentinel.judge import JudgeError
+
+    if isinstance(exc, (JudgeError, UpstreamAnswerError)):
+        return str(exc)
+    if isinstance(exc, RegistryUnreachableError) and exc.__cause__ is None:
+        # field-core builds the status and body-shape texts of this error itself ("registry returned 503") with no
+        # cause; its transport path is `RegistryUnreachableError(str(exc)) from exc`, whose text can carry the URL
+        return str(exc)
+    return type(exc).__name__
+
+
 #: The states the spend-governor's /status can answer (spend_governor.core.SpendState). Anything else, or no `state`, is no
 #: answer: a body that is an object but names none of them used to fall through to ALLOW (R-PR606 C1).
 _SPEND_STATES = ("OK", "ESCALATE", "THROTTLED", "BLOCK")
@@ -92,9 +141,9 @@ def _object_body(resp, what: str) -> dict[str, Any]:
     try:
         body = resp.json()
     except Exception:
-        raise ConnectionError(f"{what} answered with a body that is not JSON") from None
+        raise UpstreamAnswerError(f"{what} answered with a body that is not JSON") from None
     if not isinstance(body, dict):
-        raise ConnectionError(f"{what} answered with an unusable body (not an object)")
+        raise UpstreamAnswerError(f"{what} answered with an unusable body (not an object)")
     return body
 
 
@@ -126,7 +175,7 @@ class SpendStatusClient:
         if resp.status_code == 404:
             return None
         if resp.status_code != 200:
-            raise ConnectionError(f"governor returned {resp.status_code}")
+            raise UpstreamAnswerError(f"governor returned {resp.status_code}")
         return _object_body(resp, "governor /status")
 
     def record_action(self, agent_id: str, action: str, *, shadowed: bool) -> str:
@@ -140,7 +189,7 @@ class SpendStatusClient:
         if resp.status_code == 404:
             return "no_cap"
         if resp.status_code != 201:
-            raise ConnectionError(f"governor /spend returned {resp.status_code}")
+            raise UpstreamAnswerError(f"governor /spend returned {resp.status_code}")
         return "metered"
 
     def totals_since(self, agent_id: str, since: str) -> dict[str, Any] | None:
@@ -150,7 +199,7 @@ class SpendStatusClient:
         if resp.status_code == 404:
             return None
         if resp.status_code != 200:
-            raise ConnectionError(f"governor /totals returned {resp.status_code}")
+            raise UpstreamAnswerError(f"governor /totals returned {resp.status_code}")
         return _object_body(resp, "governor /totals")
 
     def report_usage(self, agent_id: str, model: str,
@@ -163,7 +212,7 @@ class SpendStatusClient:
             "note": "sentinel semantic judgment",
         })
         if resp.status_code != 201:
-            raise ConnectionError(f"governor /usage returned {resp.status_code}")
+            raise UpstreamAnswerError(f"governor /usage returned {resp.status_code}")
 
 
 class DelegationIntrospectClient:
@@ -184,7 +233,7 @@ class DelegationIntrospectClient:
             f"{self._base}/introspect", json={"token_id": token_id}
         )
         if resp.status_code != 200:
-            raise ConnectionError(f"delegation returned {resp.status_code}")
+            raise UpstreamAnswerError(f"delegation returned {resp.status_code}")
         return _object_body(resp, "delegation /introspect")
 
 
@@ -350,7 +399,7 @@ class SentinelEngine:
         except Exception as exc:
             return self._verdict(
                 req, Decision.ESCALATE, "D.semantic",
-                [f"judge spend unverifiable (governor: {exc}) — "
+                [f"judge spend unverifiable (governor: {_why(exc)}) — "
                  "structural-only throttle"],
             )
         if spend is None:
@@ -377,7 +426,7 @@ class SentinelEngine:
         except Exception as exc:
             return self._verdict(
                 req, Decision.ESCALATE, "D.semantic",
-                [f"semantic judge failed ({exc}) — fail-to-escalate"],
+                [f"semantic judge failed ({_why(exc)}) — fail-to-escalate"],
             )
 
         # Strict metering: a judgment that cannot be metered escalates.
@@ -389,7 +438,7 @@ class SentinelEngine:
         except Exception as exc:
             return self._verdict(
                 req, Decision.ESCALATE, "D.semantic",
-                [f"semantic judgment unmeterable ({exc}) — fail-to-escalate"],
+                [f"semantic judgment unmeterable ({_why(exc)}) — fail-to-escalate"],
             )
 
         # Model output is untrusted text: collapse whitespace + truncate
@@ -499,7 +548,7 @@ class SentinelEngine:
         except Exception as exc:
             return self._verdict(
                 req, Decision.BLOCK, "E.spend_cap",
-                [f"spend-governor cannot total spend under this token: {exc}"],
+                [f"spend-governor cannot total spend under this token: {_why(exc)}"],
             )
         if totals is None:
             return self._verdict(
@@ -550,6 +599,12 @@ class SentinelEngine:
             )
 
         # 2. Registry: the agent must exist and be active.
+        if not _REGISTRY_ID.fullmatch(req.agent_id):
+            # same verdict as the registry's 404, without sending this text into a URL path
+            return self._verdict(
+                req, Decision.BLOCK, "R.unregistered",
+                [f"agent '{req.agent_id}' is not in the registry"],
+            )
         try:
             record = self.registry.get_agent(req.agent_id)
         except AgentNotRegisteredError:
@@ -560,7 +615,7 @@ class SentinelEngine:
         except RegistryUnreachableError as exc:
             return self._verdict(
                 req, Decision.BLOCK, "R.unregistered",
-                [f"registry unreachable — cannot establish identity: {exc}"],
+                [f"registry unreachable — cannot establish identity: {_why(exc)}"],
             )
         status = record.get("status")
         if status == "killed":
@@ -592,7 +647,7 @@ class SentinelEngine:
         except Exception as exc:
             return self._verdict(
                 req, Decision.BLOCK, "D.token",
-                [f"delegation-authority unreachable: {exc}"],
+                [f"delegation-authority unreachable: {_why(exc)}"],
             )
         if intro.get("active") is not True:      # a JSON boolean true, exactly: "true", 1 and "false" are not (R-PR606 C2)
             token_status = intro.get("status")
@@ -679,7 +734,7 @@ class SentinelEngine:
         except Exception as exc:
             return self._verdict(
                 req, Decision.BLOCK, "E.spend_cap",
-                [f"spend-governor unreachable — cannot verify remaining budget: {exc}"],
+                [f"spend-governor unreachable — cannot verify remaining budget: {_why(exc)}"],
             )
         probe["spend_reached"] = True
         probe["spend_status"] = spend
