@@ -41,7 +41,10 @@ def stack(tmp_path, monkeypatch):
     monkeypatch.setenv(authn.ENV_VAR, SECRET)
     monkeypatch.setenv(oa.ENV_OPERATOR, OP)
     monkeypatch.setenv(oa.ENV_OPERATOR_KEY, KEY)
-    client = TestClient(create_app(engine=BrokerEngine(store=ContractStore(tmp_path / "c.sqlite3"))))
+    # The app enforces the perimeter secret (set above): the test's own reads (_contracts, crossing) send it, and both
+    # stand-ins below forward exactly the x-field-* headers the CLI sent, so the app judges what the CLI really sends.
+    client = TestClient(create_app(engine=BrokerEngine(store=ContractStore(tmp_path / "c.sqlite3"))),
+                        headers={authn.HEADER: SECRET})
     sent: list[tuple[str, str, dict]] = []
     built: list[dict] = []
     real_client = httpx.Client
@@ -50,7 +53,7 @@ def stack(tmp_path, monkeypatch):
         path = str(request.url).removeprefix(BASE)
         sent.append((request.method, path, dict(request.headers)))
         body = json.loads(request.content) if request.content else None
-        resp = client.request(request.method, path, json=body)
+        resp = client.request(request.method, path, json=body, headers=_field_headers(request.headers))
         return httpx.Response(resp.status_code, content=resp.content, headers={"content-type": "application/json"})
 
     def make_client(*args, **kwargs):
@@ -61,7 +64,7 @@ def stack(tmp_path, monkeypatch):
         def fake(url, **kw):
             path = url.removeprefix(BASE)
             sent.append((method, path, dict(kw.get("headers") or {})))
-            resp = client.request(method, path, json=kw.get("json"))
+            resp = client.request(method, path, json=kw.get("json"), headers=_field_headers(kw.get("headers") or {}))
             return httpx.Response(resp.status_code, content=resp.content,
                                   headers={"content-type": "application/json"},
                                   request=httpx.Request(method, url))
@@ -70,6 +73,14 @@ def stack(tmp_path, monkeypatch):
     for m in ("get", "put", "post"):
         monkeypatch.setattr(httpx, m, fake_module_level(m.upper()))
     return client, sent, built
+
+
+def _field_headers(headers) -> dict:
+    """Only the x-field-* headers the CLI sent: the auth secret and the operator pair, never framing headers. A missing
+    x-field-auth replaces the TestClient default with an empty value, so a call that sends no secret is refused 401."""
+    out = {k: v for k, v in dict(headers).items() if k.lower().startswith("x-field-")}
+    out.setdefault(authn.HEADER, "")
+    return out
 
 
 def _add(*args):
@@ -198,3 +209,12 @@ def test_a_refused_list_prints_the_error_line_and_writes_nothing(stack, monkeypa
     assert r.exit_code == 1
     assert r.stderr.strip() == "error 503: store unavailable"
     assert [m for m, _, _ in sent] == ["GET"]
+
+
+@pytest.mark.parametrize("bad_id", ["NO\nPE", "NO\rPE", "x\x1b[31mred"], ids=["newline", "cr", "escape"])
+def test_an_unknown_id_with_a_control_character_is_still_one_line(stack, bad_id):
+    """C2 (builder-b): the unknown-id line prints the id with repr(), so a control character cannot split it."""
+    r = RUNNER.invoke(cli.app, ["deactivate", bad_id])
+    assert r.exit_code == 1
+    line = r.stderr.strip()
+    assert line == f"error: no contract with id {bad_id!r}" and "\n" not in line and "\x1b" not in line

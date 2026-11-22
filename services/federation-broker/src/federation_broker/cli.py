@@ -180,7 +180,8 @@ def _set_active(contract_id: str, active: bool) -> None:
         try:
             stored = next(c for c in resp.json() if c.get("contract_id") == contract_id)
         except (StopIteration, ValueError, AttributeError, TypeError):
-            typer.echo(f"error: no contract with id '{contract_id}'", err=True)
+            # repr(): a control character (a newline) in the id cannot split the one error line
+            typer.echo(f"error: no contract with id {contract_id!r}", err=True)
             raise typer.Exit(code=1) from None
         # the path is quoted once, and the SAME string is signed and requested (C-1181)
         put = client.put(f"{_base()}{path}", json={**stored, "active": active}, headers=_hdr("PUT", path))
