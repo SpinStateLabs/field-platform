@@ -13,7 +13,9 @@ from field_core.authn import auth_headers
 
 from typing import Any
 
-# Upper bound on the reply body any SDK client will read (decoded bytes). A peer that streams more is refused.
+# Upper bound on the reply body any SDK client will read. A peer that streams more is refused. The SDK asks for an
+# uncompressed reply (Accept-Encoding: identity) and refuses any other Content-Encoding, so the bytes counted on the wire
+# are the bytes held in memory: a compressed reply is never decoded, so a gzip bomb cannot expand past the cap.
 MAX_RESPONSE_BYTES = 1_048_576
 
 _FRAMING_HEADERS = {"content-encoding", "content-length", "transfer-encoding"}
@@ -24,6 +26,15 @@ class ResponseTooLarge(Exception):
 
     def __init__(self) -> None:
         super().__init__(f"upstream reply exceeded the {MAX_RESPONSE_BYTES}-byte read cap")
+
+
+class UnexpectedContentEncoding(ResponseTooLarge):
+    """A streamed reply carried a Content-Encoding other than ``identity`` although the SDK asked for ``identity``.
+    Refused before any body byte is read or decoded (a compressed reply can decode to far more than the cap). A
+    subclass of ResponseTooLarge so every caller that handles the cap handles this too. The text is fixed."""
+
+    def __init__(self) -> None:
+        Exception.__init__(self, "upstream reply used a Content-Encoding the client did not ask for (identity only)")
 
 
 def _lower(name: Any) -> str:
@@ -45,6 +56,10 @@ class AuthedClient:
         for key, value in auth_headers().items():
             if key.lower() not in supplied:
                 headers[key] = value
+        # The SDK never accepts a compressed reply (see MAX_RESPONSE_BYTES): any caller spelling of Accept-Encoding is
+        # replaced by identity.
+        headers = {k: v for k, v in headers.items() if _lower(k) != "accept-encoding"}
+        headers["Accept-Encoding"] = "identity"
         kwargs["headers"] = headers
         return kwargs
 
@@ -57,10 +72,14 @@ class AuthedClient:
             if isinstance(content, (bytes, bytearray)) and len(content) > MAX_RESPONSE_BYTES:
                 raise ResponseTooLarge()
             return resp
-        # Count decoded bytes while streaming: Content-Length may be absent or false.
+        # Count RAW bytes while streaming (Content-Length may be absent or false). Only an identity reply is read, so
+        # raw bytes are the body: iter_bytes() would decode each raw read in full before the count could stop it.
         with stream(verb.upper(), url, **kw) as resp:
+            encoding = (resp.headers.get("content-encoding") or "identity").strip().lower()
+            if encoding not in ("", "identity"):
+                raise UnexpectedContentEncoding()
             chunks, total = [], 0
-            for chunk in resp.iter_bytes():
+            for chunk in resp.iter_raw():
                 total += len(chunk)
                 if total > MAX_RESPONSE_BYTES:
                     raise ResponseTooLarge()

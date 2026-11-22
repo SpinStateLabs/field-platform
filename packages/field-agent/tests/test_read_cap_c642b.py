@@ -82,11 +82,13 @@ def test_lying_content_length_does_not_bypass():
         t.AuthedClient(Streaming(body(CAP + 10), headers={"content-length": "5"})).get("http://u/x")
 
 
-def test_compressed_bomb_counted_decoded():
+def test_compressed_bomb_is_refused_never_decoded():
+    """R2/roley C1: iter_bytes() decodes each raw read in full before it can be counted, so a gzip reply could expand
+    far past the cap in memory. A compressed reply is now refused before any body byte is read."""
     import gzip
     bomb = gzip.compress(b"\0" * (CAP + 1))
     assert len(bomb) < CAP
-    with pytest.raises(t.ResponseTooLarge):
+    with pytest.raises(t.UnexpectedContentEncoding):
         t.AuthedClient(Streaming(bomb, headers={"content-encoding": "gzip"})).get("http://u/x")
 
 
@@ -155,3 +157,72 @@ def test_the_stream_is_not_read_past_the_cap():
     with pytest.raises(t.ResponseTooLarge):
         t.AuthedClient(Chunked(sizes, pulled)).get("http://u/x")
     assert max(pulled) <= 3                    # refused at the chunk that crosses the cap, the other 49 never pulled
+
+
+# --- C1 (R2 / roley): the cap bounds memory for compressed replies too ------------------------------------------------
+
+class Recorded:
+    """Real httpx client over a mock transport that records what was asked and what was handed out."""
+
+    def __init__(self, chunks, headers=None):
+        self.requests, self.pulled = [], []
+
+        def gen():
+            for i, c in enumerate(chunks):
+                self.pulled.append(i)
+                yield c
+
+        def handler(request):
+            self.requests.append(request)
+            return httpx.Response(200, content=gen(), headers=headers or {})
+        self.inner = httpx.Client(transport=httpx.MockTransport(handler))
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+
+def _gzip_bomb(decoded: int) -> bytes:
+    import gzip
+    return gzip.compress(b"\0" * decoded, compresslevel=9)
+
+
+@pytest.mark.parametrize("encoding", ["gzip", "GZIP", "deflate", "br", "zstd", "gzip, identity", " x-unknown "])
+def test_a_gzip_bomb_or_any_other_encoding_is_refused_before_a_byte_is_read(encoding):
+    bomb = _gzip_bomb(16 * CAP)                 # 16 MiB of zeros in about 16 KiB: decoded it would be 16x the cap
+    assert len(bomb) < CAP // 8
+    rec = Recorded([bomb[i:i + 4096] for i in range(0, len(bomb), 4096)], headers={"content-encoding": encoding})
+    with pytest.raises(t.UnexpectedContentEncoding) as ei:
+        t.AuthedClient(rec).get("http://u/x")
+    assert rec.pulled == []                    # not one chunk was pulled, so nothing was decoded
+    assert isinstance(ei.value, t.ResponseTooLarge)       # every caller that handles the cap handles this
+    assert "Content-Encoding" in str(ei.value) and len(str(ei.value)) < 120
+
+
+@pytest.mark.parametrize("encoding", [None, "identity", "IDENTITY", " identity "])
+def test_an_identity_reply_is_read(encoding):
+    rec = Recorded([b"ok"], headers={"content-encoding": encoding} if encoding else None)
+    r = t.AuthedClient(rec).get("http://u/x")
+    assert r.content == b"ok" and "content-encoding" not in r.headers
+
+
+@pytest.mark.parametrize("verb", ["get", "post", "patch"])
+def test_every_request_asks_for_identity_even_when_the_caller_asked_for_gzip(verb):
+    rec = Recorded([b"ok"])
+    getattr(t.AuthedClient(rec), verb)("http://u/x", headers={"ACCEPT-ENCODING": "gzip"})
+    (req,) = rec.requests
+    assert req.headers.get_list("accept-encoding") == ["identity"]
+
+
+def test_the_cap_counts_raw_bytes_on_the_wire():
+    """One byte over the cap is refused, and the chunk after the crossing one is never pulled."""
+    rec = Recorded([b"x" * (CAP // 2), b"x" * (CAP // 2), b"x", b"x" * 1024])
+    with pytest.raises(t.ResponseTooLarge):
+        t.AuthedClient(rec).get("http://u/x")
+    assert rec.pulled == [0, 1, 2]
+
+
+def test_a_compressed_body_sent_without_a_content_encoding_header_is_kept_raw_not_decoded():
+    """A peer that compresses but does not say so: nothing decodes it, so memory stays bounded by the raw count."""
+    bomb = _gzip_bomb(8 * CAP)
+    r = t.AuthedClient(Recorded([bomb])).get("http://u/x")
+    assert r.content == bomb                   # the bytes as sent, never expanded
