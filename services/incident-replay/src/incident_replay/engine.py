@@ -95,12 +95,12 @@ def max_timeline_events() -> int:
     non-numeric, non-finite, fractional, out of range) falls back to the default. Read per
     replay so a change needs no restart; the bad value is never echoed."""
     import os
+    import re
 
     raw = os.environ.get("FIELD_REPLAY_MAX_EVENTS", "").strip()
-    try:
-        value = int(raw)
-    except ValueError:
+    if not re.fullmatch(r"[0-9]{1,9}", raw):   # 1-9 ASCII digits only: int() takes "5_000", "+100", Unicode digits, and raises past 4300 digits
         return MAX_TIMELINE_EVENTS
+    value = int(raw)
     if 1 <= value <= _MAX_TIMELINE_EVENTS_CEILING:
         return value
     return MAX_TIMELINE_EVENTS
