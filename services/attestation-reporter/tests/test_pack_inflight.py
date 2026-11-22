@@ -276,3 +276,37 @@ def test_a_pack_build_runs_on_the_reporters_own_pool_not_the_shared_one(make):
     s.engine.release.set()
     assert _req(s.port, "/pack", timeout=30)[1] == 200
     assert s.engine.thread_names and all(n.startswith("attest-pack") for n in s.engine.thread_names), s.engine.thread_names
+
+
+def test_a_cancelled_request_task_keeps_the_slot_until_the_build_ends(monkeypatch):
+    """Review C2 (task-cancel case): cancelling the handler task (the awaiting side) must not free the slot while the
+    build thread still runs: the slot is released only when the work ends. Driven in-process with an ASGI transport so
+    the cancel is a real task cancel (a client disconnect under uvicorn does not cancel the handler)."""
+    import asyncio
+
+    import httpx
+
+    monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
+    engine = BlockingEngine()
+    app = create_app(engine=engine)
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as client:
+            task = asyncio.ensure_future(client.get("/pack"))
+            started = await asyncio.get_running_loop().run_in_executor(None, lambda: engine.entered.acquire(timeout=10))
+            assert started, "the build never started"
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            held = app.state.pack_gate.inflight
+            refused = await client.get("/pack")                      # a second request is refused while it runs
+            engine.release.set()
+            for _ in range(200):
+                if app.state.pack_gate.inflight == 0:
+                    break
+                await asyncio.sleep(0.05)
+            return held, refused.status_code, app.state.pack_gate.inflight
+
+    held, refused, after = asyncio.run(scenario())
+    app.state.pack_executor.shutdown(wait=True)
+    assert (held, refused, after) == (1, 503, 0), (held, refused, after)

@@ -5,8 +5,12 @@ Inside ``PackEngine.build`` the reporter waits that long and asks again, up to M
 FIELD_ATTEST_RETRY_BUDGET_S seconds in all per build (default 20, 0 = never retry), each wait capped at
 RETRY_AFTER_CAP_S. Only a 503 with an integer-seconds Retry-After is retried; every other status, a missing or
 unparseable header, and a 503 on a direct ``_fetch`` outside a build behave as before. Applies to every upstream
-call. In practice only the ledger's /verify matters: it is the one whole-ledger read a pack sends (every /events query
-it sends is filtered, so the ledger's gate never refuses it). A budget of 0 never retries, even for Retry-After: 0.
+call. In practice only the ledger's /verify can matter: it is the one whole-ledger read a pack sends (every /events
+query it sends is filtered, so the ledger's gate never refuses it), and the retry only runs when the ledger answers the
+503 itself: with the ledger's default FIELD_LEDGER_READ_CONCURRENCY=1 (a one-thread read lane) a slow read held by another
+caller makes the pack's filtered /events queue behind it, the first times out and the ledger reads "unreachable" (still
+unavailable, never a number) with no retry (roley.reviewer's live measurement, F4). A budget of 0 never retries, even
+for Retry-After: 0.
 
 No real sleeping: ``engine._sleep`` is replaced and records the waits.
 """

@@ -148,9 +148,10 @@ def _target(path: str, params: dict[str, Any] | None = None) -> str:
 _DOWN: ContextVar[set[int] | None] = ContextVar("attestation_down_upstreams", default=None)
 
 
-#: B-GL-attest-pack-gate: a 503 with a Retry-After is waited out and asked again, inside a build only. It matters for
-#: the ledger's /verify, the one whole-ledger read a pack sends (every /events query it sends is filtered, so the
-#: ledger's gate never refuses it). Each wait <= RETRY_AFTER_CAP_S, at most MAX_RETRIES_PER_CALL retries per call,
+#: B-GL-attest-pack-gate: a 503 with a Retry-After is waited out and asked again, inside a build only. It can only
+#: matter for the ledger's /verify (the one whole-ledger read a pack sends; its filtered /events are never gated) and
+#: only runs when the ledger answers the 503 itself: with its default one-thread read lane a slow read queues the
+#: filtered /events and the first one times out ("ledger unreachable", no retry). Each wait <= RETRY_AFTER_CAP_S, 3 per call,
 #: FIELD_ATTEST_RETRY_BUDGET_S seconds in all per build (default 20; 0 = never retry, even for a Retry-After of 0;
 #: not a whole number of at most 9 digits = 20). ``_sleep`` is a module name so a test can replace it.
 RETRY_BUDGET_ENV = "FIELD_ATTEST_RETRY_BUDGET_S"
