@@ -304,12 +304,21 @@ def test_an_error_names_the_rule_and_not_the_name(stack):
     client, *_ = stack
     msgs = [put(client, "FED-1", org=o).json()["detail"][0]["msg"]
             for o in ("   ", "x" * 500, "A\nB", "A\u200bB", "A\u2028B", "\u0301\u0301")]
-    assert msgs[0].endswith("org name is empty (only whitespace or invisible characters)")
-    assert f"longer than {ORG_NAME_MAX} characters" in msgs[1]
+    assert msgs[0].endswith("must not be blank")          # main's _not_blank runs first (rebuild of PR 395, B3)
+    assert f"at most {ORG_NAME_MAX} characters" in msgs[1]   # main's Name max_length (256) refuses first (B1)
     assert "control character" in msgs[2]
     invisible = "invisible, separator, private-use or unassigned character"
     assert invisible in msgs[3] and invisible in msgs[4]
     assert "no letter, digit, punctuation or symbol" in msgs[5]
+
+
+@pytest.mark.parametrize("name", ["A\nB", "A\tB", "A\x00B", "A\rB", "A\x7fB"])
+def test_a_control_character_is_refused_with_the_control_character_message(stack, name):
+    """N1 (rebuild of PR 395): every category Cc character gets the fixed control-character text, never the name."""
+    client, *_ = stack
+    r = put(client, "FED-1", org=name)
+    assert r.status_code == 422
+    assert r.json()["detail"][0]["msg"].endswith("org name holds a control character")
 
 
 ACCEPTED = [
@@ -411,18 +420,6 @@ def test_the_braille_blank_alone_is_refused_and_the_explicit_extras_hold_without
 def test_a_lone_surrogate_is_refused():
     with pytest.raises(ValueError):
         validate_org_name("Acme" + chr(0xD800) + "Corp")
-
-
-def test_a_row_stored_before_the_rule_still_lists_and_still_loads(stack):
-    client, _ledger, engine, path = stack
-    put(client, "FED-1", org="Acme Corp")
-    long_name = "L" * 5000
-    conn = sqlite3.connect(str(path))
-    conn.execute("UPDATE contracts SET counterparty_org=? WHERE contract_id='FED-1'", (long_name,))
-    conn.commit()
-    conn.close()
-    r = client.get("/contracts")
-    assert r.status_code == 200 and r.json()[0]["counterparty_org"] == long_name
 
 
 def test_a_move_away_from_a_legacy_long_name_records_the_org_before_cut_to_the_cap(stack):

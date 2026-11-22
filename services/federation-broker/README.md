@@ -71,7 +71,7 @@ broker with no ledger counts none). The record is appended after the write commi
 a write with no record and no count: "every write is a ledger event" cannot be audited from the ledger alone.
 
 An org name is checked on write with the normaliser the store compares by (C-553): stripped, at most
-128 characters, and refused (422, the message names the rule and never the name) when nothing is left after
+256 characters, and refused (422, the message names the rule and never the name) when nothing is left after
 normalising, when it has no letter, digit, punctuation or symbol (combining marks only), or when it holds a control
 character (newline, tab, NUL) or a format, separator, private-use, surrogate or unassigned character: Unicode
 categories Cc, Cf, Zl, Zp, Co, Cs, Cn and any space separator other than the ASCII space (no-break and ideographic

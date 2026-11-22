@@ -313,8 +313,9 @@ def normalize_org(org: str) -> str:
 
 
 #: The longest org name a contract write accepts (C-553, reviewer C-521 F-C521-4). A name is echoed into verdict
-#: reasons, ledger payloads and the console, so it is bounded; legacy rows longer than this still load (STORED_ROW).
-ORG_NAME_MAX = 128
+#: reasons, ledger payloads and the console, so it is bounded. It is main's ``Name`` limit (NAME_MAX, #1125), so the
+#: two rules never disagree (rebuild of PR 395, controller ruling B1).
+ORG_NAME_MAX = NAME_MAX
 
 
 #: Characters a name write refuses that no Unicode category rule catches (C-553, reviewer C-1029 F-C1029-1): the Hangul
