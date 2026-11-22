@@ -6,7 +6,7 @@ import io
 import json
 import shutil
 import sys
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -22,6 +22,7 @@ from deployment_agent.manifest import FORBIDDEN_SCOPE, ManifestError, load_manif
 from deployment_agent.refuse import refuse  # noqa: E402
 
 MANIFEST = ROOT / "manifests" / "deployment-agent.yaml"
+_VALIDATION_NOW = datetime(2026, 11, 1, tzinfo=timezone.utc)
 
 
 def run(*argv):
@@ -152,7 +153,9 @@ def test_the_manifest_validates_with_field_core_offline():
     pytest.importorskip("field_core")
     from field_core.validation import ValidationStatus, validate_manifest_file
 
-    result = validate_manifest_file(MANIFEST, now=None)
+    # The clock is pinned inside the placeholder expiry's validity: with now=None this test turned red when the wall clock
+    # passed the manifest's delegation.expiry, which says nothing about the schema.
+    result = validate_manifest_file(MANIFEST, now=_VALIDATION_NOW)
     assert result.status is not ValidationStatus.INVALID, result.critical_gaps
     assert result.critical_gaps == []
     assert result.sections_present and all(result.sections_present.values())

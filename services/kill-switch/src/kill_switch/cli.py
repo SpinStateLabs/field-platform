@@ -205,6 +205,26 @@ def _killed(resp: httpx.Response) -> bool:
     return bool(body.get("killed"))
 
 
+def _exit_1_unless_every_agent_halted(resp: httpx.Response) -> None:
+    """The domain route answers 200 with per-agent outcomes, `error` among them, unless EVERY attempt errored (502).
+    A break-glass command that exits 0 while named agents are still active is a false all-clear: any `error` outcome is
+    exit 1, the ids on stderr (escaped: they come from the registry). A 200 that is not a domain report is exit 1."""
+    try:
+        body = resp.json()
+        if not isinstance(body, dict):
+            raise ValueError
+    except ValueError:
+        typer.echo("error: kill-switch returned a 200 that is not a JSON object", err=True)
+        raise typer.Exit(code=1)
+    results = body.get("results")
+    results = results if isinstance(results, list) else []   # no list, no outcome to read: nothing is reported failed
+    failed = [r.get("agent_id") for r in results if isinstance(r, dict) and r.get("outcome") == "error"]
+    if failed:
+        ids = ", ".join(ascii(str(i))[1:-1] for i in failed)
+        typer.echo(f"{len(failed)} agent(s) NOT halted: {ids}", err=True)
+        raise typer.Exit(code=1)
+
+
 _OP_ID = typer.Option(None, "--operator-id", help=OPERATOR_ID_HELP)
 _OP_KEY_FILE = typer.Option(None, "--operator-key-file", help=OPERATOR_KEY_FILE_HELP)
 
@@ -254,6 +274,7 @@ def domain(
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)
+    _exit_1_unless_every_agent_halted(resp)
 
 
 @app.command()

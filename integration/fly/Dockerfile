@@ -60,6 +60,17 @@ COPY integration/fly/Caddyfile /etc/caddy/Caddyfile
 COPY integration/fly/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
+# G1 F3/F4 (field-platform issues 1067, 1068): ff-harden (write + read back the four sysctls the entrypoint sets when
+# FIELD_HARDEN_SYSCTLS=1; default off), and no setuid/setgid files in the image. The G1 battery found su, mount, umount,
+# passwd, chfn, chsh, gpasswd, newgrp (setuid root) and chage, expiry, unix_chkpwd (setgid) from the python:3.12-slim
+# base; every estate process already runs as root, so none of them is needed. Keep this block AFTER every COPY/RUN that
+# can add a binary; the `test -z` fails the build if any setuid/setgid file is left. tools/topology_lint.py admits
+# exactly these two find/test commands (_RUN_PIECE_OK).
+COPY tools/ff-harden.sh /usr/local/sbin/ff-harden
+RUN chmod 0755 /usr/local/sbin/ff-harden \
+ && find / -xdev -type f -perm /6000 -exec chmod a-s {} + \
+ && test -z "$(find / -xdev -type f -perm /6000)"
+
 ENV FIELD_DATA_DIR=/data
 EXPOSE 8080
 

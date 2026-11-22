@@ -65,9 +65,10 @@ delegation doa check --roster FILE --grantor G --scope S [--scope S ...] \
 ## The DOA roster (`FIELD_DOA_ROSTER`)
 
 Point `FIELD_DOA_ROSTER` at a YAML file and every mint is checked against it.
-Leave it unset — the default in compose, fly and CI, **and on both estates
-today** — and mint behaves exactly as it did before, recording
-`doa_checked: false` on the ledger event.
+Leave it unset — the default in the shipped compose, fly and CI configuration —
+and mint behaves exactly as it did before, recording `doa_checked: false` on the
+ledger event. Whether an estate sets it is recorded outside this repository and
+is **Declared** here.
 
 ```yaml
 grantors:
@@ -209,7 +210,7 @@ rostered. `doa check` every real renewal either way.
 | Revoked tokens fail introspection; revocation beats expiry | **Enforced in code** | adversarial test |
 | Unknown token ids are inactive | **Enforced in code** | fail closed |
 | Every mint/revoke is a ledger event **before** it takes effect | **Enforced in code** | ledger-first ordering; ledger down ⇒ 502, no token (adversarial test) |
-| Mint refuses off-roster grantors, scopes and TTLs | **Enforced in code when `FIELD_DOA_ROSTER` is set** (set on both the GB10 and Fly estates as of 2026-10-23; the check is presence-only) | roster missing/unreadable/invalid ⇒ 503 before any ledger write; grantor absent or `active: false`, scope beyond that grantor's `allowed_scope`, lifetime beyond `max_ttl_days` (both expiry forms) ⇒ 403 `D.grantor`; scope beyond the agent manifest's `delegation.scope`, or no resolvable manifest ⇒ 422 `D.scope` (fail closed); a lapsed manifest `delegation.expiry`, or a token ending after it ⇒ 422 `D.manifest_expired` (PROVISIONAL id; refused, not clamped); adversarial tests |
+| Mint refuses off-roster grantors, scopes and TTLs | **Enforced in code when `FIELD_DOA_ROSTER` is set** (unset by default; whether an estate sets it is recorded outside this repository and is Declared here; the check is presence-only) | roster missing/unreadable/invalid ⇒ 503 before any ledger write; grantor absent or `active: false`, scope beyond that grantor's `allowed_scope`, lifetime beyond `max_ttl_days` (both expiry forms) ⇒ 403 `D.grantor`; scope beyond the agent manifest's `delegation.scope`, or no resolvable manifest ⇒ 422 `D.scope` (fail closed); a lapsed manifest `delegation.expiry`, or a token ending after it ⇒ 422 `D.manifest_expired` (PROVISIONAL id; refused, not clamped); adversarial tests |
 | `delegation doa check` says what the mint route's DOA roster gate would say **for a registered, active agent whose registry `manifest_ref` is the `--manifest-ref` given**, and mints nothing | **Enforced in code** for that agent state only — the registry is not read (see LIMITS) | it calls the route's own handler (a test patches the route module's resolver and the verb's output changes); every refusal clause, the 503s and ALLOW are driven through the route over TestClient and through the verb with the same files, and must agree on status, clause and message (`tests/test_doa_check_verb.py`); a relative `manifest_ref` resolves against `FIELD_MANIFEST_DIR` in both (`test_a_relative_manifest_ref_resolves_like_the_route`); ALLOW requires `doa_checked: true`; a fault, or a handler that never reaches the ledger, is exit 2 and never ALLOW or REFUSED; run with the token store, the real clients and httpx booby-trapped it still answers and writes nothing; `FIELD_DOA_ROSTER` is restored; each guard mutation-checked |
 | `tools/generate_doa_roster.py` rosters exactly the manifest grantors and principals of registered non-retired agents, plus (with `--tokens`) the grantor of every live token they hold, plus (with `--job-rows`) the `job-*` rows of the named roster, verbatim | **Enforced in code** | `tools/tests/test_generate_doa_roster.py`: retired agents and unregistered manifests contribute nothing; a live-token-only grantor is rostered with its holder's manifest scope, while revoked, expired, retired-holder and unregistered-holder tokens add nothing; the plan J9 GB10 shape (volatility-trader's `Don Hagell` token) gets both of Don's rows and its renewal ALLOWs; without `--tokens` the gap is said on stderr; scope union; TTL flag; empty roster (also under `--skip-unresolved`), unresolved manifests, malformed token files and model-invalid rosters refused with nothing written; output loads with `load_roster` and drives the real gate; each guard mutation-checked. `tools/tests/test_doa_roster_job_rows.py`: `--job-rows` carries the example's job rows verbatim (also over a token-derived row of the same grantor), its absence is said on stderr and in the header, a file with no job row or that does not load is refused; `tools/tests/test_job_grantors_c13.py` arms a roster regenerated with `--job-rows` in the real estate and a job's mint passes the DOA gate (and is 403 D.grantor without it) |
 | The caller **is** the named grantor | **Declared only** | `granted_by` is not authenticated; the roster proves membership of a string in a YAML list, not identity. SPEC's "no grantor authentication" non-goal still holds |
@@ -232,10 +233,10 @@ rostered. `doa check` every real renewal either way.
   `granted_by` string that is not on the list; it cannot tell whether the
   caller is that person. Anyone who can reach the mint endpoint can type a
   rostered grantor's name.
-- `FIELD_DOA_ROSTER` is **unset** in compose, fly and CI. The gate's code is
-  deployed on both estates (X0, 2026-09-12) but not armed: it is test- and
-  CI-proven only, and stays *Declared* on the estates until arming step A3
-  places a roster file and sets the variable.
+- `FIELD_DOA_ROSTER` is **unset** by default in the shipped compose, fly and CI
+  configuration. The gate's code is test- and CI-proven; whether an estate has a
+  roster file in place and the variable set is recorded outside this repository
+  and is *Declared* here.
 - `delegation doa check` evaluates the DOA gate only. It does not read the
   registry: the agent is taken as registered and active, with `--manifest-ref`
   as its `manifest_ref`. So an unregistered agent (404), a killed agent (409),
