@@ -4,6 +4,8 @@ Mid-incident the replay is the thing asked for. A registry failure degrades the 
 a ledger or delegation failure is a 502 naming only the dependency (without ledger events there is no post-mortem);
 one unreadable token record is skipped and counted, the rest is built. No upstream body ever reaches the answer."""
 
+import json
+
 import httpx
 import pytest
 from fastapi.testclient import TestClient
@@ -34,6 +36,16 @@ def _boom(status=500):
 
 def _down(request):
     raise httpx.ConnectError(LEAK)
+
+
+def _not_json(request):
+    # a 200 whose body is not JSON: the client's .json() raises ValueError (reviewer R-PR1203 C2)
+    return httpx.Response(200, text="{not json " + LEAK)
+
+
+def _crash(request):
+    # an exception that is neither an httpx error nor a ValueError: not a mapped dependency fault (R-PR1203 C3)
+    raise RuntimeError(LEAK)
 
 
 def served(*, registry=None, verify=None, events=None, tokens=None):
@@ -67,12 +79,32 @@ def test_an_unreachable_registry_degrades_the_report_and_is_not_called_unregiste
 @pytest.mark.parametrize("path", ["/replay", "/replay/markdown"])
 @pytest.mark.parametrize("which, text", [
     ("verify", "ledger unavailable"), ("events", "ledger unavailable"), ("tokens", "delegation unavailable")])
-@pytest.mark.parametrize("failure", [_down, _boom(500), _boom(502)], ids=["transport", "500", "502"])
+@pytest.mark.parametrize("failure", [_down, _boom(500), _boom(502), _not_json],
+                         ids=["transport", "500", "502", "200-not-json"])
 def test_a_ledger_or_delegation_failure_is_a_502_naming_only_the_dependency(path, which, text, failure):
     r = served(**{which: failure}).post(path, json=BODY)
     assert r.status_code == 502
     assert r.json() == {"detail": text}
     assert LEAK not in r.text
+
+
+@pytest.mark.parametrize("path", ["/replay", "/replay/markdown"])
+@pytest.mark.parametrize("body", [None, {}, {"tokens": [GOOD_TOKEN]}, "x"], ids=["null", "empty-object", "object", "string"])
+def test_a_delegation_answer_that_is_not_a_list_is_a_502_never_an_empty_authority(path, body):
+    # R-PR1203 C1: fail closed. content=, not json=: json=None would send an empty body, and JSON null is under test.
+    tokens = lambda request: httpx.Response(200, content=json.dumps(body).encode(),  # noqa: E731
+                                            headers={"content-type": "application/json"})
+    r = served(tokens=tokens).post(path, json=BODY)
+    assert r.status_code == 502, r.text
+    assert r.json() == {"detail": "delegation unavailable"}
+    assert "unreadable" not in r.text
+
+
+def test_a_raw_runtime_error_from_the_ledger_client_stays_an_unmapped_500():
+    # R-PR1203 C3: only httpx errors and bad JSON are a dependency's "unavailable"; anything else is not relabelled.
+    r = served(verify=_crash).post("/replay", json=BODY)
+    assert r.status_code == 500
+    assert "ledger unavailable" not in r.text and LEAK not in r.text
 
 
 @pytest.mark.parametrize("bad", [

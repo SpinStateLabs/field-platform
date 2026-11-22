@@ -602,9 +602,13 @@ class ReplayEngine:
             records = self.delegation.tokens(req.agent_id)
         except (httpx.HTTPError, ValueError) as exc:
             raise UpstreamUnavailable("delegation") from exc
+        if not isinstance(records, list):
+            # A delegation answer that is not a list (null, an object) is a delegation failure, not "one unreadable
+            # record": a 502, never a 200 with an empty authority section (reviewer R-PR1203 C1, fail closed).
+            raise UpstreamUnavailable("delegation")
         grants: list[AuthorityGrant] = []
         unreadable = 0
-        for t in records if isinstance(records, list) else []:
+        for t in records:
             try:
                 g = AuthorityGrant(
                     token_id=t["token_id"],
@@ -621,8 +625,8 @@ class ReplayEngine:
                 unreadable += 1
                 continue
             grants.append(g)
-        if unreadable or not isinstance(records, list):
-            notes.append(f"{unreadable or 1} delegation token record(s) unreadable, not shown")
+        if unreadable:
+            notes.append(f"{unreadable} delegation token record(s) unreadable, not shown")
         # A grant is relevant if it overlapped the window: issued by `until`
         # and not yet expired at `since` (expired once now >= expires_at, as
         # DelegationToken.status rules).
