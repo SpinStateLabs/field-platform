@@ -146,26 +146,34 @@ def test_the_degraded_entry_never_serves_a_stored_key(stack, key):
 
 
 @pytest.mark.parametrize("which", ["id", "org", "both"])
-@pytest.mark.parametrize("good_json", [False, True], ids=["bad-json", "good-json"])
-def test_a_legacy_row_with_an_over_long_id_or_org_still_lists_and_blocks(stack, which, good_json):
-    """Rows stored before the NAME_MAX bound: contract_id / counterparty_org longer than NAME_MAX fail the model, so
-    the degraded entry must truncate (not raise) or GET /contracts is a 500 again."""
+def test_an_unreadable_legacy_row_with_an_over_long_id_or_org_lists_in_full_and_blocks(stack, which):
+    """F1: a row stored before the NAME_MAX bound AND unreadable (bad JSON) must not make GET /contracts a 500 on
+    current main. The degraded entry is built with the read model, so the long id / org is shown in full (never cut:
+    a cut id is not the row's id and could equal another contract's), inactive, nothing allowed, no key."""
     client, store, _ = stack
     long_id = "I" * 300 if which in ("id", "both") else "FED-LONG"
     long_org = "O" * 300 if which in ("org", "both") else COUNTERPARTY
-    row(store, long_id, org=long_org, scopes=None if good_json else "not json")
+    row(store, long_id, org=long_org, scopes="not json")
     r = client.get("/contracts")
     assert r.status_code == 200, r.text
     (c,) = r.json()
-    # good JSON or bad, an over-long id/org fails the model: inactive, nothing allowed, no key
     assert c["active"] is False and c["allowed_scopes"] == [UNREADABLE_MARK] and c["counterparty_pubkey_pem"] is None
-    assert len(c["contract_id"]) <= NAME_MAX and len(c["counterparty_org"]) <= NAME_MAX
-    if which != "org":
-        assert c["contract_id"] == long_id[:NAME_MAX]
+    assert c["contract_id"] == long_id and c["counterparty_org"] == long_org
     if which == "id":
-        # a crossing for the over-long id's org is a ledgered BLOCK, never a 500 and never an ALLOW
+        # a crossing for the unreadable row's org is a ledgered BLOCK, never a 500 and never an ALLOW
         v = outbound(client).json()
         assert v["decision"] == "BLOCK" and v["clause_id"] == "F.peer"
+
+
+def test_a_readable_legacy_row_with_an_over_long_id_lists_in_full_and_still_works(stack):
+    """B12 (ported from PR 1299): a well-formed legacy row with a long id is read with the read model: listed whole,
+    active, and its crossings decided as before (not degraded)."""
+    client, store, _ = stack
+    long_id = "I" * (NAME_MAX + 44)
+    row(store, long_id)
+    (c,) = client.get("/contracts").json()
+    assert c["contract_id"] == long_id and c["active"] is True and c["allowed_scopes"] == [SCOPE]
+    assert outbound(client).json()["decision"] == "ALLOW"
 
 
 def test_store_for_org_raises_and_from_row_raises_a_named_error(stack):

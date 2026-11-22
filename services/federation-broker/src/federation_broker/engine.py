@@ -188,6 +188,23 @@ class FederationContract(BaseModel):
         return canonical_ed25519_public_pem(value)
 
 
+class StoredFederationContract(FederationContract):
+    """A contract as READ BACK from the store (B12, ported from PR 1299 into the S5-11 rebuild).
+
+    The write model caps every name at ``NAME_MAX``; a row stored before that cap existed may hold a longer one, and
+    validating it against the write model made ``GET /contracts`` answer 500 for every lister. Reads drop the length
+    caps (every other check still runs, the key check under ``STORED_ROW``); writes keep them — ``PUT /contracts``
+    still validates against ``FederationContract``. A well-formed legacy row therefore lists in full and keeps
+    working; only a row that cannot be rebuilt at all becomes the degraded, inactive entry (``ContractUnreadable``).
+    """
+
+    contract_id: str = Field(min_length=1)
+    counterparty_org: str = Field(min_length=1)
+    allowed_scopes: list[Annotated[str, Field(min_length=1)]] = Field(min_length=1)
+    allowed_data_classes: list[Annotated[str, Field(min_length=1)]] = Field(min_length=1)
+    contract_ref: str | None = Field(default=None, description="Where the signed instrument lives (GC's record)")
+
+
 Direction = Literal["inbound", "outbound"]
 
 #: Which request fields name which side, per direction. ``counterparty_*``
@@ -332,12 +349,13 @@ UNREADABLE_MARK = "UNREADABLE"
 
 def _unreadable_entry(row: sqlite3.Row) -> FederationContract:
     """What ``GET /contracts`` shows for a row that cannot be rebuilt: INACTIVE, no key, and placeholder scopes that
-    name the problem. Built from the two text columns only, each cut to ``NAME_MAX`` (a legacy row stored before the
-    bound existed may be longer, and the model would refuse it), so it cannot fail the way the row did."""
+    name the problem. Built from the two text columns only, in full, with the read model (no length caps: a legacy
+    id or org longer than ``NAME_MAX`` is shown as stored, never cut, so the operator sees the real id to
+    re-register), so it cannot fail the way the row did."""
     def text(column: str) -> str:
         v = row[column]
-        return v[:NAME_MAX] if isinstance(v, str) and v.strip() else "(unreadable)"
-    return FederationContract(
+        return v if isinstance(v, str) and v.strip() else "(unreadable)"
+    return StoredFederationContract(
         contract_id=text("contract_id"),
         counterparty_org=text("counterparty_org"),
         allowed_scopes=[UNREADABLE_MARK],
@@ -359,7 +377,8 @@ def _contract_from_row(row: sqlite3.Row) -> FederationContract:
     import json
 
     try:
-        return FederationContract.model_validate(
+        # B12: read with the read model (no length caps), so a well-formed legacy row with a long name lists and works
+        return StoredFederationContract.model_validate(
             {
                 "contract_id": row["contract_id"],
                 "counterparty_org": row["counterparty_org"],
