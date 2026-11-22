@@ -26,6 +26,9 @@ from __future__ import annotations
 
 from field_core.authn import auth_headers
 
+import os
+import time
+from contextvars import ContextVar
 from datetime import date, datetime, timezone
 from typing import Any, Literal
 
@@ -103,6 +106,46 @@ def max_timeline_events() -> int:
     return MAX_TIMELINE_EVENTS
 
 
+#: B-GL-incident-replay-503. A busy ledger refuses a second whole-ledger read with HTTP 503 and a Retry-After
+#: (PR 1089's one-in-flight slot). Inside a replay that answer is waited out and the call repeated: each wait at
+#: most RETRY_AFTER_CAP_S, MAX_RETRIES_PER_CALL retries per call, FIELD_REPLAY_RETRY_BUDGET_S seconds of waiting in
+#: all per replay (default 20; 0 = never retry; a value that is not a whole number of at most 9 digits is 20).
+#: When it runs out, ``verify`` answers "ledger busy:" (the replay reports INTEGRITY NOT VERIFIED, never intact and
+#: never broken) and ``events`` raises ``LedgerBusyError`` (the API answers 503 + Retry-After). ``_sleep`` is a
+#: module name so a test can replace it.
+RETRY_BUDGET_ENV = "FIELD_REPLAY_RETRY_BUDGET_S"
+DEFAULT_RETRY_BUDGET_S = 20
+RETRY_AFTER_CAP_S = 10
+MAX_RETRIES_PER_CALL = 3
+DEFAULT_REFUSAL_RETRY_AFTER_S = 10
+_sleep = time.sleep
+_RETRY_LEFT: ContextVar[list[float] | None] = ContextVar("incident_replay_retry_left", default=None)
+
+
+class LedgerBusyError(RuntimeError):
+    """The ledger kept answering 503 inside the replay's retry budget."""
+
+    def __init__(self, message: str, retry_after: int = DEFAULT_REFUSAL_RETRY_AFTER_S):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+def retry_budget_s() -> int:
+    raw = os.environ.get(RETRY_BUDGET_ENV, "").strip()
+    return int(raw) if raw.isascii() and raw.isdecimal() and len(raw) <= 9 else DEFAULT_RETRY_BUDGET_S
+
+
+def _retry_after(resp: Any) -> int | None:
+    """Seconds of an integer-seconds Retry-After header on ``resp`` (at most 9 digits), else None."""
+    headers = getattr(resp, "headers", None)
+    try:
+        raw = headers.get("Retry-After") if headers is not None else None
+    except Exception:  # noqa: BLE001 - an odd headers object is simply no header
+        return None
+    raw = raw.strip() if isinstance(raw, str) else ""
+    return int(raw) if raw.isascii() and raw.isdecimal() and len(raw) <= 9 else None
+
+
 class LedgerQueryClient:
     def __init__(self, client: HttpLike | None = None, base_url: str | None = None):
         import os
@@ -116,13 +159,38 @@ class LedgerQueryClient:
 
             self._client = httpx.Client(timeout=10.0, headers=auth_headers())
 
+    def _get(self, path: str, **kw: Any):
+        """GET, waiting out a 503 that carries a Retry-After within the replay's budget (none outside a replay)."""
+        left = _RETRY_LEFT.get()
+        retries = 0
+        while True:
+            resp = self._client.get(f"{self._base}{path}", **kw)
+            wait = _retry_after(resp) if resp.status_code == 503 else None
+            if wait is None or left is None or retries >= MAX_RETRIES_PER_CALL:
+                return resp
+            wait = min(wait, RETRY_AFTER_CAP_S)
+            if wait > left[0]:
+                return resp
+            left[0] -= wait
+            retries += 1
+            _sleep(wait)
+
     def events(self, **params: Any) -> list[dict[str, Any]]:
-        resp = self._client.get(f"{self._base}/events", params=params)
+        resp = self._get("/events", params=params)
+        if resp.status_code == 503:
+            raise LedgerBusyError(
+                f"{LEDGER_BUSY_PREFIX} the ledger answered HTTP 503 to the events read; retry the replay",
+                min(_retry_after(resp) or DEFAULT_REFUSAL_RETRY_AFTER_S, RETRY_AFTER_CAP_S))
         resp.raise_for_status()
         return resp.json()
 
     def verify(self) -> dict[str, Any]:
-        resp = self._client.get(f"{self._base}/verify")
+        resp = self._get("/verify")
+        if resp.status_code == 503:
+            # The check did not run: the same contract as a 200 ok=false "ledger busy:" (not a break, never OK).
+            return {"ok": False, "length": 0,
+                    "reason": f"{LEDGER_BUSY_PREFIX} the ledger answered HTTP 503 to /verify (a whole-ledger "
+                              "request is already in flight)"}
         resp.raise_for_status()
         return resp.json()
 
@@ -400,6 +468,13 @@ class ReplayEngine:
         )
 
     def replay(self, req: ReplayRequest) -> PostMortem:
+        token = _RETRY_LEFT.set([float(retry_budget_s())])
+        try:
+            return self._replay(req)
+        finally:
+            _RETRY_LEFT.reset(token)
+
+    def _replay(self, req: ReplayRequest) -> PostMortem:
         verification = self.ledger.verify()
         integrity_ok = bool(verification.get("ok"))
         reason = verification.get("reason")

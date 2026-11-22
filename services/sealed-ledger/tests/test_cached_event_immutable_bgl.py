@@ -307,3 +307,23 @@ def test_the_list_inside_a_returned_snapshot_is_the_callers_own(tmp_path):
     l2.clear()
     assert [e.payload["n"] for e in s.events()] == [0, 1, 2, 3, 4]
     assert [e.payload["n"] for _, e in s.snapshot().indexed_events()] == [0, 1, 2, 3, 4]
+
+
+def test_events_with_a_limit_hands_out_read_only_events_warm_and_cold(tmp_path, monkeypatch):
+    # B-GL-events-limit-cheap's tail path (_events_tail) reads the cache itself: warm it must use the twins, cold it
+    # must wrap what it parses; a plain event here would be the private cached object (warm) or break the contract.
+    s = _store(tmp_path, 6)
+    warm = s.events(limit=3)
+    assert len(warm) == 3 and all(type(e) is ReadOnlyLedgerEvent for e in warm)
+    with pytest.raises(TypeError):
+        warm[0].payload["n"] = 99
+    before = [e.model_dump() for e in s.events()]
+    assert s.verify().ok is True
+    cold = LedgerStore(s.path)
+    cold._parse_cache.clear()
+    monkeypatch.setattr(_store_mod.LedgerStore, "EVENTS_TAIL_WINDOW_BYTES", 1 << 20)
+    got = cold.events(limit=3)
+    assert len(got) == 3 and all(type(e) is ReadOnlyLedgerEvent for e in got)
+    with pytest.raises(TypeError):
+        got[0].payload["nested"]["k"].append(1)
+    assert [e.model_dump() for e in s.events()] == before
