@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from field_core.guarded_operator import compile_routes, request_headers
 
+import ipaddress
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -38,8 +40,45 @@ def _hdr(method: str, path: str) -> dict:
     return request_headers(method, path, GOVERNOR_GUARDED)
 
 
+DEFAULT_GOVERNOR_URL = "http://127.0.0.1:8006"
+#: The one line a bad FIELD_GOVERNOR_URL gets (backlog B18): fixed text, never the value (it may be a secret pasted
+#: into the wrong variable, or carry userinfo).
+BAD_GOVERNOR_URL = "error: FIELD_GOVERNOR_URL is not a usable http(s) URL (the value is not shown)"
+
+
+_HOSTNAME = re.compile(r"[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?")
+
+
+def _is_host(host: str) -> bool:
+    """A hostname (letters, digits, dot, hyphen, underscore) or an IP literal: httpx builds a URL whose host holds a
+    space, and that fails only at connect time."""
+    if not host:
+        return False
+    if _HOSTNAME.fullmatch(host):
+        return True
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return True
+
+
 def _base() -> str:
-    return os.environ.get("FIELD_GOVERNOR_URL", "http://127.0.0.1:8006").rstrip("/")
+    """FIELD_GOVERNOR_URL without a trailing ``/``; blank counts as unset (the default). Refused before any request,
+    with the fixed line above on stderr, exit 2 and no traceback (B18): a value httpx cannot build a URL from
+    (``httpx.InvalidURL``, ``ValueError``: a port that is not a number, a control character, an unclosed IPv6
+    bracket), one that is not http(s), one with no usable host (a space in it) and one with a port outside 1..65535."""
+    raw = (os.environ.get("FIELD_GOVERNOR_URL") or "").strip().rstrip("/") or DEFAULT_GOVERNOR_URL
+    try:
+        url = httpx.URL(raw + "/x")          # a path as the commands add one, so the composed URL is what is checked
+        usable = (url.scheme in ("http", "https") and _is_host(url.host)
+                  and (url.port is None or 0 < url.port <= 65535))   # httpx builds :99999 and fails only on connect
+    except (httpx.InvalidURL, ValueError, TypeError):
+        usable = False
+    if not usable:                           # raised outside the handler: no chained text from httpx
+        typer.echo(BAD_GOVERNOR_URL, err=True)
+        raise typer.Exit(code=2)
+    return raw
 
 
 def _fail(resp: httpx.Response) -> None:
