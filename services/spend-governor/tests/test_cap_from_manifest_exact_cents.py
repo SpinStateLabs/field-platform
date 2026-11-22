@@ -54,3 +54,18 @@ def test_limit_to_cents_refuses_a_non_integral_amount_and_returns_an_int():
     for bad in (0.005, 12.345, 0.0001):
         with pytest.raises(ValueError, match="sub-cent"):
             limit_to_cents(bad)
+
+
+# Controller check on the rebuild of PR 907: the Decimal is built from str(limit) (the shortest repr), never from the float
+# itself, whose binary expansion is not integral after *100 for ordinary caps (Decimal(0.3) is 0.29999999999999998889...).
+@pytest.mark.parametrize("limit, cents", [(0.3, 30), (12.34, 1234), (0.1, 10), (0.7, 70), (19.99, 1999)])
+def test_ordinary_json_caps_are_not_refused_as_sub_cent(limit, cents):
+    assert limit_to_cents(limit) == cents
+    assert SpendCapConfig.from_manifest(manifest(limit), "fin-agent").limit_cents == cents
+
+
+def test_the_float_sum_0_1_plus_0_2_is_refused_as_sub_cent():
+    """0.1 + 0.2 is the float 0.30000000000000004, whose shortest repr has 17 decimals: sub-cent, so refused (main's 1e-9
+    tolerance accepted it as 30 cents). A manifest author writes 0.3, which the test above accepts."""
+    with pytest.raises(ValueError, match="sub-cent"):
+        limit_to_cents(0.1 + 0.2)
