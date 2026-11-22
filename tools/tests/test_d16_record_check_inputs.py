@@ -46,7 +46,7 @@ def no_network(monkeypatch):
 def run_base(tmp_path, capsys, content):
     f = tmp_path / "secret"
     f.write_bytes(content)
-    code = dc.main(["--operator-id", OP, "--base", "http://estate.invalid", "--secret-file", str(f)])
+    code = dc.main(["--operator-id", OP, "--base", "https://estate.invalid", "--secret-file", str(f)])
     return code, capsys.readouterr().out
 
 
@@ -65,7 +65,7 @@ def test_an_empty_or_whitespace_secret_file_is_exit_2_and_nothing_is_sent(tmp_pa
 
 
 def test_a_missing_secret_file_is_still_exit_2(tmp_path, capsys, no_network):
-    code = dc.main(["--operator-id", OP, "--base", "http://estate.invalid", "--secret-file", str(tmp_path / "absent")])
+    code = dc.main(["--operator-id", OP, "--base", "https://estate.invalid", "--secret-file", str(tmp_path / "absent")])
     assert code == 2 and "the secret file cannot be read" in capsys.readouterr().out and no_network == []
 
 
