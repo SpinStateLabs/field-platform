@@ -28,10 +28,10 @@ class FailFor:
             def list_agents(self, **kw):
                 return inner.list_agents(**kw)
 
-            def set_status(self, agent_id, status):
+            def set_status(self, agent_id, status, **kw):
                 if everyone or agent_id in agents:
                     raise RegistryUnreachableError("registry returned 401: operator credentials required http://10.9.8.7/secret")
-                return inner.set_status(agent_id, status)
+                return inner.set_status(agent_id, status, **kw)
         return W()
 
 

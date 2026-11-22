@@ -393,7 +393,10 @@ class StaleStore:
         self._last_check = dict(record)
 
     def active(self) -> list[dict]:
-        return sorted(self._active.values(), key=lambda f: f["framework"])
+        try:
+            return sorted(self._active.values(), key=lambda f: f["framework"])
+        except (KeyError, TypeError):   # S10-25 (reduced rebuild of PR 958): a flag with no usable framework
+            raise self._damaged("a flag has no usable 'framework'") from None
 
     def status(self) -> dict:
         """Current staleness posture. Each active flag carries its
@@ -403,7 +406,14 @@ class StaleStore:
         active = []
         for flag in self.active():
             entry = dict(flag)
-            flagged_at = datetime.fromisoformat(flag["flagged_at"])
+            # S10-25 (reduced rebuild of PR 958): a missing, non-text, unparseable or naive flagged_at is a damaged
+            # store (503 / exit 2 through the existing handlers), never an unhandled error and never a guessed window
+            try:
+                flagged_at = datetime.fromisoformat(flag.get("flagged_at"))
+            except (TypeError, ValueError):
+                raise self._damaged("a flag's flagged_at is missing or not an ISO timestamp") from None
+            if flagged_at.tzinfo is None:
+                raise self._damaged("a flag's flagged_at has no timezone")
             entry["stale_window_seconds"] = (now - flagged_at).total_seconds()
             active.append(entry)
         return {

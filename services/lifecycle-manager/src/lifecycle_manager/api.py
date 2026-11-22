@@ -51,6 +51,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 # operator_auth: the guards below are operator_auth.guard behind operator_health
 # (tools/tests/test_operator_plumbing.py finds operator-auth services by this import)
 from field_core import operator_auth, operator_health  # noqa: F401
+from field_core.startup import warn_open
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
 from field_core.http_errors import install_validation_handler
@@ -643,4 +644,5 @@ def create_app(
             data = {**data, "last_tick": tick}
         return data
 
+    warn_open("lifecycle-manager", operator_layer=True)
     return app

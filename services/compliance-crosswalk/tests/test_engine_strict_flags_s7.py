@@ -33,8 +33,13 @@ def test_a_json_true_still_verifies():
 def test_an_explicit_false_and_a_missing_key_fail_with_the_reason():
     assert ev("FC-L-01", ledger_verify={"ok": False, "reason": "broken at 3"}) == (
         False, "ledger verify failed: broken at 3")
-    assert ev("FC-L-01", ledger_verify={}) == (False, "ledger verify failed: None")
-    assert ev("FC-L-01", registry_record={"owner": "x"}) == (False, "ledger verify failed: None")
+    assert ev("FC-L-01", ledger_verify={}) == (False, "ledger verify failed: no ok:true in /verify answer")
+
+
+def test_no_verify_answer_is_unevidenced_not_a_failed_check():
+    # rebuild of PR 1093: no /verify answer (503 busy, unreachable) is "not checked" (None, no gap), never True
+    assert ev("FC-L-01", registry_record={"owner": "x"}) == (
+        None, "ledger verify unavailable (busy or unreachable) - chain not verified; retry")
 
 
 # --- FC-D-02 -----------------------------------------------------------------------------------------

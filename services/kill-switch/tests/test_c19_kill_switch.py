@@ -72,7 +72,7 @@ class _Writes:
                 if status in fail_on:
                     from field_core.clients import RegistryUnreachableError
                     raise RegistryUnreachableError("registry returned 401: operator credentials required")
-                return inner.set_status(agent_id, status)
+                return inner.set_status(agent_id, status, **kw)
         return W()
 
 
