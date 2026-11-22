@@ -34,13 +34,20 @@ class Posts(list):
         super().__init__()
         self.agents: list[str] = []
         self.events: list[dict] = []
+        self.registry_reads: list[str] = []
 
 
-def _console(rows, kill_answer=None, kill_status=200):
+def _console(rows, kill_answer=None, kill_status=200, registry_status=200):
     """rows: what GET /agents answers (JSON). kill_answer(domain) -> (status, json) for POST /kill/domain/<domain>."""
     posts = Posts()
 
     def registry(request: httpx.Request) -> httpx.Response:
+        posts.registry_reads.append(str(request.url.params.get("domain")))
+        if registry_status != 200:
+            return httpx.Response(registry_status, json={"detail": "down"})
+        wanted = request.url.params.get("domain")
+        if wanted is not None and isinstance(rows, list):
+            return httpx.Response(200, json=[r for r in rows if isinstance(r, dict) and r.get("domain") == wanted])
         return httpx.Response(200, json=rows)
 
     def ids_in(domain):
@@ -169,10 +176,11 @@ def test_a_wrong_shape_registry_answer_is_a_fixed_502_that_leaks_nothing():
     assert r.status_code == 502 and "SECRET-BODY-123" not in r.text and posts == []
 
 
-def test_explicit_domains_do_not_consult_the_registry_at_all():
+def test_explicit_domains_are_still_halted_when_the_registry_answer_is_unusable_but_the_domain_is_not_ok():
     c, posts = _console("not a list at all")
     r = c.post("/api/fleet/halt", json={**HALT, "domains": ["ops"]})
     assert r.status_code == 200 and posts == ["ops"] and r.json()["bad_rows"] == 0
+    assert r.json()["all_ok"] is False and r.json()["domains_failed"] == 1
 
 
 def test_each_domain_is_halted_once_even_with_many_agents_in_it():
@@ -278,3 +286,48 @@ def test_N3_no_skipped_rows_writes_no_ledger_row_and_a_failing_ledger_never_stop
     c2.app.state.ledger = ServiceClient(client=_Dead(), base_url="http://dead")
     out = c2.post("/api/fleet/halt", json=HALT).json()
     assert sorted(posts2) == ["d0", "d1"] and out["bad_rows"] == 1
+
+
+# --- review round 3 on PR 1144 (don.reviewer C2: the explicit-domain path) --------------------------------------------
+
+
+def test_C2_explicit_domains_a_200_naming_one_of_three_registry_agents_is_not_ok():
+    rows = _agents("prod", ["p1", "p2", "p3"])
+    c, posts = _console(rows, kill_answer=lambda d: (200, {"results": [{"agent_id": "p1", "outcome": "killed"}]}))
+    out = c.post("/api/fleet/halt", json={**HALT, "domains": ["prod"]}).json()
+    assert posts == ["prod"] and out["all_ok"] is False and out["domains_failed"] == 1
+    assert posts.registry_reads == ["prod"]                        # the registry was read for that domain
+
+
+def test_C2_explicit_domains_a_complete_report_is_ok_and_retired_agents_are_not_expected():
+    rows = _agents("prod", ["p1", "p2"]) + [{"agent_id": "old", "domain": "prod", "status": "retired"}]
+    c, posts = _console(rows, kill_answer=lambda d: (200, {"results": [
+        {"agent_id": "p1", "outcome": "killed"}, {"agent_id": "p2", "outcome": "killed"}]}))
+    out = c.post("/api/fleet/halt", json={**HALT, "domains": ["prod"]}).json()
+    assert out["all_ok"] is True
+
+
+def test_C2_explicit_domains_a_failed_registry_read_fails_the_domain_but_the_halt_is_still_sent():
+    c, posts = _console(_agents("prod", ["p1"]), registry_status=503)
+    out = c.post("/api/fleet/halt", json={**HALT, "domains": ["prod"]}).json()
+    assert posts == ["prod"], "the halt must be sent even when the registry cannot be read"
+    assert out["all_ok"] is False and out["domains_failed"] == 1
+
+
+@pytest.mark.parametrize("domains", [["prod", "dev"], ["dev", "prod"]])
+def test_C2_each_explicit_domain_is_checked_on_its_own(domains):
+    rows = _agents("prod", ["p1", "p2"]) + _agents("dev", ["d1"])
+
+    def answer(domain):
+        ids = {"prod": ["p1"], "dev": ["d1"]}[domain]            # prod is short, dev is complete
+        return 200, {"results": [{"agent_id": i, "outcome": "killed"} for i in ids]}
+    c, posts = _console(rows, kill_answer=answer)
+    out = c.post("/api/fleet/halt", json={**HALT, "domains": domains}).json()
+    by = {r["domain"]: r["ok"] for r in out["results"]}
+    assert by == {"prod": False, "dev": True} and out["all_ok"] is False
+
+
+def test_C2_the_enumerated_path_does_not_read_the_registry_a_second_time_per_domain():
+    c, posts = _console(_good(3))
+    c.post("/api/fleet/halt", json=HALT)
+    assert posts.registry_reads == ["None"]                          # one listing, no per-domain reads

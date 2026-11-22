@@ -883,6 +883,7 @@ def create_app(
         kill-switch's own domain halt (POST /kill/domain/{d})."""
         okw = _operator_kw(request)
         domains = req.domains
+        explicit = bool(domains)                  # the caller named the domains: the registry is read per domain below
         skipped: list[dict[str, Any]] = []        # registry rows that could not be placed in a domain (id when known)
         fallback_ids: list[str] = []              # skipped rows with a usable agent_id: killed one by one
         expected: dict[str, set[str]] = {}        # domain -> the non-retired agent ids the registry listed for it
@@ -919,6 +920,17 @@ def create_app(
         bad_rows = len(skipped)
         results = []
         for domain in dict.fromkeys(domains):
+            expectation_failed = False
+            if explicit:
+                # Explicit domains: the registry still decides which agents a halt must account for. The halt itself is
+                # NEVER skipped for a failed read; the domain is just not ok (the answer cannot be checked).
+                st_e, rows_e = app.state.registry.get("/agents", params={"domain": domain})
+                if st_e == 200 and isinstance(rows_e, list):
+                    expected[domain] = {r["agent_id"] for r in rows_e
+                                        if isinstance(r, dict) and r.get("status") != "retired"
+                                        and isinstance(r.get("agent_id"), str) and r["agent_id"].strip()}
+                else:
+                    expectation_failed = True
             status, data = app.state.killswitch.post(
                 f"/kill/domain/{_seg(domain)}",
                 json={"operator": req.operator, "reason": req.reason}, **okw)
@@ -931,7 +943,8 @@ def create_app(
                 ids = _result_ids(data)
                 # A halt report must account for every agent the registry listed for the domain (an empty or short list,
                 # or one naming other ids, is not a halt). Only 200/201 count as a successful answer (never a 202).
-                complete = ids is not None and len(ids) >= 1 and expected.get(domain, set()) <= ids
+                complete = (ids is not None and len(ids) >= 1 and not expectation_failed
+                            and expected.get(domain, set()) <= ids)
                 ok = http_ok and counts is not None and counts["error"] == 0 and complete
                 row = {"domain": domain, "ok": ok, "status": status,
                        "counts": counts, "errors": errors,
