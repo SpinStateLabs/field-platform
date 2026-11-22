@@ -64,6 +64,7 @@ from field_core.ledger import (
     GENESIS_HASH,
     ChainVerification,
     LedgerEvent,
+    ReadOnlyLedgerEvent,
     compute_event_hash,
     make_event,
     verify_chain,
@@ -1532,7 +1533,9 @@ class LedgerStore:
         # T7: the last parse of each segment path, keyed by its exact bytes: path -> (raw, events). A read
         # whose bytes are equal reuses the events; one whose bytes extend them at a line boundary (an
         # append) parses only the new lines. Never keyed on stat: a same-size in-place edit is a miss.
-        self._parse_cache: dict[Path, tuple[bytes, tuple[LedgerEvent, ...]]] = {}
+        # The third item is the read-only twin list handed to callers (``_parsed_ro``): built lazily, once
+        # per event, and only for events a caller actually asked for; ``events`` itself is never handed out.
+        self._parse_cache: dict[Path, tuple[bytes, tuple[LedgerEvent, ...], list[ReadOnlyLedgerEvent]]] = {}
         # T7: the last verification and the exact read it came from: (layout, raw bytes, result).
         self._verify_cache: tuple[Layout, list[bytes | None], ChainVerification] | None = None
         self._cache_lock = threading.Lock()
@@ -1612,7 +1615,7 @@ class LedgerStore:
         return js
 
     def _take_snapshot(self, parse: bool = True, open_only: bool = False,
-                       tolerant: bool = False) -> Snapshot:
+                       tolerant: bool = False, readonly: bool = False) -> Snapshot:
         """The reader protocol (lock-free). Consistent because:
 
         1. the journal is append-only, so equal bytes before and after mean no
@@ -1686,7 +1689,7 @@ class LedgerStore:
                             raise _Retry("closed segment moved and the journal changed")
                         datas[k] = data
                 return Snapshot(layout, datas, attempts, parse=parse, tolerant=tolerant,
-                                parsed=self._parsed)
+                                parsed=self._parsed_ro if readonly else self._parsed)
             except (_Retry, PermissionError) as exc:
                 if isinstance(exc, PermissionError) and not _transient_refusal(exc):
                     denied = exc
@@ -1721,17 +1724,46 @@ class LedgerStore:
         A new tail that does not parse cleanly falls back to the full parse, which raises (or locates the
         bad line) exactly as before. Only clean parses are kept; every caller gets its own list.
 
-        IMMUTABLE EVENTS (Enforced, B-GL-ledger-cache-immutable): the list is new but the ``LedgerEvent``
-        objects in it are the cached ones, shared by every caller of ``events()``. ``LedgerEvent`` is frozen
-        and its ``payload`` is a deep read-only copy, so a caller cannot mutate one and make the next
-        ``verify()`` of unchanged bytes report a false tamper. Guards:
-        ``test_cached_event_immutable_bgl.py`` and ``test_i13b_mutating_a_returned_event_does_not_poison_a_later_verify``."""
+        PRIVATE EVENTS (B-GL-ledger-cache-immutable): the ``LedgerEvent`` objects this returns are the cached
+        ones, plain and mutable, and are for this module's own readers only (``verify()``, recovery,
+        retention, ``export()``, ``hash_at()``): none of them hands one to a caller. Everything a caller
+        receives (``events()``, ``iter_events()``, ``snapshot()``) comes from ``_parsed_ro``, which returns
+        read-only copies, so a caller cannot corrupt the cache and cannot make this process's ``verify()``
+        differ from a fresh store's. Validation is unchanged: a cache miss pays no freeze."""
+        events, _ro, bad = self._parsed_entry(path, data, tolerant)
+        return (list(events) if isinstance(events, tuple) else events), bad
+
+    def _parsed_ro(self, path: Path, data: bytes, tolerant: bool
+                   ) -> tuple[list[ReadOnlyLedgerEvent], tuple[int, str] | None]:
+        """``_parsed`` as READ-ONLY copies (what callers of ``events()`` / ``iter_events()`` / ``snapshot()``
+        receive). The copies are built lazily, once per cached event, and kept beside the cache entry: the
+        first hand-out of a segment pays one copy per event, a later one (and the new tail after an append)
+        pays only a list copy. The cached ``LedgerEvent`` objects themselves are never returned. A parse
+        that is not kept (a segment over ``PARSE_CACHE_MAX_BYTES``, a tolerant parse with a bad line) has no
+        twin list: it is copied on each call, like the parse it came from."""
+        events, ro, bad = self._parsed_entry(path, data, tolerant)
+        if ro is None:
+            return [ReadOnlyLedgerEvent.of(e) for e in events], bad
+        have = len(ro)
+        if have < len(events):
+            made = [ReadOnlyLedgerEvent.of(e) for e in events[have:]]      # outside the lock
+            with self._cache_lock:
+                cur = len(ro)              # another reader may have extended it first: keep its copies
+                if have <= cur < have + len(made):
+                    ro.extend(made[cur - have:])
+        with self._cache_lock:
+            return ro[:len(events)], bad
+
+    def _parsed_entry(self, path: Path, data: bytes, tolerant: bool):
+        """The parse behind ``_parsed`` / ``_parsed_ro``: ``(events, ro, bad)``. ``ro`` is the cache entry's
+        read-only twin list (a prefix of the copies of ``events``, shared by growth) or None when the parse
+        was not kept."""
         with self._cache_lock:
             hit = self._parse_cache.get(path)
         if hit is not None:
-            raw, events = hit
+            raw, events, ro = hit
             if raw == data:
-                return list(events), None
+                return events, ro, None
             if raw.endswith(b"\n") and data.startswith(raw):
                 try:
                     tail = _parse_events(data[len(raw):])
@@ -1739,33 +1771,37 @@ class LedgerStore:
                     tail = None
                 if tail is not None:
                     grown = events + tuple(tail)
-                    self._remember(path, data, grown)
-                    return list(grown), None
+                    return grown, self._remember(path, data, grown, ro), None
         if tolerant:
             # Only a STRICT clean parse is kept: the tolerant decoder replaces invalid UTF-8 that a strict
             # reader must still raise on. On clean bytes the two parses are the same events.
             try:
                 out = _parse_events(data)
             except ValueError:
-                return _parse_events_located(data)
+                events, bad = _parse_events_located(data)
+                return events, None, bad
         else:
             out = _parse_events(data)
-        self._remember(path, data, tuple(out))
-        return out, None
+        return out, self._remember(path, data, tuple(out)), None
 
-    def _remember(self, path: Path, data: bytes, events: tuple[LedgerEvent, ...]) -> None:
+    def _remember(self, path: Path, data: bytes, events: tuple[LedgerEvent, ...],
+                  ro: list[ReadOnlyLedgerEvent] | None = None) -> list[ReadOnlyLedgerEvent] | None:
         """Keep ``path``'s parse (most recent last); evict the oldest other paths while the kept raw bytes
-        exceed PARSE_CACHE_MAX_BYTES, and keep nothing for a segment that alone exceeds it."""
+        exceed PARSE_CACHE_MAX_BYTES, and keep nothing for a segment that alone exceeds it. ``ro`` carries
+        the read-only twins of an unchanged prefix of ``events`` across an append; a new parse starts empty.
+        Returns the entry's twin list, or None when nothing was kept."""
         with self._cache_lock:
             self._parse_cache.pop(path, None)
             if len(data) > PARSE_CACHE_MAX_BYTES:
-                return
-            self._parse_cache[path] = (data, events)
-            total = sum(len(raw) for raw, _ in self._parse_cache.values())
+                return None
+            ro = [] if ro is None else ro
+            self._parse_cache[path] = (data, events, ro)
+            total = sum(len(entry[0]) for entry in self._parse_cache.values())
             for other in list(self._parse_cache):
                 if total <= PARSE_CACHE_MAX_BYTES or other == path:
                     break
                 total -= len(self._parse_cache.pop(other)[0])
+            return ro
 
     def _verified(self, snap: Snapshot) -> ChainVerification:
         """``snap.verify()``, reused while the layout and every segment's bytes are exactly those of the
@@ -1789,9 +1825,10 @@ class LedgerStore:
         return result
 
     def snapshot(self) -> Snapshot:
-        """A consistent read of every live segment, behind the heavy-read gate."""
+        """A consistent read of every live segment, behind the heavy-read gate. Its events are read-only
+        copies (``_parsed_ro``): the caller gets the Snapshot object, so it must not reach a cached event."""
         with self._gate():
-            return self._take_snapshot()
+            return self._take_snapshot(readonly=True)
 
     # ------------------------------------------------------------- recovery
 
@@ -2034,7 +2071,7 @@ class LedgerStore:
         """Every live event, materialised first: no file handle is held while
         the caller is suspended in the loop."""
         with self._gate():
-            events = list(self._take_snapshot().all_events())
+            events = list(self._take_snapshot(readonly=True).all_events())
         yield from events
 
     # -------------------------------------------------- F2 signing policy
@@ -2268,7 +2305,7 @@ class LedgerStore:
             agent_id=agent_id, event_type=event_type, since=since, until=until
         )
         with self._gate():
-            snap = self._take_snapshot()
+            snap = self._take_snapshot(readonly=True)
         out = [event for index, event in snap.indexed_events() if event_filter.matches(index, event)]
         if limit is not None:
             out = out[-limit:]

@@ -43,7 +43,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer
+from pydantic import BaseModel, ConfigDict, Field, model_serializer
 
 GENESIS_HASH = "0" * 64
 
@@ -119,10 +119,7 @@ def _deep_freeze(value: Any) -> Any:
 
 
 class LedgerEvent(BaseModel):
-    # Immutable: the sealed-ledger parse cache (T7) hands the SAME event objects to every reader, so an edit
-    # by one caller would make the next verify() of unchanged bytes report a false tamper
-    # (B-GL-ledger-cache-immutable). Attribute assignment raises; ``payload`` is deep read-only.
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid")
 
     event_id: str
     ts: str  # ISO 8601 UTC — stored as string so hashing is byte-stable
@@ -147,11 +144,6 @@ class LedgerEvent(BaseModel):
     caller_signature: str | None = None
     caller_unsigned: bool | None = None
 
-    @field_validator("payload", mode="after")
-    @classmethod
-    def _freeze_payload(cls, value):
-        return _deep_freeze(value)
-
     # No return annotation on purpose (see ChainVerification below).
     @model_serializer(mode="wrap")
     def _omit_f2_keys_when_none(self, handler):
@@ -161,6 +153,35 @@ class LedgerEvent(BaseModel):
                 if data.get(key) is None:
                     data.pop(key, None)
         return data
+
+
+class ReadOnlyLedgerEvent(LedgerEvent):
+    """A ``LedgerEvent`` a caller cannot change: attribute assignment raises, and ``payload`` is a deep read-only
+    copy (``dict``/``list`` subclasses whose every mutator, ``__init__`` included, raises ``TypeError``; still
+    ``==`` a plain dict/list and still JSON-serialisable). It is what the sealed-ledger parse cache hands out
+    (B-GL-ledger-cache-immutable): the cache keeps its own, plain ``LedgerEvent`` objects private, so a caller
+    cannot corrupt them. Build one with ``ReadOnlyLedgerEvent.of(event)``; ``LedgerEvent`` itself is unchanged
+    (plain, mutable, validated exactly as before). Equal to a ``LedgerEvent`` with the same fields (either side
+    of ``==``); unhashable, as a ``LedgerEvent`` is. A ``model_dump()``, ``copy.deepcopy`` or
+    ``LedgerEvent(**event.model_dump())`` is ordinary mutable data. NOT stopped: a deliberate low-level bypass
+    (``object.__setattr__``, ``__dict__``, ``dict.__setitem__(payload, ...)``, ctypes)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    @classmethod
+    def of(cls, event: LedgerEvent) -> "ReadOnlyLedgerEvent":
+        """A read-only copy of ``event`` (a LedgerEvent that was already validated; nothing is re-validated,
+        and ``event``, payload included, is not aliased or touched)."""
+        fields = dict(event.__dict__)
+        fields["payload"] = _deep_freeze(fields["payload"])
+        return cls.model_construct(_fields_set=set(event.model_fields_set), **fields)
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, LedgerEvent):
+            return self.__dict__ == other.__dict__
+        return NotImplemented
+
+    __hash__ = None  # type: ignore[assignment]
 
 
 def _canonical_bytes(record: dict[str, Any]) -> bytes:
