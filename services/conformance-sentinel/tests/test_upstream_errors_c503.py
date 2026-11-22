@@ -96,5 +96,5 @@ def test_the_check_command_names_the_status_only_on_a_failed_reply(monkeypatch, 
     with caplog.at_level(logging.INFO):
         result = CliRunner().invoke(cli.app, ["check", "agent-1", "draft invoices"])
     assert result.exit_code == 1
-    assert "error: /check returned 500" in result.output
+    assert "error 500: /check returned 500" in result.output      # main's "error <status>" form, no body
     assert MARK not in result.output and "x" * 200 not in result.output and MARK not in caplog.text
