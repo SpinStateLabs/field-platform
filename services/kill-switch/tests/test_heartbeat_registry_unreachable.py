@@ -32,11 +32,11 @@ class Flaky:
     def list_agents(self, **kw):
         return self.inner.list_agents(**kw)
 
-    def set_status(self, agent_id, status):
+    def set_status(self, agent_id, status, **kw):
         if status == "killed" and self.kill_down:
             self.kill_down = False
             raise RegistryUnreachableError("registry down")
-        return self.inner.set_status(agent_id, status)
+        return self.inner.set_status(agent_id, status, **kw)
 
 
 class Rig:

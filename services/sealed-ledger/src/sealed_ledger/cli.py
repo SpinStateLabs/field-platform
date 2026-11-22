@@ -62,7 +62,7 @@ def append(
 ) -> None:
     """Append one event to the chain (signed when FIELD_LEDGER_SIGN_KEY names a
     usable key; exit 2 if FIELD_LEDGER_REQUIRE_SIGNING=1 refuses it unsigned)."""
-    from sealed_ledger.store import SigningRequired
+    from sealed_ledger.store import LedgerBusy, LedgerCorrupt, SigningRequired
 
     try:
         payload_obj = json.loads(payload)
@@ -79,6 +79,11 @@ def append(
     except ValueError:  # a blank event_type: the same refusal as POST /events
         typer.echo("error: event_type must not be blank", err=True)
         raise typer.Exit(code=2)
+    except LedgerBusy as exc:
+        _busy(str(exc))
+    except LedgerCorrupt as exc:
+        typer.echo(f"error: ledger corrupt: {exc}", err=True)
+        raise typer.Exit(code=1)
     typer.echo(event.model_dump_json())
 
 
@@ -104,22 +109,25 @@ def _no_ledger(target: Path) -> None:
     raise typer.Exit(code=2)
 
 
-def _load_event_pubkey(event_pubkey: Path | None) -> str | None:
-    """--event-pubkey must be a readable Ed25519 PUBLIC key PEM (exit 2 otherwise)."""
-    if event_pubkey is None:
+def _read_public_pem(path: Path | None, flag: str) -> str | None:
+    """A readable Ed25519 PUBLIC key PEM named by ``flag`` (exit 2 otherwise). The class name only is shown: a decode
+    error's text can carry key bytes."""
+    if path is None:
         return None
     try:
-        pem = event_pubkey.read_text(encoding="ascii")
+        pem = path.read_text(encoding="ascii")
         from field_core.signing import key_fingerprint
 
         key_fingerprint(pem)
     except (OSError, UnicodeError, ValueError, TypeError, UnsupportedAlgorithm) as exc:
-        typer.echo(
-            f"error: --event-pubkey is not a readable Ed25519 public key ({type(exc).__name__})",
-            err=True,
-        )
+        typer.echo(f"error: {flag} is not a readable Ed25519 public key ({type(exc).__name__})", err=True)
         raise typer.Exit(code=2)
     return pem
+
+
+def _load_event_pubkey(event_pubkey: Path | None) -> str | None:
+    """--event-pubkey must be a readable Ed25519 PUBLIC key PEM (exit 2 otherwise)."""
+    return _read_public_pem(event_pubkey, "--event-pubkey")
 
 
 def _check_event_signatures(indexed, public_key_pem: str) -> None:
@@ -332,7 +340,7 @@ def verify(
             )
             raise typer.Exit(code=2)
         side = verify_segment_file(
-            target, public_key_pem=pubkey.read_text(encoding="ascii") if pubkey else None
+            target, public_key_pem=_read_public_pem(pubkey, "--pubkey")
         )
         if not side["ok"]:
             typer.echo(f"TAMPERED — {side['reason']}")
@@ -430,7 +438,7 @@ def verify(
         try:
             anchor_result = verify_anchors(
                 store, anchors,
-                public_key_pem=pubkey.read_text(encoding="ascii") if pubkey else None,
+                public_key_pem=_read_public_pem(pubkey, "--pubkey"),
                 min_anchors=min_anchors,
             )
         except LedgerBusy as exc:
@@ -516,9 +524,13 @@ def export(
     if sign_key is not None:
         try:
             private_key_pem = sign_key.read_text(encoding="ascii")
-        except (OSError, UnicodeDecodeError):
-            # fixed text: a decode error's message carries one raw byte of the key and its offset
+        except UnicodeDecodeError:
+            # main's fixed text (B-EXPORT-KEY-BYTE-LEAK): a decode error's message carries one raw byte of the key and
+            # its offset, and no class name is printed either
             typer.echo("error: cannot read --sign-key (not a readable ASCII PEM file)", err=True)
+            raise typer.Exit(code=2)
+        except OSError as exc:
+            typer.echo(f"error: cannot read --sign-key ({type(exc).__name__})", err=True)   # PR 915: the class only
             raise typer.Exit(code=2)
     try:
         store = _store(path)   # opening a store takes a snapshot too: a busy ledger can refuse here as well
@@ -559,7 +571,7 @@ def verify_export(
         try:
             public_key_pem = pubkey.read_text(encoding="ascii")
         except (OSError, UnicodeDecodeError) as exc:
-            typer.echo(f"error: cannot read --pubkey: {exc}", err=True)
+            typer.echo(f"error: cannot read --pubkey ({type(exc).__name__})", err=True)
             raise typer.Exit(code=2)
     result = verify_bundle(bundle, public_key_pem=public_key_pem)
     if not result.ok:
@@ -630,7 +642,25 @@ def _served_base_url(offline: bool) -> str | None:
             "error: set FIELD_LEDGER_URL, or pass --offline with the service stopped", err=True
         )
         raise typer.Exit(code=2)
+    if _url_has_userinfo(url):
+        # fixed text, the URL is never echoed (as for --events-url, S3-16): the perimeter secret rides a header
+        typer.echo("error: FIELD_LEDGER_URL must not carry credentials (user:pass@); nothing was sent", err=True)
+        raise typer.Exit(code=2)
     return url
+
+
+def _origin(url: str) -> str:
+    """scheme://host[:port] of a URL: never its userinfo, path, query or fragment."""
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname or ""
+        host = f"[{host}]" if ":" in host else host     # an IPv6 literal keeps its brackets
+        port = f":{parts.port}" if parts.port else ""
+        return f"{parts.scheme}://{host}{port}"
+    except ValueError:
+        return "<unparseable URL>"
 
 
 def _call_served(base_url: str, method: str, route: str, body: dict | None = None,
@@ -645,43 +675,30 @@ def _call_served(base_url: str, method: str, route: str, body: dict | None = Non
         with httpx.Client(base_url=base_url, headers=auth_headers(), timeout=timeout) as client:
             return client.request(method, route.lstrip("/"), json=body)
     except httpx.HTTPError as exc:
-        typer.echo(f"error: ledger at {_safe_url(base_url)} unreachable: "
-                   f"{type(exc).__name__}: {exc}", err=True)
+        # the class and the origin only: httpx's text can carry the whole URL
+        typer.echo(f"error: ledger at {_origin(base_url)} unreachable: {type(exc).__name__}", err=True)
         raise typer.Exit(code=2)
     except (httpx.InvalidURL, ValueError):  # e.g. FIELD_LEDGER_URL=http://[::1 ; never echoed
         typer.echo("error: FIELD_LEDGER_URL is not a usable URL", err=True)
         raise typer.Exit(code=2)
 
 
-def _safe_url(url: str) -> str:
-    """scheme://host[:port]/path of a URL, never its userinfo, query or fragment."""
-    from urllib.parse import urlsplit
-
+def _served_detail(resp) -> str:
     try:
-        parts = urlsplit(url)
-        host = parts.hostname or ""
-        port = f":{parts.port}" if parts.port else ""
-        return f"{parts.scheme}://{host}{port}{parts.path}"
+        body = resp.json()
     except ValueError:
-        return "<unparseable URL>"
+        body = None
+    detail = body.get("detail") if isinstance(body, dict) else None   # a list or a string body has no detail
+    return str(detail) if detail is not None else resp.text
 
 
 def _served_json(resp, what: str):
-    """The JSON body of a served 2xx, or one stderr line and exit 2 (never a traceback)."""
+    """The JSON body of a served 2xx, or one stderr line and exit 2 (never a traceback, never the body)."""
     try:
         return resp.json()
     except ValueError:
-        typer.echo(f"error: ledger answered {resp.status_code} to {what} but the body is not JSON",
-                   err=True)
+        typer.echo(f"error: ledger answered {resp.status_code} to {what} but the body is not JSON", err=True)
         raise typer.Exit(code=2)
-
-
-def _served_detail(resp) -> str:
-    try:
-        detail = resp.json().get("detail")
-    except ValueError:
-        detail = None
-    return str(detail) if detail is not None else resp.text
 
 
 @app.command()
@@ -947,7 +964,10 @@ def retention_check_cmd(
             typer.echo(f"error: retention check failed ({resp.status_code}): {_served_detail(resp)}",
                        err=True)
             raise typer.Exit(code=2)
-        result = resp.json()
+        result = _served_json(resp, "retention check")
+        if not isinstance(result, dict):
+            typer.echo("error: ledger answered 200 to retention check but the body is not a JSON object", err=True)
+            raise typer.Exit(code=2)
     else:
         from field_core.clients import RegistryClient
         from sealed_ledger.retention import retention_check

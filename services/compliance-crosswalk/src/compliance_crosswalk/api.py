@@ -7,6 +7,7 @@ import threading
 from contextlib import asynccontextmanager
 
 from field_core.authn import auth_headers
+from field_core.startup import warn_open
 
 from typing import Any
 
@@ -28,11 +29,17 @@ from compliance_crosswalk.engine import (
 from compliance_crosswalk.mapping import CONTROLS, FRAMEWORKS
 
 
+#: The registry's own id grammar (agent_registry.models), or empty (no agent: unchanged). An id outside it can be no
+#: registry record, and ``collect_evidence`` puts the id into URL paths and queries (S5-17).
+AGENT_ID_MAX = 200
+AGENT_ID_PATTERN = r"^([a-z0-9][a-z0-9._-]*)?$"
+
+
 class CrosswalkRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     manifest: dict[str, Any] = Field(description="FIELD manifest data")
-    agent_id: str | None = None
+    agent_id: str | None = Field(default=None, max_length=AGENT_ID_MAX, pattern=AGENT_ID_PATTERN)
     sources: EvidenceSources | None = None
 
 
@@ -54,7 +61,8 @@ class PackRequest(BaseModel):
     signer: str = Field(description="Named human signer — no pack without one")
     manifest: dict[str, Any] = Field(description="FIELD manifest data")
     agent_id: str | None = Field(
-        default=None, description="Collect live evidence for this agent"
+        default=None, max_length=AGENT_ID_MAX, pattern=AGENT_ID_PATTERN,
+        description="Collect live evidence for this agent",
     )
     sources: EvidenceSources | None = None
 
@@ -217,6 +225,7 @@ def create_app(stale_store: Any = None, fetcher: Any = None, every: int = 0) -> 
             )
         return {"markdown": md, "pack": payload}
 
+    warn_open("compliance-crosswalk")
     return app
 
 
@@ -240,6 +249,48 @@ def collect_evidence(agent_id: str) -> EvidenceSources:
             return resp.json() if resp.status_code == 200 else None
         except Exception:
             return None
+
+    def _is_tls_failure(exc: BaseException) -> bool:
+        import ssl
+
+        seen: set[int] = set()
+        stack: list[BaseException] = [exc]
+        while stack:
+            cur = stack.pop()
+            if id(cur) in seen:
+                continue
+            seen.add(id(cur))
+            if isinstance(cur, ssl.SSLError) or "CERTIFICATE_VERIFY_FAILED" in str(cur):
+                return True
+            # walk BOTH links: a non-ssl __cause__ must not hide an SSLError in __context__
+            for nxt in (cur.__cause__, cur.__context__):
+                if nxt is not None:
+                    stack.append(nxt)
+        return False
+
+    def _get_verify(url: str) -> Any:
+        # None only for "busy or unreachable" (503, transport error): retryable, not a finding.
+        # Any other answer (401/403 shared-secret fault, 404, 500, unparseable 200) means the
+        # ledger answered and the chain was NOT verified: carry the status so the engine keeps
+        # it a gap (mirrors attestation-reporter "answered HTTP n ... investigate").
+        try:
+            resp = httpx.get(url, timeout=5.0, headers=auth_headers())
+        except Exception as exc:
+            if _is_tls_failure(exc):
+                # a bad/expired/mismatched certificate is a standing fault (or an interposer): a gap
+                return {"tls_failed": True}
+            return None
+        if resp.status_code == 503:
+            return None
+        if resp.status_code == 200:
+            try:
+                body = resp.json()
+            except Exception:
+                body = None
+            if isinstance(body, dict):
+                return body
+            # a 200 that is not a JSON object (list, string, number) is an answer we cannot read: a gap, not a crash
+        return {"http_status": resp.status_code}
 
     import os
 
@@ -267,7 +318,7 @@ def collect_evidence(agent_id: str) -> EvidenceSources:
 
     return EvidenceSources(
         registry_record=registry_record,
-        ledger_verify=_dict(_get(f"{ledger_base}/verify")),
+        ledger_verify=_get_verify(f"{ledger_base}/verify"),
         ledger_event_types=event_types or None,
         tokens=tokens,
         governor_cap=_dict(_get(f"{governor_base}/caps/{aid}")),

@@ -68,6 +68,7 @@ from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from field_core import posture_flag
+from field_core.startup import warn_open
 from field_core.authn import auth_headers, install as install_authn, shared_secret
 from field_core.http_errors import install_validation_handler
 from field_core.buildinfo import build_sha
@@ -327,6 +328,16 @@ def _posture_flag(name: str) -> bool:
 def resolve_enforce() -> bool:
     """`FORCE_GATEWAY_ENFORCE`: see ``_posture_flag``."""
     return _posture_flag(ENFORCE_ENV)
+
+
+def _enforce_off_names() -> list[str]:
+    """C-804: ``FORCE_GATEWAY_ENFORCE`` as a name for the startup open-mode line
+    when it is off. A refused value is not "off": it fails at the resolver, so
+    the line says nothing about it (and never reads it back)."""
+    try:
+        return [] if resolve_enforce() else [ENFORCE_ENV]
+    except InvalidPostureFlag:
+        return []
 
 
 def resolve_tool_check() -> bool:
@@ -798,6 +809,39 @@ def _load_state(app: FastAPI) -> None:
         app.state.drift.record(route, dimension, score, model, rubric)
 
 
+#: The longest bypass cooldown the environment may set (requests forwarded uninstrumented after a fault).
+MAX_BYPASS_COOLDOWN = 1_000_000
+
+
+def _env_number(name: str, default, parse, minimum, maximum, exclusive: bool):
+    """Read a tuning variable. Blank is unset (the default). Anything that does not parse, is not
+    finite, or is outside the bounds refuses the start with a ValueError that names the variable and
+    never its value (S8-31): a window or baseline of 0, a NaN or negative band and a NaN or negative
+    latency budget each quietly break drift detection or bypass, so they are refused, not clamped."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = parse(raw)
+    except ValueError:
+        raise ValueError(f"{name} is not a valid number") from None
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"{name} must be finite")
+    if (value <= minimum) if exclusive else (value < minimum):
+        raise ValueError(f"{name} must be {'greater than' if exclusive else 'at least'} {minimum}")
+    if maximum is not None and value > maximum:
+        raise ValueError(f"{name} must be at most {maximum}")
+    return value
+
+
+def _env_int(name: str, default: int, *, minimum: int, maximum: int | None = None) -> int:
+    return _env_number(name, default, int, minimum, maximum, False)
+
+
+def _env_float(name: str, default: float, *, minimum: float, exclusive: bool = False) -> float:
+    return _env_number(name, default, float, minimum, None, exclusive)
+
+
 def create_app(upstream: Upstream | None = None, governor_client=None,
                ledger_client=None, hygiene_judge=None,
                sample_every: int | None = None, drift: DriftTracker | None = None,
@@ -838,16 +882,16 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
     app.state.sample_every = (sample_every if sample_every is not None
                               else resolve_sample_every())
     app.state.drift = drift or DriftTracker(
-        window_size=int(os.environ.get("FORCE_HYGIENE_WINDOW", "5")),
-        band=float(os.environ.get("FORCE_HYGIENE_BAND", "0.15")),
-        baseline_windows=int(os.environ.get("FORCE_HYGIENE_BASELINE_WINDOWS", "2")),
+        window_size=_env_int("FORCE_HYGIENE_WINDOW", 5, minimum=1),
+        band=_env_float("FORCE_HYGIENE_BAND", 0.15, minimum=0.0, exclusive=True),  # > 0, as DriftTracker (S-2-15)
+        baseline_windows=_env_int("FORCE_HYGIENE_BASELINE_WINDOWS", 2, minimum=1),
     )
     app.state.latency_budget_ms = (
         latency_budget_ms if latency_budget_ms is not None
-        else float(os.environ.get("FORCE_GATEWAY_LATENCY_BUDGET_MS", "250")))
+        else _env_float("FORCE_GATEWAY_LATENCY_BUDGET_MS", 250.0, minimum=0.0, exclusive=True))
     app.state.bypass_cooldown = (
         bypass_cooldown if bypass_cooldown is not None
-        else int(os.environ.get("FORCE_GATEWAY_BYPASS_COOLDOWN", "10")))
+        else _env_int("FORCE_GATEWAY_BYPASS_COOLDOWN", 10, minimum=0, maximum=MAX_BYPASS_COOLDOWN))
     app.state.telemetry_window = (
         checked_telemetry_window(telemetry_window) if telemetry_window is not None
         else resolve_telemetry_window())
@@ -917,8 +961,8 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
     def preset_text(name: str) -> dict[str, str]:
         try:
             return {"preset": name, "system_block": preset_block(name)}
-        except KeyError as exc:
-            raise HTTPException(404, str(exc))
+        except KeyError:  # the text of the KeyError holds the caller's name: a fixed refusal instead
+            raise HTTPException(404, f"unknown FORCE preset; choose from {', '.join(PRESETS)}")
 
     @app.post("/v1/messages")
     def messages(
@@ -999,9 +1043,7 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
             return _enforce_tool_blocks(app, response, x_field_agent_id, x_field_token)
 
         if x_force_preset not in PRESETS:
-            raise HTTPException(
-                422, f"unknown preset '{x_force_preset}'; use {', '.join(PRESETS)}"
-            )
+            raise HTTPException(422, f"unknown preset; use {', '.join(PRESETS)}")
         injected = inject_force_block(body, x_force_preset)
         t0 = time.perf_counter()
         status, response = app.state.upstream(
@@ -1150,4 +1192,5 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
             recent=[TelemetryRecord(**r) for r in recent],
         )
 
+    warn_open("force-gateway", extra=_enforce_off_names())
     return app

@@ -34,6 +34,7 @@ from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from field_core import operator_auth, operator_health
+from field_core.startup import warn_open
 from field_core.authn import HEADER as AUTH_HEADER, install as install_authn, shared_secret
 from field_core.http_errors import install_validation_handler
 from field_core.buildinfo import build_sha
@@ -121,7 +122,7 @@ def _error_text(status: int, data: Any) -> str:
 
 #: What the page reads of a failed drill (console.html ``drillReportOf``): numbers, a boolean and a short status. The
 #: report's free-text ``note`` and ``endpoint_result`` are not relayed (C-651 F-C651-3).
-DRILL_REPORT_FIELDS = ("agent_id", "kill_confirmed_ms", "heartbeat_confirmed_ms", "restored", "restored_status", "total_ms")
+DRILL_REPORT_FIELDS = ("agent_id", "kill_confirmed_ms", "heartbeat_confirmed_ms", "restored", "restored_status", "restore_skipped", "total_ms")
 
 
 def _drill_report_only(status: int, data: Any) -> Any:
@@ -351,6 +352,21 @@ MAX_LISTED_ERRORS = 50
 MAX_ERROR_TEXT = 200
 
 
+#: the most skipped registry rows one fleet-halt answer (and its ledger row) lists
+MAX_LISTED_SKIPPED = 50
+
+
+def _result_ids(data: Any) -> set[str] | None:
+    """The agent ids a kill-switch domain report CONFIRMS as halted (outcome killed or already_killed), in the body or in
+    a non-2xx answer's ``detail``; None when there is no ``results`` list."""
+    for cand in (data, data.get("detail") if isinstance(data, dict) else None):
+        if isinstance(cand, dict) and isinstance(cand.get("results"), list):
+            return {r["agent_id"] for r in cand["results"]
+                    if isinstance(r, dict) and isinstance(r.get("agent_id"), str)
+                    and r.get("outcome") in ("killed", "already_killed")}
+    return None
+
+
 def _domain_outcomes(data: Any) -> tuple[dict[str, int] | None, list[dict]]:
     """C-19: (counts per outcome, errored agents) from a kill-switch domain-kill
     answer. The per-agent ``results`` are read from the body, or from its
@@ -385,8 +401,11 @@ def _domain_outcomes(data: Any) -> tuple[dict[str, int] | None, list[dict]]:
 def _drill_not_restored(data: Any) -> str | None:
     """C-19: why a drill answer is a failure although it came back 2xx (the
     agent was not restored), or None when ``restored`` is true."""
-    if isinstance(data, dict) and data.get("restored") is True:
-        return None
+    if (isinstance(data, dict) and data.get("restored") is True
+            and data.get("restore_skipped", False) is False         # absent or exactly False: "true", 1, null contradict
+            and data.get("ok", True) is not False and "error" not in data
+            and data.get("restored_status") == "active"):           # an allowlist: only the status a drill restores to
+        return None                      # restored=True is only believed when nothing in the report contradicts it
     d = data if isinstance(data, dict) else {}
     return (f"drill did not restore the agent (restored={d.get('restored')}, "
             f"restored_status={d.get('restored_status')})")
@@ -833,8 +852,14 @@ def create_app(
 
     @app.post("/api/agents/{agent_id}/drill")
     def drill(agent_id: str, action: OperatorAction, request: Request) -> Any:
-        return _proxy(app.state.killswitch, f"/drill/{_seg(agent_id)}",
+        data = _proxy(app.state.killswitch, f"/drill/{_seg(agent_id)}",
                       action.model_dump(), failure=_drill_report_only, **_operator_kw(request))
+        failed = _drill_not_restored(data)
+        if failed:
+            # fail closed: a 2xx drill answer that does not say restored=true (an older kill-switch, a shape this
+            # console does not know) is an error on the page, never a success
+            raise HTTPException(502, detail=failed)
+        return data
 
     @app.post("/api/agents/bulk")
     def bulk(req: BulkAction, request: Request) -> dict:
@@ -870,25 +895,77 @@ def create_app(
         kill-switch's own domain halt (POST /kill/domain/{d})."""
         okw = _operator_kw(request)
         domains = req.domains
+        explicit = bool(domains)                  # the caller named the domains: the registry is read per domain below
+        skipped: list[dict[str, Any]] = []        # registry rows that could not be placed in a domain (id when known)
+        fallback_ids: dict[str, None] = {}        # skipped rows with a VALID agent_id (AGENT_ID_RE): killed one by one
+        expected: dict[str, set[str]] = {}        # domain -> the non-retired agent ids the registry listed for it
         if not domains:
             status, agents = app.state.registry.get("/agents")
             if status != 200:
                 raise HTTPException(502, detail=f"registry unavailable — cannot "
                                     f"enumerate domains: {_error_text(status, agents)}")
-            domains = sorted({a.get("domain") or "general" for a in agents
-                              if a.get("status") != "retired"})
+            if not isinstance(agents, list):
+                raise HTTPException(502, detail="registry answered an unexpected body — cannot enumerate domains")
+            # One malformed row must never stop the halt of the others: it is skipped, REPORTED BY ID and ledgered (an
+            # error in the report, a banner that is not green), and every domain that can be named is still halted.
+            # A skipped row whose agent_id is usable is killed on its own (/kill/{id}) so a malformed domain cannot
+            # leave a live agent behind; that is reported separately from the domain halts.
+            found: set[str] = set()
+            for a in agents:
+                if not isinstance(a, dict):
+                    skipped.append({"agent_id": None, "reason": "row is not an object"})
+                    continue
+                if a.get("status") == "retired":
+                    continue
+                aid = a.get("agent_id")
+                # a usable id is ONE valid path segment (AGENT_ID_RE, at most 128 chars): anything else (a "/" would
+                # reach the whole-domain route, C-936 F-C936-1) is reported but never used to build a URL
+                aid = aid if isinstance(aid, str) and len(aid) <= 128 and AGENT_ID_RE.fullmatch(aid) else None
+                # a missing key or null is the default domain; any other non-string (0, False, [], {}) or a blank or
+                # slashed string is malformed, never silently "general"
+                d = a["domain"] if a.get("domain") is not None else "general"
+                if not isinstance(d, str) or not d.strip() or "/" in d:
+                    skipped.append({"agent_id": aid, "reason": "domain is not a usable string"})
+                    if aid is not None:
+                        fallback_ids[aid] = None
+                    continue
+                found.add(d)
+                if aid is None:
+                    # a good domain but no usable agent_id: the domain halt still covers the agent, but this row cannot
+                    # be named, so it is reported, ledgered and keeps the page not-green
+                    skipped.append({"agent_id": None, "reason": "agent_id is not usable"})
+                else:
+                    expected.setdefault(d, set()).add(aid)
+            domains = sorted(found)
+        bad_rows = len(skipped)
         results = []
         for domain in dict.fromkeys(domains):
+            expectation_failed = False
+            if explicit:
+                # Explicit domains: the registry still decides which agents a halt must account for. The halt itself is
+                # NEVER skipped for a failed read; the domain is just not ok (the answer cannot be checked).
+                st_e, rows_e = app.state.registry.get("/agents", params={"domain": domain})
+                if st_e == 200 and isinstance(rows_e, list):
+                    expected[domain] = {r["agent_id"] for r in rows_e
+                                        if isinstance(r, dict) and r.get("status") != "retired"
+                                        and isinstance(r.get("agent_id"), str) and r["agent_id"].strip()}
+                else:
+                    expectation_failed = True
             status, data = app.state.killswitch.post(
                 f"/kill/domain/{_seg(domain)}",
                 json={"operator": req.operator, "reason": req.reason}, **okw)
             http_ok = status in (200, 201)
             try:
                 counts, errors = _domain_outcomes(data)
-                # C-19: a domain is halted only when the HTTP answer was 2xx AND no
-                # per-agent result is an error (a 200 with every agent errored is
-                # not a halt).
-                ok = http_ok and (counts is None or counts["error"] == 0)
+                # C-19: a domain is halted only when the HTTP answer was 2xx AND it carries a valid per-agent results
+                # list AND no result is an error (a 200 with every agent errored is not a halt; neither is a 2xx
+                # that does not say what happened to any agent).
+                ids = _result_ids(data)
+                # A halt report must account for every agent the registry listed for the domain (an empty or short list,
+                # or one naming other ids, is not a halt). Only 200/201 count as a successful answer (never a 202).
+                complete = (ids is not None and len(ids) >= 1 and not expectation_failed
+                            and expected.get(domain, set()) <= ids)
+                ok = http_ok and counts is not None and counts["error"] == 0 and complete
                 row = {"domain": domain, "ok": ok, "status": status,
                        "counts": counts, "errors": errors,
                        "result" if http_ok else "error": data if http_ok else _relay(status, data)}
@@ -896,9 +973,30 @@ def create_app(
                 row = {"domain": domain, "ok": False, "status": status, "counts": None, "errors": [],
                        "error": "the kill-switch answer for this domain could not be read"}
             results.append(row)
+        agent_kills = []
+        for aid in fallback_ids:   # (an ordered set: each id once)
+            st, data = app.state.killswitch.post(
+                f"/kill/{_seg(aid)}", json={"operator": req.operator, "reason": req.reason}, **okw)
+            good = st in (200, 201) and isinstance(data, dict) and data.get("agent_id") == aid
+            agent_kills.append({"agent_id": aid, "ok": good, "status": st})
+        if skipped:
+            # best effort, never a reason to stop: the halt already happened
+            try:
+                _RefusalLedger(app.state.ledger).append(
+                    "fleet.halt.skipped_rows",
+                    {"operator": req.operator, "reason": req.reason, "count": len(skipped),
+                     "skipped": skipped[:MAX_LISTED_SKIPPED],
+                     "fallback_kills": [{"agent_id": k["agent_id"], "ok": k["ok"]}
+                                        for k in agent_kills[:MAX_LISTED_SKIPPED]]},
+                    None)
+            except Exception:  # noqa: BLE001
+                pass
         return {"operator": req.operator, "domains": list(dict.fromkeys(domains)),
-                "all_ok": all(r["ok"] for r in results),
-                "agent_errors": sum(r["counts"]["error"] for r in results if r["counts"]),
+                "all_ok": bad_rows == 0 and all(r["ok"] for r in results) and all(k["ok"] for k in agent_kills),
+                "agent_errors": sum(r["counts"]["error"] for r in results if r["counts"]) + bad_rows,
+                "bad_rows": bad_rows,
+                "skipped_rows": skipped[:MAX_LISTED_SKIPPED],
+                "agent_kills": agent_kills,
                 "domains_failed": sum(1 for r in results if not r["ok"]),
                 "results": results}
 
@@ -919,4 +1017,5 @@ def create_app(
         is real and lands on the ledger like any other check."""
         return _proxy(app.state.sentinel, "/check", req.model_dump())
 
+    warn_open("ops-console", operator_layer=True)
     return app

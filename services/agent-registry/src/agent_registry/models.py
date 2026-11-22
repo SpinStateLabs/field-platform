@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Annotated, Any
@@ -64,14 +65,29 @@ class AgentRecord(BaseModel):
     )
 
 
+#: What a NEW agent id may be (reviewer C-528 F-C528-1/-2): lower-case letters and digits in runs, separated by
+#: ONE of ``.``, ``_`` or ``-``; no leading, trailing or doubled separator ("a1." and "a..1" would otherwise be
+#: distinct agents that read as "a1" in a log), at most 64 characters (the width of the rotation events' ids).
+#: Stored ids are not re-checked against this on read: a row written before it keeps working.
+MAX_AGENT_ID_LENGTH = 64
+_NEW_AGENT_ID = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
+
+
 class AgentCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    agent_id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9._-]*$")
+    agent_id: str = Field(min_length=1, max_length=MAX_AGENT_ID_LENGTH, pattern=r"^[a-z0-9][a-z0-9._-]*$")
     name: Name
     owner: Owner
     domain: Domain = "general"
     manifest_ref: ManifestRef | None = None
+
+    @field_validator("agent_id")
+    @classmethod
+    def _no_confusable_id(cls, value: str) -> str:
+        if not _NEW_AGENT_ID.fullmatch(value):
+            raise ValueError("agent_id must be lower-case letters and digits separated by single '.', '_' or '-'")
+        return value
 
 
 class AgentUpdate(BaseModel):
@@ -87,6 +103,26 @@ class AgentUpdate(BaseModel):
     domain: Domain | None = None
     manifest_ref: ManifestRef | None = None
     status: AgentStatus | None = None
+    # Compare-and-set (kill-path hardening): apply the patch only if the row's updated_at still equals this ISO 8601
+    # timestamp (the one a previous read or write of the row returned); otherwise 412. Not a column: it is never
+    # stored and never listed in the ledger's field list.
+    if_updated_at: str | None = Field(default=None, max_length=64)
+
+    @field_validator("if_updated_at")
+    @classmethod
+    def _parseable(cls, value: str | None) -> str | None:
+        if value is not None:
+            parse_updated_at(value)
+        return value
+
+
+def parse_updated_at(value: str) -> datetime:
+    """An ISO 8601 timestamp as an aware UTC datetime (``Z`` accepted, naive taken as UTC); ValueError otherwise."""
+    text = value.strip()
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    parsed = datetime.fromisoformat(text)
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
 
 class ShadowCandidate(BaseModel):

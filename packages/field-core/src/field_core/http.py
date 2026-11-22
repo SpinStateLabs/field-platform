@@ -82,9 +82,19 @@ def _checked_base_url(value) -> None:
         ok = parts.scheme in ("http", "https") and bool(host) and not parts.username and not parts.password
         if ok:
             try:
-                ok = not ipaddress.ip_address(host.split("%", 1)[0]).is_link_local
+                addr = ipaddress.ip_address(host.split("%", 1)[0])
+                addr = getattr(addr, "ipv4_mapped", None) or addr    # ::ffff:169.254.169.254 is the same host
+                ok = not addr.is_link_local
             except ValueError:
-                pass                                     # a name, not an address
+                # not a canonical address. inet_aton still reads hex, decimal, short and octal spellings of an
+                # IPv4 address (hosts.py), so a numeric-shaped host it accepts is refused outright; a name is not
+                import socket
+                if all(c in "0123456789abcdefxABCDEFX." for c in host):
+                    try:
+                        socket.inet_aton(host)
+                        ok = False
+                    except OSError:
+                        pass
     except ValueError:
         ok = False
     if not ok:
