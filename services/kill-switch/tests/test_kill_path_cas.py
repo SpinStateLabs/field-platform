@@ -202,7 +202,8 @@ def test_F2_a_200_flip_answer_without_updated_at_gives_no_restore_write(tmp_path
     assert len(s.events("kill.drill.restore_skipped")) == 1
 
 
-@pytest.mark.parametrize("token", [None, 0, "", ["x"]], ids=["null", "zero", "empty", "list"])
+@pytest.mark.parametrize("token", [None, 0, "", "   ", ["x"], "not-a-timestamp", "x" * 80, 12.5],
+                         ids=["null", "zero", "empty", "blank", "list", "not-iso", "too-long", "float"])
 def test_F2_an_unusable_updated_at_in_the_flip_answer_is_treated_as_no_token(tmp_path, token):
     s, w = _stack(tmp_path)
     s.register("a1")

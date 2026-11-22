@@ -271,6 +271,20 @@ def set_status_on_behalf(registry: Any, agent_id: str, status: str,
 log = logging.getLogger(__name__)
 
 
+def _usable_version(value: Any) -> str | None:
+    """A registry row version (``updated_at``) the drill may send back as ``if_updated_at``: a non-blank ISO 8601 string
+    of sane length. Anything else (None, "", whitespace, a number, a list, a non-timestamp string) is NO token: the
+    registry would refuse it (422) and the drill would fail on it instead of skipping the restore."""
+    if not isinstance(value, str) or not value.strip() or len(value) > 64:
+        return None
+    text = value.strip()
+    try:
+        datetime.fromisoformat(text[:-1] + "+00:00" if text[-1] in "Zz" else text)
+    except ValueError:
+        return None
+    return value
+
+
 class _NothingToRestore(Exception):
     """Internal: the drill's flip was refused, so there is nothing to restore."""
 
@@ -1107,7 +1121,7 @@ def create_app(
         try:
             read_token = record.get("updated_at")
             try:
-                flip = _set_status(agent_id, "killed", read_token if isinstance(read_token, str) else None)
+                flip = _set_status(agent_id, "killed", _usable_version(read_token))
             except AgentRowChangedError:
                 # the row was written between the drill's read and its flip (a real kill, from any process): nothing
                 # was flipped, so nothing may be restored
@@ -1116,8 +1130,7 @@ def create_app(
                                                     "reason": "the agent's row changed while the drill started"},
                              agent_id)
                 raise HTTPException(409, f"agent '{agent_id}' changed while the drill started — drill refused")
-            token = flip.get("updated_at") if isinstance(flip, dict) else None
-            flip_token = token if isinstance(token, str) else None
+            flip_token = _usable_version(flip.get("updated_at") if isinstance(flip, dict) else None)
             kill_confirmed = None
             for _ in range(100):
                 if app.state.registry.get_agent(agent_id).get("status") == "killed":
