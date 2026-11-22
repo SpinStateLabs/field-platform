@@ -240,7 +240,7 @@ upstream, enforce=1, kill-switch, `gateway.refused` in the ledger).
 
 | Guarantee | Status | How |
 |---|---|---|
-| Every proxied call carries the preset's FORCE block | **Enforced in code** | injection before forward; tests pin verbatim protocol lines per preset |
+| Every instrumented proxied call carries the preset's FORCE block. **Exceptions, by design (ADR 10): calls forwarded in a bypass window and `x-force-passthrough: judge` calls (when honoured: secret presented if one is configured; under enforce=1 self ids only) go upstream with the caller's body unchanged, with no FORCE block**; both are counted (`coverage.bypassed`, `coverage.passthrough`) | **Enforced in code** | injection before forward; tests pin verbatim protocol lines per preset; `tests/test_readme_force_block_claim.py` pins the instrumented call (block present) and both exceptions (body unchanged, counted) and this row's wording |
 | The caller's own system prompt survives injection | **Enforced in code** | string and block-list forms tested |
 | Telemetry figures are deterministic | **Enforced in code** | pure regex; labeled on every payload |
 | Token spend reaches the governor | **Enforced in code** (best-effort delivery) | usage forwarded per call with agent id, `x-force-passthrough` calls included (`tests/test_d2_upstream_passthrough.py`: passthrough + agent id ⇒ exactly one `/usage`, secret and secretless); not during a bypass window, which forwards uninstrumented |
