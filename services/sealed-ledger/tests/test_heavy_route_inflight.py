@@ -312,3 +312,71 @@ def test_only_ascii_digits_count_as_a_retry_after(monkeypatch, raw, want):
     from sealed_ledger.api import heavy_retry_after_s
 
     assert str(heavy_retry_after_s()) == want
+
+
+# ------------------------------------------------- roley.reviewer's conditions on 66b9c95 (C2)
+
+def test_admission_is_atomic_under_contention():
+    """Mutant M4b (the check and the increment not under one lock, with a gap between them): with 16 threads released
+    together at a tiny switch interval exactly one acquire may succeed, round after round."""
+    import sys
+
+    from sealed_ledger.api import HeavyAdmission
+
+    old = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        for _ in range(150):
+            admission = HeavyAdmission(1)
+            barrier = threading.Barrier(16)
+            got: list[bool] = []
+
+            def go():
+                barrier.wait()
+                got.append(admission.try_acquire())
+
+            threads = [threading.Thread(target=go) for _ in range(16)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(10)
+            assert sum(got) == 1 and admission.inflight == 1, (sum(got), admission.inflight)
+    finally:
+        sys.setswitchinterval(old)
+
+
+def test_health_and_an_append_do_not_take_the_slot_so_a_verify_afterwards_is_200(make):
+    """Mutant M18 (/health takes the slot while it is free and keeps it): after /health and an append with nothing
+    heavy running, the next /verify is admitted."""
+    s = make()
+    s.release.set()
+    assert _req(s.port, "GET", "/health", timeout=5)[1] == 200
+    assert _req(s.port, "POST", "/events", body={"event_type": "while.free"}, timeout=10)[1] == 201
+    assert s.app.state.heavy.inflight == 0
+    assert _req(s.port, "GET", "/verify", timeout=30)[1] == 200
+
+
+def test_a_whitespace_padded_env_value_counts(monkeypatch):
+    """Mutant M26 (the value is not stripped): " 2 " is 2 and " 7 " is 7, as for every other numeric env in this repo."""
+    from sealed_ledger.api import heavy_inflight_limit, heavy_retry_after_s
+
+    monkeypatch.setenv(ENV, " 2 ")
+    monkeypatch.setenv(RETRY_ENV, " 7 ")
+    assert heavy_inflight_limit() == 2 and heavy_retry_after_s() == 7
+
+
+def test_a_since_filtered_read_is_not_gated_and_takes_no_slot(make):
+    """What the README states: a since/until read is a whole-ledger read that never takes the slot (so it is ungated)."""
+    s = make()
+    s.start("/verify")
+    s.wait_inside()
+    out: list = []
+    t = threading.Thread(target=lambda: out.append(_req(s.port, "GET", "/events?since=1970-01-01T00:00:00Z",
+                                                        timeout=60)), daemon=True)
+    t.start()
+    time.sleep(1.0)
+    assert out == [], "a since-filtered read must not be refused (it waits its turn on the read lane instead)"
+    assert s.app.state.heavy.inflight == 1                              # only the held /verify has the slot
+    s.release.set()
+    t.join(30)
+    assert out and out[0][1] == 200
