@@ -6,6 +6,8 @@ counted a tick error, and tick 2 saw an empty, error-free cursor and re-posted e
 SPEC.md says a corrupt cursor disables posting rather than starting from zero. A negative or bool counter is
 corrupt too: a negative one would make the next delta larger than the real usage, and a bool is not a counter."""
 
+import json
+
 import pytest
 
 from approver_fakes import CONSOLE_AGENT, usage
@@ -42,15 +44,23 @@ def test_a_corrupt_cursor_posts_nothing_on_either_tick(content, console, field, 
     assert a.stats()["tick_errors"] == 0
 
 
-def test_a_first_load_that_raises_is_never_an_empty_healthy_cursor(tmp_path):
-    """R-REBUILD-1160 C1 (roley.reviewer M4): 592's headline fix. A cursor whose read raises something the inner
-    ``ValueError`` branch does not catch (deeply nested JSON: ``RecursionError``) must leave the cursor CORRUPT, on the
-    first load and on every later one, never an empty error-free cursor that re-posts usage from zero."""
-    from claude_approver.core import UsageCursor
+@pytest.mark.parametrize("raised", [RecursionError("too deep"), json.JSONDecodeError("bad", "x", 0)],
+                         ids=["recursion-error", "json-decode-error"])
+def test_a_first_load_that_raises_is_never_an_empty_healthy_cursor(tmp_path, monkeypatch, raised):
+    """R-REBUILD-1160 C1 (roley.reviewer M4): 592's headline fix. A cursor whose parse raises (deeply nested JSON gives
+    RecursionError on some interpreters and JSONDecodeError on others, so the failure is INJECTED, not provoked) must
+    leave the cursor CORRUPT on the first load and on every later one, never an empty error-free cursor that re-posts
+    usage from zero. RecursionError is not a ValueError: only load()'s outer guard catches it."""
+    import claude_approver.core as core
 
     p = tmp_path / "usage-cursor.json"
-    p.write_text("[" * 200_000 + "]" * 200_000, encoding="utf-8")
-    c = UsageCursor(p)
+    p.write_text('{"s1": {"input_tokens": 1}}', encoding="utf-8")
+
+    def boom(*a, **k):
+        raise raised
+
+    monkeypatch.setattr(core.json, "loads", boom)
+    c = core.UsageCursor(p)
     c.load()                                   # must not raise
     assert c.error == CORRUPT and c.data == {}
     c.load()                                   # a second load keeps the outcome of the first
