@@ -248,7 +248,11 @@ def test_a_get_without_updated_at_and_a_kill_from_another_instance_before_the_fl
     assert [e for e in s.events("kill.drill.refused")] and s.events("kill.drill.start") == []
 
 
-@pytest.mark.parametrize("token", [None, "", "   ", 42, ["x"], "not-a-timestamp", "x" * 80, 1.5, " " * 33 + "2026-01-01T00:00:00+00:00"],
+_LONG_ISO = " " * 40 + "2026-01-01T00:00:00+00:00"          # a parseable ISO stamp, exactly one over the 64-char limit
+assert len(_LONG_ISO) == 65
+
+
+@pytest.mark.parametrize("token", [None, "", "   ", 42, ["x"], "not-a-timestamp", "x" * 80, 1.5, _LONG_ISO],
                          ids=["absent", "empty", "blank", "int", "list", "not-iso", "too-long", "float", "65-char-iso"])
 def test_every_unusable_read_token_shape_refuses_the_drill_with_no_write(tmp_path, token):
     s, w = _stack(tmp_path)
