@@ -65,15 +65,6 @@ def _fail(resp: httpx.Response) -> None:
     raise typer.Exit(code=1)
 
 
-def _q(segment: str) -> str:
-    """One path segment: `/`, `?`, `#` and `%` in an id never change the route. `.` and `..` are dot segments that a
-    URL client resolves away (`revoke ..` would reach `/revoke`), so they are refused, as the other clients refuse them
-    (R-PR651 F-R651-3)."""
-    if segment in (".", ".."):
-        _refuse("a token id of '.' or '..' is a dot segment, not an id; nothing sent")
-    return urllib.parse.quote(segment, safe="")
-
-
 def _request(method: str, path: str, *, pair=None, nothing: str | None = None, **kw) -> httpx.Response:
     """One call. An unreachable service is one line and exit 2, never a traceback; only the exception CLASS is
     printed (its text can hold the URL). `nothing` names what was not done, for a write."""
