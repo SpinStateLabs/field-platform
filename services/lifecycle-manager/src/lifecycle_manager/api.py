@@ -279,6 +279,16 @@ class SweepRequest(BaseModel):
         return v
 
 
+class RosterInvalid(ValueError):
+    """The roster text is malformed (parse_roster's own message: a line number, never content).
+    ``from_body``: it came in the request (422); else the configured file (503)."""
+
+    def __init__(self, detail: str, from_body: bool):
+        self.detail = detail
+        self.from_body = from_body
+        super().__init__(detail)
+
+
 class RosterUnavailable(Exception):
     """No usable roster: nothing in the body and no readable file configured."""
 
@@ -350,7 +360,11 @@ def _resolve_roster(app: FastAPI, req: SweepRequest) -> str:
         if not path.is_file():
             raise RosterUnavailable(f"roster file not found: {path} ({ROSTER_ENV})")
         text, source = path.read_text(encoding="utf-8"), str(path)
-    if not parse_roster(text):
+    try:
+        owners = parse_roster(text)
+    except ValueError as exc:
+        raise RosterInvalid(str(exc), from_body=req.roster_csv is not None) from exc
+    if not owners:
         # An owner-less roster would orphan every agent — refuse loudly.
         raise RosterUnavailable(f"roster from {source} contains no owners — refusing an empty sweep")
     return text
@@ -437,8 +451,9 @@ def scheduled_tick(app: FastAPI) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 — the loop must survive anything
         log.exception("lifecycle tick failed")
         # Not silent: GET /findings shows last_tick with the failure, and the ledger gets a note.
-        # Class name only (no message); both writes are best effort.
-        error = type(exc).__name__
+        # Class name only (no message); both writes are best effort. A malformed roster is noted under its
+        # public base class, ValueError (S8-12): RosterInvalid is this module's internal 422/503 carrier.
+        error = "ValueError" if isinstance(exc, RosterInvalid) else type(exc).__name__
         try:
             _persist(app.state.tick_path, {
                 "failed": True,
@@ -457,7 +472,7 @@ def scheduled_tick(app: FastAPI) -> dict[str, Any]:
             )
         except Exception:
             log.warning("lifecycle tick: ledger unreachable for failed marker")
-        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        return {"ok": False, "error": f"{error}: {exc}"}
 
 
 def run_every(
@@ -608,6 +623,8 @@ def create_app(
             return run_sweep(app, req)
         except RosterUnavailable as exc:
             raise HTTPException(503, exc.detail)
+        except RosterInvalid as exc:
+            raise HTTPException(422 if exc.from_body else 503, exc.detail)
 
     @app.get("/findings")
     def findings() -> dict:
