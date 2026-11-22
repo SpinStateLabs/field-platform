@@ -168,7 +168,8 @@ def test_exports_never_overwrite_an_existing_bundle(store, tmp_path, monkeypatch
     assert verify_bundle(first.bundle_dir).ok and verify_bundle(second.bundle_dir).ok
 
 
-def test_served_export_writes_signed_false(store, tmp_path, keys):
+def test_served_export_writes_signed_false(store, tmp_path, keys, monkeypatch):
+    monkeypatch.setenv("FIELD_EXPORT_ROOT", str(tmp_path))  # Backlog B10: out_dir is confined when unarmed too
     _interleaved(store)
     client = TestClient(create_app(store=store))
     r = client.post("/export", params={"out_dir": str(tmp_path / "exports"), "agent_id": "a",
