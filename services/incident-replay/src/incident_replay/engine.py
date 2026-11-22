@@ -132,7 +132,7 @@ class LedgerBusyError(RuntimeError):
 
 def retry_budget_s() -> int:
     raw = os.environ.get(RETRY_BUDGET_ENV, "").strip()
-    return int(raw) if raw.isdecimal() and len(raw) <= 9 else DEFAULT_RETRY_BUDGET_S
+    return int(raw) if raw.isascii() and raw.isdecimal() and len(raw) <= 9 else DEFAULT_RETRY_BUDGET_S
 
 
 def _retry_after(resp: Any) -> int | None:
@@ -143,7 +143,7 @@ def _retry_after(resp: Any) -> int | None:
     except Exception:  # noqa: BLE001 - an odd headers object is simply no header
         return None
     raw = raw.strip() if isinstance(raw, str) else ""
-    return int(raw) if raw.isdecimal() and len(raw) <= 9 else None
+    return int(raw) if raw.isascii() and raw.isdecimal() and len(raw) <= 9 else None
 
 
 class LedgerQueryClient:

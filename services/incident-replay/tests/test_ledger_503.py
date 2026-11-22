@@ -99,7 +99,7 @@ def test_a_verify_that_stays_busy_is_not_verified_never_intact_never_broken(slee
     pm = engine_for(fake).replay(ReplayRequest(**REQ))
     assert pm.ledger_integrity_status == "unverified" and pm.ledger_integrity_ok is False
     assert "INTEGRITY NOT VERIFIED" in pm.ledger_integrity_detail and "ledger busy:" in pm.ledger_integrity_detail
-    assert len(calls_of(fake, "/verify")) == 1 + eng.MAX_RETRIES_PER_CALL
+    assert len(calls_of(fake, "/verify")) == 4                      # the first ask plus three retries, a literal bound
 
 
 def test_a_busy_events_read_is_waited_out(sleeps):
@@ -191,3 +191,53 @@ def test_the_ledger_client_outside_a_replay_never_retries(sleeps):
     fake = Fake(verify=[BUSY, Resp(200, OK_VERIFY)])
     out = LedgerQueryClient(client=fake, base_url="http://t").verify()
     assert sleeps == [] and len(fake.calls) == 1 and out["ok"] is False and out["reason"].startswith("ledger busy:")
+
+
+# ------------------------------------------------------------- review conditions (cloud verdicts on f679c96)
+
+@pytest.mark.parametrize("status", [500, 502, 504])
+def test_a_5xx_that_is_not_a_503_on_the_events_read_is_an_error_not_busy(sleeps, status):
+    """A real ledger fault must never read as "busy, retry": not retried, the engine raises (not LedgerBusyError),
+    and the API answers 500 without Retry-After."""
+    fake = Fake(events=[Resp(status, None, {"Retry-After": "2"}), Resp(200, [])])
+    with pytest.raises(RuntimeError) as exc:
+        engine_for(fake).replay(ReplayRequest(**REQ))
+    assert not isinstance(exc.value, LedgerBusyError)
+    assert sleeps == [] and len(calls_of(fake, "/events")) == 1
+    client = TestClient(create_app(engine=engine_for(Fake(events=[Resp(status, None, {"Retry-After": "2"})]))),
+                        raise_server_exceptions=False)
+    for path in ("/replay", "/replay/markdown"):
+        r = client.post(path, json=REQ)
+        assert r.status_code == 500 and "retry-after" not in r.headers
+
+
+def test_the_budget_is_reset_after_a_replay_so_a_later_direct_call_never_retries(sleeps):
+    """The ContextVar must not leak the replay's leftover budget to the next call on the same thread."""
+    engine_for(Fake(verify=[BUSY, Resp(200, OK_VERIFY)])).replay(ReplayRequest(**REQ))
+    assert eng._RETRY_LEFT.get() is None
+    sleeps.clear()
+    fake = Fake(verify=[BUSY, Resp(200, OK_VERIFY)])
+    out = LedgerQueryClient(client=fake, base_url="http://t").verify()
+    assert sleeps == [] and len(fake.calls) == 1 and out["ok"] is False
+
+
+def test_the_budget_is_reset_after_a_replay_that_raised(sleeps):
+    with pytest.raises(LedgerBusyError):
+        engine_for(Fake(events=[BUSY])).replay(ReplayRequest(**REQ))
+    assert eng._RETRY_LEFT.get() is None
+
+
+@pytest.mark.parametrize("value", ["9" * 20, "9" * 10, "1" + "0" * 9])
+def test_a_retry_after_of_more_than_nine_digits_is_no_header(sleeps, value):
+    fake = Fake(verify=[Resp(503, None, {"Retry-After": value}), Resp(200, OK_VERIFY)])
+    pm = engine_for(fake).replay(ReplayRequest(**REQ))
+    assert sleeps == [] and len(calls_of(fake, "/verify")) == 1 and pm.ledger_integrity_status == "unverified"
+
+
+@pytest.mark.parametrize("raw", ["٣", "３", "²"])
+def test_only_ascii_digits_count_in_retry_after_and_in_the_budget(sleeps, monkeypatch, raw):
+    fake = Fake(verify=[Resp(503, None, {"Retry-After": raw}), Resp(200, OK_VERIFY)])
+    engine_for(fake).replay(ReplayRequest(**REQ))
+    assert sleeps == [] and len(calls_of(fake, "/verify")) == 1
+    monkeypatch.setenv(ENV, raw)
+    assert eng.retry_budget_s() == 20
