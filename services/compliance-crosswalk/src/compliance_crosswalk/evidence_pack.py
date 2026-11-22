@@ -42,11 +42,29 @@ from compliance_crosswalk.engine import (
 )
 
 #: gap kind -> its label in the Markdown "Gaps" list (the JSON carries the kind itself)
-GAP_LABELS = {"not-declared": "not declared", "not-evidenced": "not evidenced", "not-checked": "not checked"}
+GAP_LABELS = {
+    "not-declared": "not declared",
+    "not-evidenced": "not evidenced",
+    "not-checked": "not checked",
+    "caller-asserted": "caller-asserted, not verified",
+}
 #: the FC-L-01 "not-checked" gap detail: fixed text, so Markdown and JSON say the same
 LEDGER_NOT_CHECKED_GAP = (
     "the ledger did not answer /verify (busy or unreachable), so the chain was not verified on this run; "
     "this is not a pass: re-run the pack"
+)
+#: B2: prefix of a control's evidence detail when its positive verdict rests only on caller-supplied sources
+CALLER_ASSERTED_PREFIX = "caller-asserted, not verified against the live ledger and services: "
+#: B2: the "caller-asserted" gap detail: fixed text, so Markdown and JSON say the same
+CALLER_ASSERTED_GAP = (
+    "the caller supplied this evidence and a live collection on this run did not confirm it; "
+    "this is not a pass: re-run the pack with agent_id and the platform reachable"
+)
+#: B2: the headline when live collection was requested and no platform service answered (a full outage)
+EVIDENCE_UNKNOWN_HEADLINE = (
+    "Evidence status UNKNOWN: live collection was requested for this agent but no platform service answered "
+    "(ledger, registry, delegation, spend-governor), so no control was checked on this run; this is not a pass: "
+    "re-run the pack"
 )
 from compliance_crosswalk.mapping import CONTROLS, FRAMEWORKS, INGESTION_LOG
 
@@ -157,6 +175,35 @@ def _yes_no(value: bool) -> str:
     return "yes" if value else "no"
 
 
+def _any_source(sources: EvidenceSources | None) -> bool:
+    return sources is not None and any(getattr(sources, f) is not None for f in EvidenceSources.model_fields)
+
+
+def _caller_asserted_coverage(
+    manifest: dict[str, Any], agent_id: str | None, caller: EvidenceSources, live: EvidenceSources | None
+) -> tuple[Any, set[str]]:
+    """B2: coverage when the caller supplied the sources. A positive verdict counts as evidenced only when the live
+    collection on this run (``live``) gives the same control a positive verdict too; otherwise the row is
+    unevidenced (None), its detail says caller-asserted, and the control id is returned so a gap is recorded. A
+    negative or unknown caller verdict stands as it is: over-conservative is survivable."""
+    claimed = evaluate(manifest, agent_id=agent_id, sources=caller)
+    checked = {c.control_id: c for c in evaluate(manifest, agent_id=agent_id, sources=live).controls}
+    asserted: set[str] = set()
+    rows = []
+    for row in claimed.controls:
+        if row.evidenced is True:
+            confirmed = checked[row.control_id]
+            if confirmed.evidenced is True:
+                row = confirmed
+            else:
+                asserted.add(row.control_id)
+                row = row.model_copy(
+                    update={"evidenced": None, "evidence_detail": one_line(CALLER_ASSERTED_PREFIX + row.evidence_detail)}
+                )
+        rows.append(row)
+    return claimed.model_copy(update={"controls": rows}), asserted
+
+
 def generate_pack(
     manifest: dict[str, Any],
     *,
@@ -164,9 +211,15 @@ def generate_pack(
     stale_store: Any,
     agent_id: str | None = None,
     sources: EvidenceSources | None = None,
+    caller_sources: EvidenceSources | None = None,
     now: datetime | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    """Generate the evidence pack: (markdown, dict). Blocked, never fudged."""
+    """Generate the evidence pack: (markdown, dict). Blocked, never fudged.
+
+    ``sources`` is what this process collected live (``collect_evidence``). ``caller_sources`` is evidence a caller
+    handed in (``POST /pack`` body): it is never evidenced on its own word, only where ``sources`` confirms the same
+    verdict (B2). An ``agent_id`` with no answering source means live collection was requested and nothing answered:
+    the evidence status is ``unknown`` and the pack never headlines "No gaps" (B2)."""
     signer = _checked_signer(signer)
     if isinstance(agent_id, str) and any(unicodedata.category(ch) == "Cs" for ch in agent_id):
         # PR 563 / Q-47 F-Q47-3: refused by name rather than cleaned, as for the signer (the API grammar 422s it first)
@@ -183,7 +236,18 @@ def generate_pack(
 
     status = dict(stale_store.status() or {})
     corpus_version = _corpus_version(status)
-    coverage = evaluate(manifest, agent_id=agent_id, sources=sources)
+    asserted: set[str] = set()
+    if caller_sources is not None:
+        coverage, asserted = _caller_asserted_coverage(manifest, agent_id, caller_sources, sources)
+        evidence_status = "caller-asserted"
+    else:
+        coverage = evaluate(manifest, agent_id=agent_id, sources=sources)
+        if _any_source(sources):
+            evidence_status = "collected"
+        elif agent_id is not None:
+            evidence_status = "unknown"  # collection was requested (agent_id) and no service answered
+        else:
+            evidence_status = "not-requested"
     now = now or datetime.now(timezone.utc)
     generated_at = now.isoformat()
 
@@ -219,6 +283,17 @@ def generate_pack(
                     "detail": LEDGER_NOT_CHECKED_GAP,
                 }
             )
+        elif control.control_id in asserted:
+            gaps.append(
+                {
+                    "control_id": control.control_id,
+                    "kind": "caller-asserted",
+                    "detail": CALLER_ASSERTED_GAP,
+                }
+            )
+    if evidence_status == "unknown":
+        # a full outage: FC-L-01 reads "evidence not collected", but the ledger was asked and did not answer
+        gaps.append({"control_id": "FC-L-01", "kind": "not-checked", "detail": LEDGER_NOT_CHECKED_GAP})
 
     lines: list[str] = []
     add = lines.append
@@ -227,6 +302,7 @@ def generate_pack(
     add(f"- generated_at: {generated_at}")
     add(f"- Regulatory corpus version: {corpus_version}")
     add(f"- agent_id: {coverage.agent_id or 'manifest-only'}")
+    add(f"- Evidence status: {evidence_status}")
     add(f"- Prepared for signature by: {signer}")
     add("- Document type: named-signer. This pack carries no cryptographic signature, hash or key; the Signature block at the end is completed by the named human.")
     add("")
@@ -238,17 +314,19 @@ def generate_pack(
         f"Manifest valid: {_yes_no(coverage.manifest_valid)}. Declared means "
         "the manifest carries the field; evidenced means a live artifact was "
         "collected and checked; not-collected means no evidence was gathered "
-        "on this run — an honest unknown, not a pass."
+        "on this run — an honest unknown, not a pass; caller-asserted means "
+        "the caller supplied the evidence and this run did not confirm it."
     )
     add("")
     add("| control_id | manifest_path | declared | evidenced |")
     add("|---|---|---|---|")
     for control in coverage.controls:
-        evidenced = (
-            "not-collected"
-            if control.evidenced is None
-            else _yes_no(control.evidenced)
-        )
+        if control.control_id in asserted:
+            evidenced = "caller-asserted"
+        elif control.evidenced is None:
+            evidenced = "not-collected"
+        else:
+            evidenced = _yes_no(control.evidenced)
         add(
             f"| {control.control_id} | {control.manifest_path} | "
             f"{_yes_no(control.declared)} | {evidenced} |"
@@ -276,6 +354,9 @@ def generate_pack(
     add("")
     add("## Gaps")
     add("")
+    if evidence_status == "unknown":
+        add(EVIDENCE_UNKNOWN_HEADLINE + ".")
+        add("")
     if gaps:
         add(
             "Over-conservative is survivable; false assurance is not. Each "
@@ -361,6 +442,7 @@ def generate_pack(
             for control in coverage.controls
         ],
         "gaps": gaps,
+        "evidence_status": evidence_status,
         "staleness": status,
         "manifest_valid": coverage.manifest_valid,
     }

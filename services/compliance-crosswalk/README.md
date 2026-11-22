@@ -48,7 +48,9 @@ behind the proxy; `x-field-auth` applies to every route but `/health` when
 
 **CLI stays the canonical path; `POST /pack` is a thin adapter over
 `generate_pack`** — the same call the `crosswalk pack` CLI makes, with the
-same rules (signer gate, stale block with no override). `manifest` is
+same rules (signer gate, stale block with no override). Body `sources` are
+*caller-asserted*: with an `agent_id` the route still collects live, and only
+that collection can make a verdict evidenced (Backlog B2). `manifest` is
 REQUIRED in the body. The shared resolver landed in v1.2 B0
 (`field_core.clients.resolve_manifest`), and the registry record carries the
 `manifest_ref` it needs — but this service does not yet make that
@@ -282,6 +284,9 @@ detects **content change (normalised text), not semantics**.
 | No citation can ship without a reference, source URL and retrieval date | **Enforced in code** | adversarial guard test on the mapping table (checks the form only, not that the passage says what the note says) |
 | Placeholder values never count as declared | **Enforced in code** | REPLACE-ME detection |
 | Evidence verdicts come from real artifacts | **Enforced in code** | ledger verify / event counts / tokens / caps; broken chain ⇒ FC-L-01 ✗ |
+| `POST /pack` body `sources` never count as evidence on the caller's word | **Enforced in code** | body sources are caller-asserted: a positive verdict is evidenced only when the same run's live collection for `agent_id` also gives that control a positive verdict; otherwise the row reads `caller-asserted` (evidenced null) with a `caller-asserted` gap, and `evidence_status: caller-asserted`; a negative caller verdict stands as a gap; with an `agent_id` the route always collects live, body sources or not (Backlog B2, `test_pack_caller_asserted_b2.py`) |
+| A pack whose live collection got no answer at all never headlines "No gaps" | **Enforced in code** | `agent_id` given and no service answered ⇒ `evidence_status: unknown`, the UNKNOWN headline and the FC-L-01 `not-checked` gap, on the HTTP and CLI paths (Backlog B2, `test_full_outage_with_agent_id_is_unknown_not_no_gaps`, `test_full_outage_is_unknown_on_the_cli_path_too`) |
+| Body `sources` are what the caller actually observed | **Declared only** | nothing authenticates the caller's evidence; it is printed as caller-asserted and only a live collection can confirm a verdict (B2) |
 | Below-floor suggestions never render as mappings | **Enforced in code** | floor gate + model validator refuses half-mapped candidates (tests) |
 | The authored matrix is the sole source of truth | **Enforced in code** | suggestions cannot mutate CONTROLS (immutability test) |
 | No pack ships without a named signer | **Enforced in code** | generate_pack raises on an empty signer, on text over 200 characters, on a signer with no letter or digit ('...', '-'; test_pack_signer_needs_alnum_s10.py), and on any control, invisible-format (zero-width, mark, byte-order mark, bidirectional) or line-break character, so the signer is a name you can see on one line (the zero-width joiner and non-joiner, U+200D and U+200C, are format characters and are refused too: a name spelled with one, as in some Persian, Malayalam or Sinhala spellings, must be written without it); CLI requires --signer (exit 2 on a refused one) — over HTTP too, 422 (test_pack_api.py, test_signer_sanitise_c252.py) |
