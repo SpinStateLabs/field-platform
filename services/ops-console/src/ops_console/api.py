@@ -867,13 +867,29 @@ def create_app(
         kill-switch's own domain halt (POST /kill/domain/{d})."""
         okw = _operator_kw(request)
         domains = req.domains
+        bad_rows = 0
         if not domains:
             status, agents = app.state.registry.get("/agents")
             if status != 200:
                 raise HTTPException(502, detail=f"registry unavailable — cannot "
                                     f"enumerate domains: {_error_text(status, agents)}")
-            domains = sorted({a.get("domain") or "general" for a in agents
-                              if a.get("status") != "retired"})
+            if not isinstance(agents, list):
+                raise HTTPException(502, detail="registry answered an unexpected body — cannot enumerate domains")
+            # One malformed row must never stop the halt of the others: it is skipped and COUNTED (an error in the
+            # report, a banner that is not green), and every domain that can be named is still halted.
+            found: set[str] = set()
+            for a in agents:
+                if not isinstance(a, dict):
+                    bad_rows += 1
+                    continue
+                if a.get("status") == "retired":
+                    continue
+                d = a.get("domain") or "general"
+                if not isinstance(d, str) or not d.strip() or "/" in d:
+                    bad_rows += 1
+                    continue
+                found.add(d)
+            domains = sorted(found)
         results = []
         for domain in dict.fromkeys(domains):
             status, data = app.state.killswitch.post(
@@ -881,16 +897,17 @@ def create_app(
                 json={"operator": req.operator, "reason": req.reason}, **okw)
             http_ok = status in (200, 201)
             counts, errors = _domain_outcomes(data)
-            # C-19: a domain is halted only when the HTTP answer was 2xx AND no
-            # per-agent result is an error (a 200 with every agent errored is
-            # not a halt).
-            ok = http_ok and (counts is None or counts["error"] == 0)
+            # C-19: a domain is halted only when the HTTP answer was 2xx AND it carries a valid per-agent results list
+            # AND no result is an error (a 200 with every agent errored is not a halt; neither is a 2xx that does not
+            # say what happened to any agent).
+            ok = http_ok and counts is not None and counts["error"] == 0
             results.append({"domain": domain, "ok": ok, "status": status,
                             "counts": counts, "errors": errors,
                             "result" if http_ok else "error": data if http_ok else _relay(status, data)})
         return {"operator": req.operator, "domains": list(dict.fromkeys(domains)),
-                "all_ok": all(r["ok"] for r in results),
-                "agent_errors": sum(r["counts"]["error"] for r in results if r["counts"]),
+                "all_ok": bad_rows == 0 and all(r["ok"] for r in results),
+                "agent_errors": sum(r["counts"]["error"] for r in results if r["counts"]) + bad_rows,
+                "bad_rows": bad_rows,
                 "domains_failed": sum(1 for r in results if not r["ok"]),
                 "results": results}
 
