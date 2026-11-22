@@ -1,6 +1,8 @@
 """S8-22 — FIELD_LEDGER_REQUIRE_SIGNING / FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE keep their pinned parse
 (1/true/yes/on arm; anything else is off), but a non-blank value outside {1,true,yes,on,0,false,no,off}
-is made VISIBLE: one startup WARNING naming the variable (never the value) and a boolean on /health.
+is made VISIBLE: one WARNING from sealed_ledger.api naming the variable (never the value) and a boolean on /health.
+In open mode field_core.startup's once-per-process open-mode WARNING names the variable too; the counts below
+read the sealed_ledger.api logger only (rebuild of PR 779, don.reviewer B1 on #1271).
 Whether a typo should instead refuse to start is Don's decision (not in this card)."""
 
 from __future__ import annotations
@@ -29,6 +31,15 @@ def _clean(monkeypatch):
         monkeypatch.delenv(name, raising=False)
 
 
+LOGGER = "sealed_ledger.api"
+
+
+def _own(caplog):
+    """The records this module logged: main's warn_open (field_core.startup) also names these variables when the
+    service starts open, once per process, so a count over every record depends on test order (B1 on #1271)."""
+    return [r for r in caplog.records if r.name == LOGGER]
+
+
 def _health(tmp_path, caplog):
     with caplog.at_level(logging.WARNING, logger="sealed_ledger.api"):
         app = create_app(store=LedgerStore(tmp_path / "e.jsonl"))
@@ -41,7 +52,7 @@ def test_an_unrecognised_value_warns_once_and_shows_on_health(tmp_path, monkeypa
     monkeypatch.setenv(name, value)
     h = _health(tmp_path, caplog)
     assert h[flag] is True
-    warned = [r for r in caplog.records if name in r.getMessage()]
+    warned = [r for r in _own(caplog) if name in r.getMessage()]
     assert len(warned) == 1 and warned[0].levelno == logging.WARNING
     assert value.strip() not in warned[0].getMessage() or len(value.strip()) <= 1   # never the value
     other = next(f for n, f, _ in VARS if n != name)
@@ -54,13 +65,13 @@ def test_recognised_and_blank_values_do_not_warn(tmp_path, monkeypatch, caplog, 
     monkeypatch.setenv(name, value)
     h = _health(tmp_path, caplog)
     assert h[flag] is False
-    assert not [r for r in caplog.records if name in r.getMessage()]
+    assert not [r for r in _own(caplog) if name in r.getMessage()]
 
 
 @pytest.mark.parametrize("name, flag, _", VARS)
 def test_unset_does_not_warn(tmp_path, caplog, name, flag, _):
     assert _health(tmp_path, caplog)[flag] is False
-    assert caplog.records == []
+    assert _own(caplog) == []
 
 
 @pytest.mark.parametrize("name, flag, parse", VARS)
