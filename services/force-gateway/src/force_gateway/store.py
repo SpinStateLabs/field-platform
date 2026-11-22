@@ -31,6 +31,9 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_RETAIN = 10_000
+#: the most telemetry rows ``FORCE_TELEMETRY_RETAIN`` (or an explicit ``retain``) can ask the store to keep (S6-22): the
+#: setting was a floor only, so a typo of a few extra digits was an unbounded table
+MAX_RETAIN = 1_000_000
 
 #: cumulative per-route aggregate counters, ``agg.<route>.<field>``
 AGG_FIELDS = ("requests", "confidence_tags", "clean_of_flattery", "cot_structure",
@@ -65,18 +68,22 @@ def data_path() -> Path:
 
 
 def resolve_retain(default: int = DEFAULT_RETAIN) -> int:
-    """``FORCE_TELEMETRY_RETAIN``: rows kept in ``telemetry_records`` (>= 1;
+    """``FORCE_TELEMETRY_RETAIN``: rows kept in ``telemetry_records`` (1..``MAX_RETAIN``;
     junk falls back to the default)."""
     try:
-        return max(1, int(os.environ.get("FORCE_TELEMETRY_RETAIN", "")))
+        return checked_retain(int(os.environ.get("FORCE_TELEMETRY_RETAIN", "")))
     except ValueError:
         return default
+
+
+def checked_retain(n: int) -> int:
+    return min(MAX_RETAIN, max(1, n))
 
 
 class GatewayStore:
     def __init__(self, path: str | Path, retain: int | None = None):
         self.path = Path(path)
-        self.retain = retain if retain is not None else resolve_retain()
+        self.retain = checked_retain(retain) if retain is not None else resolve_retain()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(str(self.path), check_same_thread=False)
