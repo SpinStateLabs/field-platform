@@ -451,8 +451,9 @@ def scheduled_tick(app: FastAPI) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 — the loop must survive anything
         log.exception("lifecycle tick failed")
         # Not silent: GET /findings shows last_tick with the failure, and the ledger gets a note.
-        # Class name only (no message); both writes are best effort.
-        error = type(exc).__name__
+        # Class name only (no message); both writes are best effort. A malformed roster is noted under its
+        # public base class, ValueError (S8-12): RosterInvalid is this module's internal 422/503 carrier.
+        error = "ValueError" if isinstance(exc, RosterInvalid) else type(exc).__name__
         try:
             _persist(app.state.tick_path, {
                 "failed": True,
@@ -471,7 +472,7 @@ def scheduled_tick(app: FastAPI) -> dict[str, Any]:
             )
         except Exception:
             log.warning("lifecycle tick: ledger unreachable for failed marker")
-        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        return {"ok": False, "error": f"{error}: {exc}"}
 
 
 def run_every(
