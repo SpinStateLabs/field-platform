@@ -61,6 +61,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from field_core.errors import upstream_error
+from field_core.http import get_retrying_once, pooled_limits
 from field_core.manifest import FieldManifest
 from field_core.validation import parse_manifest_text, validate_manifest_data
 
@@ -309,8 +310,9 @@ class LedgerClient:
         if self._client is None:
             import httpx
 
-            # No headers here (C-4): they are built per request (_request_auth).
-            self._client = httpx.Client(timeout=5.0, trust_env=False)
+            # No headers here (C-4): they are built per request (_request_auth). B16: idle connections expire
+            # before the server's keep-alive closes them.
+            self._client = httpx.Client(timeout=5.0, trust_env=False, limits=pooled_limits())
         # F2b: the caller key is loaded here, once per client (never per append).
         self._caller = caller if caller is not None else CallerSigner.from_env()
 
@@ -348,8 +350,8 @@ class LedgerClient:
         registered manifest. A transport error or any non-200 raises
         ``LedgerUnreachableError`` — a check that did not run is never "ok"."""
         try:
-            resp = self._client.get(f"{self._base}/retention/check",
-                                    **_request_auth(self._own_client, "GET", "/retention/check", LEDGER_GUARDED))
+            resp = get_retrying_once(self._client, f"{self._base}/retention/check",
+                                     **_request_auth(self._own_client, "GET", "/retention/check", LEDGER_GUARDED))
         except Exception as exc:
             raise LedgerUnreachableError(str(exc)) from exc
         if resp.status_code != 200:
@@ -364,8 +366,8 @@ class LedgerClient:
         ``LedgerUnreachableError`` — a read that did not happen is never "no events"."""
         params = {"event_type": event_type} if event_type else {}
         try:
-            resp = self._client.get(f"{self._base}/events", params=params,
-                                    **_request_auth(self._own_client, "GET", "/events", LEDGER_GUARDED))
+            resp = get_retrying_once(self._client, f"{self._base}/events", params=params,
+                                     **_request_auth(self._own_client, "GET", "/events", LEDGER_GUARDED))
         except Exception as exc:
             raise LedgerUnreachableError(str(exc)) from exc
         if resp.status_code != 200:
@@ -393,12 +395,13 @@ class RegistryClient:
 
             # No headers here (C-4): the kill-switch's S1 hop must present the
             # CURRENT svc identity on every PATCH, not the one it started with.
-            self._client = httpx.Client(timeout=5.0, trust_env=False)
+            # B16: idle connections expire before the server's keep-alive closes them.
+            self._client = httpx.Client(timeout=5.0, trust_env=False, limits=pooled_limits())
 
     def get_agent(self, agent_id: str) -> dict[str, Any]:
         try:
-            resp = self._client.get(f"{self._base}/agents/{agent_id}",
-                                    **_request_auth(self._own_client, "GET", f"/agents/{agent_id}", REGISTRY_GUARDED))
+            resp = get_retrying_once(self._client, f"{self._base}/agents/{agent_id}",
+                                     **_request_auth(self._own_client, "GET", f"/agents/{agent_id}", REGISTRY_GUARDED))
         except Exception as exc:
             raise RegistryUnreachableError(str(exc)) from exc
         if resp.status_code == 404:
@@ -424,8 +427,8 @@ class RegistryClient:
         if status:
             params["status"] = status
         try:
-            resp = self._client.get(f"{self._base}/agents", params=params,
-                                    **_request_auth(self._own_client, "GET", "/agents", REGISTRY_GUARDED))
+            resp = get_retrying_once(self._client, f"{self._base}/agents", params=params,
+                                     **_request_auth(self._own_client, "GET", "/agents", REGISTRY_GUARDED))
         except Exception as exc:
             raise RegistryUnreachableError(str(exc)) from exc
         if resp.status_code != 200:

@@ -674,7 +674,7 @@ async def operator_env(request: Request):
 
 
 # Sentinel B: identical service, but its registry URL is wrong (dead port), so
-# every /check BLOCKs R.unregistered regardless of kill state.
+# every /check BLOCKs R.registry_unreachable (R.unregistered before B16) regardless of kill state.
 _saved = os.environ["FIELD_REGISTRY_URL"]
 os.environ["FIELD_REGISTRY_URL"] = "http://127.0.0.1:9/registry"
 sentinel_b = sentinel()
