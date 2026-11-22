@@ -39,10 +39,10 @@ class _FailingWrites(RegistryClient):
         super().__init__(*a, **kw)
         self.fail_on = fail_on
 
-    def set_status(self, agent_id, status):
+    def set_status(self, agent_id, status, **kw):       # the kill-switch drill passes if_updated_at (compare-and-set)
         if status in self.fail_on:
             raise RegistryUnreachableError("registry returned 401: operator credentials required")
-        return super().set_status(agent_id, status)
+        return super().set_status(agent_id, status, **kw)
 
 
 class _Dead:
