@@ -98,6 +98,17 @@ export FIELD_LEDGER_ARCHIVE_DIR="${FIELD_LEDGER_ARCHIVE_DIR:-}"
 export FIELD_ATTEST_SIGNER="${FIELD_ATTEST_SIGNER:-}"
 export FIELD_ATTEST_SIGN_KEY="${FIELD_ATTEST_SIGN_KEY:-}"
 export FIELD_MANIFEST_DIR="${FIELD_MANIFEST_DIR:-/data/manifests}"
+# FIELD_SHARED_SECRET gates every non-/health route (field_core.authn). Unset, empty or whitespace-only would start the
+# whole public estate with perimeter authentication OFF, so it stops the machine here, before any service starts, with
+# ONE error line that names the variable and never prints a value. Builtins only (case, echo, exit).
+case "${FIELD_SHARED_SECRET-}" in
+    *[![:space:]]*) ;;
+    *)
+        echo "entrypoint: REFUSING TO START (shared secret): FIELD_SHARED_SECRET is unset, empty or blank (set it with fly secrets set FIELD_SHARED_SECRET=<generated>)" >&2
+        exit 1 ;;
+esac
+# Belt and braces, and the form tools/topology_lint.py's static reader (used where it cannot run bash) recognises as a guard.
+: "${FIELD_SHARED_SECRET:?set}"
 export FIELD_SHARED_SECRET="${FIELD_SHARED_SECRET:-}"
 # Phase G operator authentication. Both OFF unless a `fly secrets set` places them
 # (never fly.toml [env]): FIELD_OPERATOR_REGISTRY=/data/operators/operators.json

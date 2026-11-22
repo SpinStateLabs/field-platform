@@ -1612,7 +1612,7 @@ class LedgerStore:
         return js
 
     def _take_snapshot(self, parse: bool = True, open_only: bool = False,
-                       tolerant: bool = False) -> Snapshot:
+                       tolerant: bool = False, tail_bytes: int | None = None) -> Snapshot:
         """The reader protocol (lock-free). Consistent because:
 
         1. the journal is append-only, so equal bytes before and after mean no
@@ -1625,6 +1625,11 @@ class LedgerStore:
            FILE_SHARE_DELETE on Windows);
         4. committed closed files never change; archival journals first;
         5. appends only extend ``P``; a half-copied last line is re-read.
+
+        ``tail_bytes`` (B-GL-events-limit-cheap; with ``open_only``): read only the last ``tail_bytes`` of the open
+        segment, starting at its first complete line; ``snapshot.tail_cut`` says whether anything before the window was
+        left unread. Everything else of the protocol, the torn-last-line check included, is unchanged: it looks only at
+        the END of the file, which the window always contains.
         """
         deadline = time.monotonic() + self.SNAPSHOT_TIMEOUT_S
         delay = 0.0005
@@ -1660,7 +1665,19 @@ class LedgerStore:
                 after = [exists_strict(p) for p in layout.watch]
                 if raw2 != raw1 or after != before:
                     raise _Retry("layout changed while opening")
-                data_open = handle.read() if handle is not None else None
+                tail_cut = False
+                if handle is not None and tail_bytes is not None:
+                    size = os.fstat(handle.fileno()).st_size
+                    if size > tail_bytes:
+                        handle.seek(size - tail_bytes)
+                        data_open = handle.read()
+                        first_newline = data_open.find(b"\n")
+                        data_open = data_open[first_newline + 1:] if first_newline >= 0 else b""
+                        tail_cut = True
+                    else:
+                        data_open = handle.read()
+                else:
+                    data_open = handle.read() if handle is not None else None
                 if data_open and not data_open.endswith(b"\n"):
                     # Linux extends i_size page by page: an append may be half
                     # copied. Believe a torn last line only after >= 3 identical
@@ -1685,8 +1702,10 @@ class LedgerStore:
                         if data is None and read_shared(journal) != raw1:
                             raise _Retry("closed segment moved and the journal changed")
                         datas[k] = data
-                return Snapshot(layout, datas, attempts, parse=parse, tolerant=tolerant,
+                snap = Snapshot(layout, datas, attempts, parse=parse, tolerant=tolerant,
                                 parsed=self._parsed)
+                snap.tail_cut = tail_cut
+                return snap
             except (_Retry, PermissionError) as exc:
                 if isinstance(exc, PermissionError) and not _transient_refusal(exc):
                     denied = exc
@@ -2242,6 +2261,59 @@ class LedgerStore:
             return {"n": n, "start": start, "end": glen - 1, "head": head, "closed": closed,
                     "anchor": anchor, "rot": rot, "intent": intent}
 
+    #: B-GL-events-limit-cheap: the window (bytes from the end of the open segment) that ONE cold tail scan looks
+    #: at. A class attribute so a test can shrink it.
+    EVENTS_TAIL_WINDOW_BYTES = 256 * 1024
+
+    def _events_tail(self, event_filter: EventFilter, limit: int) -> list[LedgerEvent] | None:
+        """The last ``limit`` matches, found without walking the whole chain; None when this path cannot answer and the
+        caller must read in full. Same events, same order as the full read for a chain whose records all parse.
+
+        WARM (the T7 parse cache holds the open segment, which it does for every ledger whose live bytes fit
+        ``PARSE_CACHE_MAX_BYTES``, from the moment the store is opened): the cached parse is extended by the bytes
+        appended since (``_parsed``, exactly what the full read does, so no line is parsed twice) and scanned from the
+        newest event backwards, stopping at ``limit`` matches: no copy of the chain and no filter pass over the older
+        events. A rare filter scans no more than the full read's filter pass does.
+
+        COLD (a ledger larger than the cache, where the full read parses every line every time): ONE window from the
+        end of the open segment, parsed from its last line backwards. Not widened: if the window holds fewer than
+        ``limit`` matches the caller does the full read (which also fills the cache), so the wasted work is bounded by
+        the window.
+
+        When the open segment is the only live one, a scan that covered all of it is the answer even with fewer than
+        ``limit`` matches; with closed live segments behind it, fewer matches than ``limit`` means "read in full"."""
+        warm = self.path in self._parse_cache
+        with self._gate():
+            snap = self._take_snapshot(parse=False, open_only=True,
+                                       tail_bytes=None if warm else self.EVENTS_TAIL_WINDOW_BYTES)
+        data = snap.raw[-1]
+        if data is None:
+            return None
+        matched: list[LedgerEvent] = []
+        if warm:
+            events, _ = self._parsed(snap.layout.segs[-1].path, data, False)
+            for event in reversed(events):
+                if event_filter.matches(-1, event):
+                    matched.append(event)
+                    if len(matched) == limit:
+                        break
+            complete = True
+        else:
+            for line in reversed(data.split(b"\n")):
+                line = line.strip()
+                if not line:
+                    continue
+                event = LedgerEvent.model_validate(json.loads(line))
+                if event_filter.matches(-1, event):
+                    matched.append(event)
+                    if len(matched) == limit:
+                        break
+            complete = not snap.tail_cut
+        if len(matched) == limit or (complete and len(snap.layout.segs) == 1):
+            matched.reverse()
+            return matched
+        return None
+
     def events(
         self,
         agent_id: str | None = None,
@@ -2261,6 +2333,10 @@ class LedgerStore:
         event_filter = EventFilter(
             agent_id=agent_id, event_type=event_type, since=since, until=until
         )
+        if limit is not None:
+            tail = self._events_tail(event_filter, limit)
+            if tail is not None:
+                return tail
         with self._gate():
             snap = self._take_snapshot()
         out = [event for index, event in snap.indexed_events() if event_filter.matches(index, event)]
