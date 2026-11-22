@@ -129,7 +129,9 @@ def test_the_scheduled_tick_records_the_fixed_text_and_survives(tmp_path, monkey
     monkeypatch.setenv("FIELD_LIFECYCLE_ROSTER", str(roster))
     delegation, text = BAD_DELEGATION["502-dict"]
     served = create_app(registry=FakeRegistry([agent("o", "Nobody")]), delegation=delegation, ledger=RecordingLedger(), every=0)
-    assert scheduled_tick(served) == {"ok": False, "error": text}
+    # merged onto main: the tick's generic handler records the class name in last_tick and the ledger, and answers
+    # "<class>: <fixed text>" (main's S8 behaviour); the text is still the fixed phrase, never an upstream body
+    assert scheduled_tick(served) == {"ok": False, "error": f"LifecycleError: {text}"}
 
 
 def test_failed_ledger_notes_are_counted_logged_by_type_and_do_not_stop_the_sweep(caplog):

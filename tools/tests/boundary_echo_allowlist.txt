@@ -68,6 +68,7 @@ services/kill-switch/src/kill_switch/cli.py::heartbeat::cli = 1 | allow | operat
 services/kill-switch/src/kill_switch/cli.py::liveness::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/kill-switch/src/kill_switch/cli.py::revive::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/lifecycle-manager/src/lifecycle_manager/api.py::create_app.findings::api-reply = 1 | pending-405 | PR 405 replaces the echoed text with a class name
+services/lifecycle-manager/src/lifecycle_manager/api.py::create_app.sweep::api-reply = 1 | allow | S9-10: the 502 text is a LifecycleError built from fixed phrases plus an exception class name or HTTP status code, never an upstream body
 services/lifecycle-manager/src/lifecycle_manager/api.py::scheduled_tick::reply-field = 1 | allow | DEBT: the text of a failed sweep (`{exc}`) is returned under "error" in the tick answer; seen by the returned-dict rule of C-1117; decision for the owner
 services/lifecycle-manager/src/lifecycle_manager/cli.py::decommission::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/lifecycle-manager/src/lifecycle_manager/cli.py::provision::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
