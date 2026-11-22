@@ -21,7 +21,7 @@ ALLOW. Fail closed: sentinel unreachable ⇒ ``ActionBlocked``.
 
 from __future__ import annotations
 
-from field_core.authn import auth_headers
+from field_core.guarded_operator import perimeter_headers
 
 import functools
 import os
@@ -72,7 +72,7 @@ class Governor:
         self._base = (sentinel_url or os.environ.get(
             "FIELD_SENTINEL_URL", "http://127.0.0.1:8004"
         )).rstrip("/")
-        self._client = client or httpx.Client(timeout=10.0, headers=auth_headers())
+        self._client = client or httpx.Client(timeout=10.0, headers=perimeter_headers())
 
     def close(self) -> None:
         """Close the HTTP client (also a client that was passed in: the Governor
