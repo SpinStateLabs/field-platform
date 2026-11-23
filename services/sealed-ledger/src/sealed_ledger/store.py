@@ -51,6 +51,7 @@ import json
 import logging
 import os
 import re
+import stat
 import threading
 import time
 from dataclasses import dataclass, field
@@ -1397,6 +1398,32 @@ def _sidecar_int(side: dict[str, Any], key: str) -> int:
     return value
 
 
+#: A real sidecar is about a kilobyte. The sidecar is unsigned input, so it is read only when it is a regular file and
+#: no larger than this (a symlink to /dev/zero or a 64 MiB pad would otherwise be read whole).
+_SIDECAR_MAX_BYTES = 1 << 20
+
+
+def _read_sidecar(path: Path) -> tuple[bytes | None, str | None]:
+    """``(bytes, None)``; ``(None, None)`` when it does not exist; ``(None, reason)`` when it cannot be a sidecar (not a
+    regular file, over the size cap, or unreadable). The reason never carries the content."""
+    try:
+        fh = open_shared(path)
+    except FileNotFoundError:
+        return None, None
+    except OSError as exc:  # a directory, a permission error: a failed verification, never a traceback
+        return None, f"cannot be read ({type(exc).__name__})"
+    with fh:
+        try:
+            if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
+                return None, "is not a regular file"
+            raw = fh.read(_SIDECAR_MAX_BYTES + 1)
+        except OSError as exc:
+            return None, f"cannot be read ({type(exc).__name__})"
+    if len(raw) > _SIDECAR_MAX_BYTES:
+        return None, f"is larger than {_SIDECAR_MAX_BYTES} bytes"
+    return raw, None
+
+
 def verify_segment_file(path: str | Path, public_key_pem: str | None = None) -> dict[str, Any]:
     """Verify ONE archived segment standalone from ``<file>.segment.json`` beside it.
 
@@ -1417,7 +1444,10 @@ def verify_segment_file(path: str | Path, public_key_pem: str | None = None) -> 
         "ok": False, "segment": None, "logical": None, "events": 0, "global_first": None,
         "global_last": None, "reason": None, "signature_checked": False,
     }
-    side_raw = read_shared(sidecar_path_for(p))
+    side_raw, side_bad = _read_sidecar(sidecar_path_for(p))
+    if side_bad is not None:
+        out["reason"] = f"sidecar {sidecar_path_for(p).name} {side_bad}"
+        return out
     if side_raw is None:
         out["reason"] = f"no sidecar {sidecar_path_for(p).name} beside {p}"
         return out
@@ -1427,9 +1457,14 @@ def verify_segment_file(path: str | Path, public_key_pem: str | None = None) -> 
         if missing or side["format"] != SIDECAR_FORMAT:
             raise ValueError(f"missing {missing}" if missing else f"format {side['format']!r}")
         n, start, end = (_sidecar_int(side, k) for k in ("n", "start_index", "end_index"))
+        if n < 1 or start < 0:
+            raise ValueError("n must be at least 1 and start_index at least 0")
         if end < start:
             raise ValueError(f"end_index {end} is before start_index {start}")
-    except (ValueError, TypeError, KeyError) as exc:
+        for k in ("logical", "file", "genesis_prev_hash", "head_hash", "sha256"):
+            if not isinstance(side[k], str):
+                raise ValueError(f"{k} is not a string")
+    except (ValueError, TypeError, KeyError, RecursionError) as exc:
         out["reason"] = f"sidecar {sidecar_path_for(p).name} invalid: {exc}"
         return out
     out.update(segment=n, logical=side["logical"], global_first=start, global_last=end)
