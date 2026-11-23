@@ -404,13 +404,18 @@ UNREADABLE_MARK = "UNREADABLE"
 
 def _unreadable_entry(row: sqlite3.Row) -> FederationContract:
     """What ``GET /contracts`` shows for a row that cannot be rebuilt: INACTIVE, no key, and placeholder scopes that
-    name the problem. Built from the two text columns only, in full, with the read model (no length caps: a legacy
-    id or org longer than ``NAME_MAX`` is shown as stored, never cut, so the operator sees the real id to
-    re-register), so it cannot fail the way the row did."""
+    name the problem. Built from the two text columns only, in full (a legacy id or org longer than ``NAME_MAX`` is
+    shown as stored, never cut, so the operator sees the real id to re-register).
+
+    Built with ``model_construct``: NO validator runs, so the entry cannot fail the way the row did, however the write
+    model's rules grow. R2 on #1315 merged with main: #1270's ``_org_name_is_clean`` is inherited by the read model, and
+    an entry validated without the ``STORED_ROW`` context raised for an org over 256 characters, so ``list()`` and
+    ``GET /contracts`` answered 500 again. Every field here is either a fixed placeholder or the stored text shown as
+    is, and the entry is inactive with no key, so nothing it holds is ever trusted."""
     def text(column: str) -> str:
         v = row[column]
         return v if isinstance(v, str) and v.strip() else "(unreadable)"
-    return StoredFederationContract(
+    return StoredFederationContract.model_construct(
         contract_id=text("contract_id"),
         counterparty_org=text("counterparty_org"),
         allowed_scopes=[UNREADABLE_MARK],

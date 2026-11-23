@@ -230,3 +230,22 @@ def test_a_write_with_more_than_LIST_MAX_scopes_is_still_refused(stack):
     assert client.put("/contracts/FED-WIDE", json=body).status_code == 422
     assert client.get("/contracts").json() == []
 
+
+@pytest.mark.parametrize("org", [
+    "O" * 300,                    # over ORG_NAME_MAX / NAME_MAX
+    "Acme\nCorp",                 # a control character
+    "Ac\u200bme",                 # an invisible (zero-width) character
+    "\u00a0\u00a0",                # only no-break spaces: "empty" to the org rule
+], ids=["long", "control", "zero-width", "nbsp-only"])
+def test_an_unreadable_row_whose_org_breaks_the_write_rules_still_lists_inactive(stack, org):
+    """R2 on #1315 merged with main: the degraded entry must not run the write model's org rule (#1270). Any org the
+    write rules refuse, on a row that is unreadable anyway, lists as stored (inactive, no key) and never 500s; a
+    entry is inactive with no key, so it can never ALLOW."""
+    client, store, _ = stack
+    row(store, "FED-BAD-ORG", org=org, scopes="not json")
+    r = client.get("/contracts")
+    assert r.status_code == 200, r.text
+    (c,) = r.json()
+    assert c["contract_id"] == "FED-BAD-ORG" and c["counterparty_org"] == (org if org.strip() else "(unreadable)")
+    assert c["active"] is False and c["allowed_scopes"] == [UNREADABLE_MARK] and c["counterparty_pubkey_pem"] is None
+
