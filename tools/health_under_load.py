@@ -106,9 +106,10 @@ def failed(status: int | str, seconds: float) -> bool:
 
 
 def summarize(polls: list[tuple[float, int | str, float]], start: float, end: float) -> dict:
-    """One prefix: idle max before ``start``; count, failures, longest failing run, p50, max inside [start, end]."""
-    before = [dt for t, _, dt in polls if t < start]
-    during = [(s, dt) for t, s, dt in polls if start <= t <= end]
+    """One prefix: idle max of polls that finished before ``start``; count, failures, longest failing run, p50, max
+    of polls that overlap [start, end] (a poll sent just before ``start`` that runs into it is inside the window)."""
+    before = [dt for t, _, dt in polls if t + dt < start]
+    during = [(s, dt) for t, s, dt in polls if t <= end and t + dt >= start]
     streak = longest = 0
     for s, dt in during:
         streak = streak + 1 if failed(s, dt) else 0

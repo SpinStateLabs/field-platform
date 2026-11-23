@@ -451,11 +451,11 @@ def test_the_command_line_has_no_run_and_plans_without_touching_anything(tmp_pat
 def test_the_command_line_records_a_gate_and_refuses_a_gate_record_without_a_name(tmp_path, capsys):
     rec = str(tmp_path / "r.jsonl")
     assert sc.main(["record", "gate", "--records", rec]) == 2
-    assert sc.main(["record", "gate", "G22", "--records", rec]) == 0
+    assert sc.main(["record", "gate", "G22", "--records", rec, "--build-sha", SHA_A]) == 0
     assert sc.Records(rec).gate_ok("G22") and not sc.Records(rec).gate_ok("G21")
-    assert sc.main(["record", "gate", "G18", "--records", rec]) == 0 and sc.Records(rec).gate_ok("G18")
-    sc.main(["record", "alerts-proven", "--records", rec])
-    assert sc.main(["plan", "--stage", "2", "--records", rec, "--go-sentence", GO]) == 0
+    assert sc.main(["record", "gate", "G18", "--records", rec, "--build-sha", SHA_A]) == 0 and sc.Records(rec).gate_ok("G18")
+    sc.main(["record", "alerts-proven", "--records", rec, "--build-sha", SHA_A])
+    assert sc.main(["plan", "--stage", "2", "--records", rec, "--go-sentence", GO, "--build-sha", SHA_A]) == 0
 
 
 def test_the_runbook_lists_every_abort_condition_and_every_stage_rollback_step():
@@ -533,15 +533,18 @@ def test_an_empty_counters_baseline_is_a_health_failure_not_a_free_pass(tmp_path
 
 
 def test_a_baseline_that_misses_an_expected_service_is_a_health_failure(tmp_path, ntfy):
-    d = Driver(services=("registry",))
-    ctl = sc.Controller(_records(tmp_path), d, estate="gb10", env=_env(ntfy), expected_services=("registry", "ledger"),
+    # Stage 2 checks killswitch and registry; the explicit list ADDS ledger (only additions are allowed, reviewer-8 C1)
+    wider = ("killswitch", "registry", "ledger")
+    gates = ("G18", "G21", "G22")
+    d = Driver(services=("killswitch", "registry"))
+    ctl = sc.Controller(_records(tmp_path, gates=gates), d, estate="gb10", env=_env(ntfy), expected_services=wider,
                         build_sha=SHA_A)
-    result = ctl.run(1, live=True)
+    result = ctl.run(2, go_sentence=GO, live=True)
     assert result.abort == "health_failure" and result.steps_done == []
-    d2 = Driver(services=("registry", "ledger"))
-    ok = sc.Controller(_records(tmp_path / "ok"), d2, estate="gb10", env=_env(ntfy), expected_services=("registry", "ledger"),
+    d2 = Driver(services=wider)
+    ok = sc.Controller(_records(tmp_path / "ok", gates=gates), d2, estate="gb10", env=_env(ntfy), expected_services=wider,
                        build_sha=SHA_A)
-    assert ok.run(1, live=True).status == "completed"
+    assert ok.run(2, go_sentence=GO, live=True).status == "completed"
 
 
 # ------------------------------------------------- stage order and gate binding (red team F-816-4, F-816-5)
@@ -684,17 +687,18 @@ def test_the_rehearsal_would_leave_services_in_require_if_the_flag_were_removed_
 def test_a_stage_three_plan_prints_the_irreversibility_notice_and_the_other_stages_do_not(tmp_path, capsys):
     path = str(tmp_path / "r.jsonl")
     r = sc.Records(path)
-    r.append("alerts_proven", ok=True)
-    r.append("gate", gate="G21", ok=True)
-    r.append("gate", gate="G22", ok=True)
-    r.append("gate", gate="G18", ok=True)          # G25 (rebuild of PR 838): the Stage 2 plan below needs it
+    sha = {"sha8": sc.sha8_of(SHA_A)}               # PR 855 (S2-2): a go sentence needs --build-sha, records bound to it
+    r.append("alerts_proven", ok=True, **sha)
+    r.append("gate", gate="G21", ok=True, **sha)
+    r.append("gate", gate="G22", ok=True, **sha)
+    r.append("gate", gate="G18", ok=True, **sha)   # G25 (rebuild of PR 838): the Stage 2 plan below needs it
     r.append("stage_done", stage=2)
-    assert sc.main(["plan", "--stage", "3", "--records", path, "--go-sentence", GO]) == 0
+    assert sc.main(["plan", "--stage", "3", "--records", path, "--go-sentence", GO, "--build-sha", SHA_A]) == 0
     out = capsys.readouterr().out
     assert "irreversibility: an image rollback is unavailable once REQUIRE is on all eight" in out
     assert "FIELD_OPERATOR_REQUIRE first, never by image alone" in out
     for stage in (1, 2):
-        assert sc.main(["plan", "--stage", str(stage), "--records", path, "--go-sentence", GO]) == 0
+        assert sc.main(["plan", "--stage", str(stage), "--records", path, "--go-sentence", GO, "--build-sha", SHA_A]) == 0
         assert "irreversibility" not in capsys.readouterr().out
 
 
@@ -702,10 +706,12 @@ def test_a_stage_three_plan_prints_the_irreversibility_notice_and_the_other_stag
 def test_a_stage_three_plan_without_a_go_sentence_refuses(sentence, tmp_path, capsys):
     path = str(tmp_path / "r.jsonl")
     r = sc.Records(path)
-    r.append("alerts_proven", ok=True)
-    r.append("gate", gate="G21", ok=True)
+    sha = {"sha8": sc.sha8_of(SHA_A)}               # PR 855 (S2-2): bound to the sha, so the go sentence is what refuses
+    r.append("alerts_proven", ok=True, **sha)
+    r.append("gate", gate="G21", ok=True, **sha)
     r.append("stage_done", stage=2)
-    argv = ["plan", "--stage", "3", "--records", path] + ([] if sentence is None else ["--go-sentence", sentence])
+    argv = ["plan", "--stage", "3", "--records", path, "--build-sha", SHA_A] + (
+        [] if sentence is None else ["--go-sentence", sentence])
     assert sc.main(argv) == 2
     assert "refused: go_sentence_missing" in capsys.readouterr().out
 
@@ -752,12 +758,12 @@ def test_a_g18_record_for_another_build_is_not_a_g18_record(tmp_path):
 
 def test_the_command_line_plan_for_stage_two_refuses_each_gate_in_turn(tmp_path, capsys):
     rec = str(tmp_path / "r.jsonl")
-    sc.main(["record", "alerts-proven", "--records", rec])
-    sc.main(["record", "gate", "G22", "--records", rec])
-    assert sc.main(["plan", "--stage", "2", "--records", rec, "--go-sentence", GO]) == 2
+    sc.main(["record", "alerts-proven", "--records", rec, "--build-sha", SHA_A])
+    sc.main(["record", "gate", "G22", "--records", rec, "--build-sha", SHA_A])
+    assert sc.main(["plan", "--stage", "2", "--records", rec, "--go-sentence", GO, "--build-sha", SHA_A]) == 2
     assert "gate_G18_not_recorded" in capsys.readouterr().out
-    sc.main(["record", "gate", "G18", "--records", rec])
-    assert sc.main(["plan", "--stage", "2", "--records", rec, "--go-sentence", GO]) == 0
+    sc.main(["record", "gate", "G18", "--records", rec, "--build-sha", SHA_A])
+    assert sc.main(["plan", "--stage", "2", "--records", rec, "--go-sentence", GO, "--build-sha", SHA_A]) == 0
 
 
 # ------------------------------------------------- red team re-review of 832 (RT-832-R1 to R4)
@@ -783,10 +789,22 @@ def test_stage_two_needs_only_the_killswitch_and_the_registry_in_the_baseline(tm
     assert _ctl(tmp_path, ntfy, d).run(2, go_sentence=GO, live=True).status == "completed"
 
 
-def test_the_explicit_expected_services_override_the_stage_default(tmp_path, ntfy):
+def test_an_explicit_list_narrower_than_the_stage_is_refused_before_anything(tmp_path, ntfy):
+    # reviewer-8 C1 (controller ruling): a list may only add to the stage's own services, never leave one out
     d = Driver(services=("registry",))
     ctl = sc.Controller(_records(tmp_path), d, estate="gb10", env=_env(ntfy), build_sha=SHA_A, expected_services=("registry",))
-    assert ctl.run(1, live=True).status == "completed"
+    with pytest.raises(sc.Refused) as ei:
+        ctl.run(1, live=True)
+    assert ei.value.reason == "services_narrower_than_stage"
+    assert d.calls == [] and "stage_start" not in _kinds(ctl)
+    assert [r["reason"] for r in ctl.records.rows() if r["kind"] == "refused"] == ["services_narrower_than_stage"]
+
+
+def test_an_explicit_list_that_adds_to_the_stage_runs(tmp_path, ntfy):
+    wider = ("killswitch", "registry", "governor")
+    ctl = sc.Controller(_records(tmp_path, gates=("G18", "G21", "G22")), Driver(services=wider), estate="gb10",
+                        env=_env(ntfy), build_sha=SHA_A, expected_services=wider)
+    assert ctl.run(2, go_sentence=GO, live=True).status == "completed"
 
 
 @pytest.mark.parametrize("later", ["abort", "rolled_back", "rollback_failed"])
@@ -869,3 +887,107 @@ def test_every_compose_name_is_accepted_as_an_override(tmp_path, ntfy):
     for name in sc.EIGHT_SERVICES:
         ctl = sc.Controller(_records(tmp_path), Driver(), estate="gb10", env=_env(ntfy), expected_services=(name,))
         assert ctl.expected_services == (name,)
+
+
+def _clean_records(tmp_path, stage=2):
+    path = str(tmp_path / "r.jsonl")
+    r = sc.Records(path)
+    sha = {"sha8": sc.sha8_of(SHA_A)}
+    r.append("alerts_proven", ok=True, **sha)
+    r.append("gate", gate="G22", ok=True, **sha)
+    r.append("gate", gate="G18", ok=True, **sha)     # G25 (rebuild of PR 838): Stage 2 needs it
+    return path
+
+@pytest.mark.parametrize("stage, expect", [(1, sc.EIGHT_SERVICES), (2, ("killswitch", "registry")), (3, sc.EIGHT_SERVICES)])
+def test_plan_without_services_prints_the_stages_own_list(stage, expect, tmp_path, capsys):
+    path = str(tmp_path / "r.jsonl")
+    r = sc.Records(path)
+    sha = {"sha8": sc.sha8_of(SHA_A)}
+    r.append("alerts_proven", ok=True, **sha)
+    r.append("gate", gate="G21", ok=True, **sha)
+    r.append("gate", gate="G22", ok=True, **sha)
+    r.append("gate", gate="G18", ok=True, **sha)
+    r.append("stage_done", stage=2)
+    argv = ["plan", "--stage", str(stage), "--records", path]
+    if stage > 1:
+        argv += ["--go-sentence", GO, "--build-sha", SHA_A]
+    assert sc.main(argv) == 0
+    assert ("services: " + ", ".join(expect)) in capsys.readouterr().out
+
+
+def test_plan_with_services_shows_exactly_that_list_in_that_order(tmp_path, capsys):
+    path = _clean_records(tmp_path)
+    assert sc.main(["plan", "--stage", "2", "--records", path, "--go-sentence", GO, "--build-sha", SHA_A,
+                    "--services", "registry, killswitch ,governor"]) == 0
+    assert "services: registry, killswitch, governor" in capsys.readouterr().out.splitlines()
+
+
+@pytest.mark.parametrize("value", ["", "  ", ",", "registry,,killswitch", "registry,"])
+def test_an_empty_services_list_or_an_empty_name_is_refused(value, tmp_path, capsys):
+    path = _clean_records(tmp_path)
+    assert sc.main(["plan", "--stage", "2", "--records", path, "--go-sentence", GO, "--build-sha", SHA_A,
+                    "--services", value]) == 2
+    out = capsys.readouterr().out
+    assert "refused: services_empty" in out and "services:" not in out.replace("refused: services_empty", "")
+
+
+@pytest.mark.parametrize("value", ["federation", "registry,nope", "REGISTRY", "kill-switch"])
+def test_an_unknown_service_name_is_refused_with_the_compose_names(value, tmp_path, capsys):
+    path = _clean_records(tmp_path)
+    assert sc.main(["plan", "--stage", "2", "--records", path, "--go-sentence", GO, "--build-sha", SHA_A,
+                    "--services", value]) == 2
+    out = capsys.readouterr().out
+    assert "refused: services_unknown" in out and "fedbroker" in out
+
+
+def test_a_go_sentence_without_a_build_sha_is_refused_and_a_plan_without_one_is_not(tmp_path, capsys):
+    path = _clean_records(tmp_path)
+    assert sc.main(["plan", "--stage", "2", "--records", path, "--go-sentence", GO]) == 2
+    assert "refused: build_sha_required" in capsys.readouterr().out
+    assert sc.main(["plan", "--stage", "1", "--records", str(tmp_path / "x.jsonl")]) == 2    # no alerts proof: other refusal
+    r = sc.Records(str(tmp_path / "y.jsonl"))
+    r.append("alerts_proven", ok=True)
+    assert sc.main(["plan", "--stage", "1", "--records", str(tmp_path / "y.jsonl")]) == 0     # no go sentence, no sha needed
+
+
+def test_the_services_flag_reaches_the_controller_as_expected_services(tmp_path, monkeypatch):
+    seen = {}
+    real = sc.Controller
+
+    class Spy(real):
+        def __init__(self, *a, **k):
+            seen.update(k)
+            super().__init__(*a, **k)
+
+    monkeypatch.setattr(sc, "Controller", Spy)
+    path = _clean_records(tmp_path)
+    assert sc.main(["plan", "--stage", "2", "--records", path, "--go-sentence", GO, "--build-sha", SHA_A,
+                    "--services", "registry,killswitch"]) == 0
+    assert tuple(seen["expected_services"]) == ("registry", "killswitch") and seen["build_sha"] == SHA_A
+    seen.clear()
+    assert sc.main(["plan", "--stage", "2", "--records", path, "--go-sentence", GO, "--build-sha", SHA_A]) == 0
+    assert seen["expected_services"] is None
+
+
+@pytest.mark.parametrize("value", ["registry", "killswitch", "governor,ledger"])
+def test_plan_with_a_services_list_narrower_than_the_stage_is_refused(value, tmp_path, capsys):
+    # reviewer-8 C1 (controller ruling): Stage 2 checks killswitch and registry; a list that leaves one out is refused
+    path = _clean_records(tmp_path)
+    assert sc.main(["plan", "--stage", "2", "--records", path, "--go-sentence", GO, "--build-sha", SHA_A,
+                    "--services", value]) == 2
+    assert "refused: services_narrower_than_stage" in capsys.readouterr().out
+
+
+def test_the_runbook_shows_the_two_flags_and_the_matching_expected_services():
+    text = (ROOT / "docs" / "runbooks" / "v1.2-deploy-rollback.md").read_text(encoding="utf-8")
+    section = text[text.index("## Stage controller (P36, G24)"):]
+    for needle in ("--services", "--build-sha", "build_sha_required", "expected_services", "services_unknown"):
+        assert needle in section, needle
+
+
+@pytest.mark.parametrize("sentence", ["", "   ", GO])
+def test_any_go_sentence_argument_even_an_empty_one_needs_a_build_sha(sentence, tmp_path, capsys):
+    path = _clean_records(tmp_path)
+    assert sc.main(["plan", "--stage", "2", "--records", path, "--go-sentence", sentence]) == 2
+    assert "refused: build_sha_required" in capsys.readouterr().out
+

@@ -24,7 +24,7 @@ from (``raci_sources`` holds the same labels as a map):
 
 from __future__ import annotations
 
-from field_core.authn import auth_headers
+from field_core.guarded_operator import perimeter_headers
 
 import os
 import re
@@ -36,11 +36,14 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+import httpx
+
 from field_core.clients import (
     AgentNotRegisteredError,
     HttpLike,
     ManifestResolver,
     RegistryClient,
+    RegistryUnreachableError,
 )
 
 # Which executive is Consulted for a failed clause, by FIELD letter.
@@ -159,7 +162,7 @@ class LedgerQueryClient:
         if self._client is None:
             import httpx
 
-            self._client = httpx.Client(timeout=10.0, headers=auth_headers())
+            self._client = httpx.Client(timeout=10.0, headers=perimeter_headers())
 
     def _get(self, path: str, **kw: Any):
         """GET, waiting out a 503 that carries a Retry-After within the replay's budget (none outside a replay)."""
@@ -213,7 +216,7 @@ class TokenQueryClient:
         if self._client is None:
             import httpx
 
-            self._client = httpx.Client(timeout=10.0, headers=auth_headers())
+            self._client = httpx.Client(timeout=10.0, headers=perimeter_headers())
 
     def tokens(self, agent_id: str) -> list[dict[str, Any]]:
         resp = self._client.get(f"{self._base}/tokens", params={"agent_id": agent_id})
@@ -228,6 +231,15 @@ AGENT_ID_MAX = 200
 #: 'a?b=1' would address another route (S5-15). It still replays the ledger trail (ledger-only ids such as the
 #: federation broker's 'Org/agent' have events but no registry record).
 _REGISTRY_ID = re.compile(r"[a-z0-9][a-z0-9._-]*")
+
+
+class UpstreamUnavailable(Exception):
+    """A dependency the replay cannot do without (ledger, delegation) failed. ``dependency`` is the only text
+    that may reach the caller: never the upstream status line or body."""
+
+    def __init__(self, dependency: str):
+        self.dependency = dependency
+        super().__init__(f"{dependency} unavailable")
 
 
 class ReplayRequest(BaseModel):
@@ -506,7 +518,10 @@ class ReplayEngine:
             _RETRY_LEFT.reset(token)
 
     def _replay(self, req: ReplayRequest) -> PostMortem:
-        verification = self.ledger.verify()
+        try:
+            verification = self.ledger.verify()   # a 503 is answered inside verify() (main: ok false, busy)
+        except (httpx.HTTPError, ValueError) as exc:   # S2-23 (PR 607): any other failure is a 502
+            raise UpstreamUnavailable("ledger") from exc
         raw_ok = verification.get("ok")
         integrity_ok = raw_ok is True       # a truthy string or number is not an ok
         reason = verification.get("reason")
@@ -528,11 +543,17 @@ class ReplayEngine:
         notes = [n for n in (self._earliest_live_note(req.since, verification),) if n]
 
         record = None
+        registry_unreachable = False
         if _REGISTRY_ID.fullmatch(req.agent_id):
             try:
                 record = self.registry.get_agent(req.agent_id)
             except AgentNotRegisteredError:
                 record = None
+            except RegistryUnreachableError:
+                # Not "unregistered": the registry could not be asked. The report is still built (S2-23).
+                record = None
+                registry_unreachable = True
+                notes.append("registry unreachable: the agent record and its owner are not shown")
 
         manifest, manifest_detail = self.manifests.resolve_detail(
             (record or {}).get("manifest_ref")
@@ -541,9 +562,12 @@ class ReplayEngine:
         cap = max_timeline_events()
         # One more than the cap, so a cut is detectable. The ledger's `limit` keeps the
         # LAST N matches: the oldest events are the ones a cut drops.
-        events = self.ledger.events(
-            agent_id=req.agent_id, since=req.since, until=req.until, limit=cap + 1
-        )
+        try:
+            events = self.ledger.events(
+                agent_id=req.agent_id, since=req.since, until=req.until, limit=cap + 1
+            )
+        except (httpx.HTTPError, ValueError) as exc:   # S2-23 (PR 607); LedgerBusyError (503) passes through
+            raise UpstreamUnavailable("ledger") from exc
         if len(events) > cap:
             events = events[-cap:]
             notes.append(
@@ -574,19 +598,35 @@ class ReplayEngine:
             counts[t.event_type] = counts.get(t.event_type, 0) + 1
 
         since, until = _instant(req.since), _instant(req.until)
-        grants = [
-            AuthorityGrant(
-                token_id=t["token_id"],
-                granted_by=t["granted_by"],
-                scope=t["scope"],
-                issued_at=t["issued_at"],
-                expires_at=t["expires_at"],
-                revoked=t["revoked"],
-                revocation_id=t.get("revocation_id"),
-                revoked_at=t.get("revoked_at"),
-            )
-            for t in self.delegation.tokens(req.agent_id)
-        ]
+        try:
+            records = self.delegation.tokens(req.agent_id)
+        except (httpx.HTTPError, ValueError) as exc:
+            raise UpstreamUnavailable("delegation") from exc
+        if not isinstance(records, list):
+            # A delegation answer that is not a list (null, an object) is a delegation failure, not "one unreadable
+            # record": a 502, never a 200 with an empty authority section (reviewer R-PR1203 C1, fail closed).
+            raise UpstreamUnavailable("delegation")
+        grants: list[AuthorityGrant] = []
+        unreadable = 0
+        for t in records:
+            try:
+                g = AuthorityGrant(
+                    token_id=t["token_id"],
+                    granted_by=t["granted_by"],
+                    scope=t["scope"],
+                    issued_at=t["issued_at"],
+                    expires_at=t["expires_at"],
+                    revoked=t["revoked"],
+                    revocation_id=t.get("revocation_id"),
+                    revoked_at=t.get("revoked_at"),
+                )
+                _instant(g.issued_at), _instant(g.expires_at)   # an unparseable timestamp is unreadable too
+            except (KeyError, TypeError, ValueError, AttributeError):
+                unreadable += 1
+                continue
+            grants.append(g)
+        if unreadable:
+            notes.append(f"{unreadable} delegation token record(s) unreadable, not shown")
         # A grant is relevant if it overlapped the window: issued by `until`
         # and not yet expired at `since` (expired once now >= expires_at, as
         # DelegationToken.status rules).
@@ -604,8 +644,11 @@ class ReplayEngine:
         sources: dict[str, str] = {}
 
         if record:
-            raci["Responsible"] = f"{record['owner']} (agent owner)"
+            raci["Responsible"] = f"{record.get('owner') or '<owner not recorded>'} (agent owner)"
             sources["Responsible"] = "registry owner"
+        elif registry_unreachable:
+            raci["Responsible"] = "<registry unreachable>"
+            sources["Responsible"] = "none"
         else:
             raci["Responsible"] = "<unregistered agent>"
             sources["Responsible"] = "none"
@@ -692,8 +735,11 @@ def render_markdown(pm: PostMortem) -> str:
     if pm.agent_record:
         r = pm.agent_record
         add(f"- **{_md(r['agent_id'])}** — {_md(r['name'])}")
-        add(f"- Owner: {_md(r['owner'])} · Domain: {_md(r['domain'])} · Status: {_md(r['status'])}")
+        add(f"- Owner: {_md(r.get('owner') or '<owner not recorded>')} · Domain: {_md(r['domain'])} · "
+            f"Status: {_md(r['status'])}")
         add(f"- Manifest: {_code(r.get('manifest_ref') or '<none>')}")
+    elif pm.raci.get("Responsible") == "<registry unreachable>":
+        add("- ⚠ registry unreachable — agent record not shown")
     else:
         add("- ⚠ agent not found in registry")
     add("")
@@ -782,10 +828,36 @@ def _md(value: Any, cell: bool = False) -> str:
       raw HTML, no autolink: an HTML-passing renderer would otherwise show a forged ``<h2>`` section), a backtick is
       escaped (it cannot open a code span) and ``](`` is escaped (no inline link or image). Emphasis characters are
       left as they are (they cannot add a block, a link or HTML).
+    - Line start (B8, R-PR1163 C2/C3): the text may land at the start of a line's content (``> {text}`` in the
+      integrity banner, ``- {text}`` in the event counts), where a leading ``#``, ``-``, ``+``, ``*``, ``_``, ``>``,
+      ``=``, ``~~~``, ``N.`` / ``N)`` or ``[label]:`` would open a heading, list, quote, rule, fence or link
+      reference definition. That first marker is
+      backslash-escaped at every site (a backslash before ASCII punctuation renders as the character alone).
+    - Not escaped, by policy: ``~~strike~~`` (GFM strikethrough is emphasis: no block, link or HTML) and a bare URL
+      (a GFM renderer may autolink it, but the text shown IS the target; ``[text](url)``, which hides the target, is
+      escaped above).
     - ``cell=True`` also escapes table pipes."""
     text = _one_md_line(value)
     text = text.replace("\\", "\\\\").replace("<", "&lt;").replace("`", "\\`").replace("](", "\\](")
+    text = _escape_line_start(text)
     return text.replace("|", "\\|") if cell else text
+
+
+#: A line-content start CommonMark reads as a block: ATX heading, bullet, quote, rule / setext underline. A tilde
+#: fence needs three tildes, so ``~~strike~~`` is left alone; a backtick fence cannot start (backticks are escaped).
+_BLOCK_MARKER = frozenset("#-+*_>=")
+_ORDERED_MARKER = re.compile(r"^(\d{1,9})([.)])")
+#: A link reference definition, ``[label]: destination`` (triage-t12 on #1305): at a line start it consumes the line
+#: (the text vanishes) and turns a bare ``[label]`` elsewhere in the document into a link with a hidden target. Only
+#: this shape is escaped: a leading ``[`` that is not followed by ``]:`` (``[D.scope] (log-only)``) stays as written.
+_LINK_DEFINITION = re.compile(r"^\[(?:[^\]\\]|\\.)*\]:")
+
+
+def _escape_line_start(text: str) -> str:
+    """Backslash-escape the block marker a line-start ``text`` would open (B8); text that opens none is unchanged."""
+    if text[:1] in _BLOCK_MARKER or text.startswith("~~~") or _LINK_DEFINITION.match(text):
+        return "\\" + text
+    return _ORDERED_MARKER.sub(lambda m: m.group(1) + "\\" + m.group(2), text, count=1)
 
 
 def _code(value: Any, cell: bool = False) -> str:

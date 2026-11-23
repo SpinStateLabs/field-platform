@@ -31,6 +31,11 @@ Estate status is recorded outside this repository; every Enforced word is test/C
 
 Qualifier: API-key scans (file-based, heuristic)
 
+**README cross-check** (`tools/check_one_liners.py`: the row must carry the same status):
+
+- README-ROW: services/agent-registry/README.md | ROW: One record per agent | STATUS: Enforced
+- README-ROW: services/agent-registry/README.md | ROW: The registry knows about | STATUS: Declared
+
 ## 2 — Conformance Sentinel
 
 **Old wording** (verbatim, `v2-one-liners-source.md` row 2): An agent that continuously audits deployed agents against their FIELD manifests and blocks non-conforming actions at the policy-enforcement point — scope breaches, expired authority, missing ledger writes — before they execute.
@@ -57,6 +62,11 @@ Qualifier: API-key scans (file-based, heuristic)
 Qualifier: at the agent's action boundary (SDK/@governed; cooperative perimeter)
 
 KEYLESS: not live-verified - needs ANTHROPIC_API_KEY (the semantic judge: every judge test uses a deterministic mock).
+
+**README cross-check** (`tools/check_one_liners.py`: the row must carry the same status):
+
+- README-ROW: services/conformance-sentinel/README.md | ROW: Killed agents fail their | STATUS: Enforced
+- README-ROW: services/conformance-sentinel/README.md | ROW: Semantic understanding quality (real | STATUS: Declared
 
 ## 3 — Delegation Authority Service
 
@@ -87,6 +97,11 @@ Qualifiers: when FIELD_DOA_ROSTER is set (unset by default); grantor name record
 
 FIELD_DOA_ROSTER is unset by default (the compose and Fly defaults leave it unset). Whether an estate sets it is an estate fact recorded outside this repository; it is Declared here.
 
+**README cross-check** (`tools/check_one_liners.py`: the row must carry the same status):
+
+- README-ROW: services/delegation-authority/README.md | ROW: Tokens bind to a | STATUS: Enforced
+- README-ROW: services/delegation-authority/README.md | ROW: The caller **is** the | STATUS: Declared
+
 ## 4 — Kill-Switch Command Plane
 
 **Old wording** (verbatim, `v2-one-liners-source.md` row 4): resolvable kill endpoints and heartbeats for every registered agent; one-command domain shutdown and drill mode. (FIELD-E · CEO/CISO)
@@ -111,6 +126,11 @@ FIELD_DOA_ROSTER is unset by default (the compose and Fly defaults leave it unse
 **Declared words** (no test, no implementation, or only a mechanism): a kill stops the agent's process (the halt is the registry flip the sentinel reads plus the agent's own next check); estate-wide kill endpoints; heartbeats from every agent (stale means no check-in, not a dead process); the canary round trip on an estate.
 
 Qualifiers: allowlisted, best-effort; only the GB10 canary manifest declares an agent-side endpoint (plan text corrected, see Deviations). for agents that check in; check-ins are not made by default.
+
+**README cross-check** (`tools/check_one_liners.py`: the row must carry the same status):
+
+- README-ROW: services/kill-switch/README.md | ROW: One command kills; registry | STATUS: Enforced
+- README-ROW: services/kill-switch/README.md | ROW: A killed agent's *in-flight* | STATUS: Declared
 
 ## 5 — Sealed Ledger Service
 
@@ -140,6 +160,11 @@ Qualifiers: allowlisted, best-effort; only the GB10 canary manifest declares an 
 
 Qualifier: hash-chained, Ed25519-anchored; estate-level retention by segment rotation (mechanism; rotation is not armed by default - key custody undecided). Whether any estate rotates is an estate fact recorded outside this repository; it is Declared here.
 
+**README cross-check** (`tools/check_one_liners.py`: the row must carry the same status):
+
+- README-ROW: services/sealed-ledger/README.md | ROW: Every event is hash-linked | STATUS: Enforced
+- README-ROW: services/sealed-ledger/README.md | ROW: A filtered export is | STATUS: Declared
+
 ## 6 — Incident Replay Agent
 
 **Old wording** (verbatim, `v2-one-liners-source.md` row 6): reconstructs from the ledger who authorized an agent, what it did, and which manifest clause failed; outputs the RACI-ready post-mortem. (FIELD-L · CISO)
@@ -163,6 +188,11 @@ Qualifier: hash-chained, Ed25519-anchored; estate-level retention by segment rot
 **Declared words** (no test, no implementation, or only a mechanism): agent (no LLM, no autonomy); completeness of the trail for actions outside the perimeter; who authorized as an authenticated identity; which manifest clause as a manifest evaluation; executive owners from an org chart (a static letter map); the manifest as it stood in the window (it is read at replay time).
 
 Qualifier: R/A/C/I from registry, grant, manifest with labeled defaults
+
+**README cross-check** (`tools/check_one_liners.py`: the row must carry the same status):
+
+- README-ROW: services/incident-replay/README.md | ROW: Every number/line is a | STATUS: Enforced
+- README-ROW: services/incident-replay/README.md | ROW: The trail is *complete* | STATUS: Declared
 
 ## 7 — Compliance Crosswalk Engine
 
@@ -193,6 +223,11 @@ Qualifier: R/A/C/I from registry, grant, manifest with labeled defaults
 
 Qualifiers: Continuous (content-change detection; semantics by named review; live fetch verified manually, not in CI). ISO/IEC 42001 (pending text purchase). Rider: the manual live fetch got EUR-Lex, NIST and both mirrors, and OSFI answered 403, so an OSFI page change is reported unreachable, not detected.
 
+**README cross-check** (`tools/check_one_liners.py`: the row must carry the same status):
+
+- README-ROW: services/compliance-crosswalk/README.md | ROW: No citation can ship | STATUS: Enforced
+- README-ROW: services/compliance-crosswalk/README.md | ROW: A pack is cryptographically | STATUS: Declared
+
 ## 8 — Federation Broker
 
 **Old wording** (verbatim, `v2-one-liners-source.md` row 8): trust gateway for agents crossing org boundaries; validates counterparty manifests, enforces data-scope borders, records inter-org contract semantics. (FIELD-F · CIO/GC)
@@ -216,6 +251,11 @@ Qualifiers: Continuous (content-change detection; semantics by named review; liv
 **Declared words** (no test, no implementation, or only a mechanism): trust gateway (traffic carrier); payload or data-content borders; contract semantics beyond a stored allowlist record; a contract signed by both GCs; replay protection; key rotation or revocation; the outbound manifest being the agent's real one; a ledger delivery guarantee (a ledger failure is swallowed and the verdict stands).
 
 Qualifier: crossing-decision service
+
+**README cross-check** (`tools/check_one_liners.py`: the row must carry the same status):
+
+- README-ROW: services/federation-broker/README.md | ROW: Invalid counterparty manifests never | STATUS: Enforced
+- README-ROW: services/federation-broker/README.md | ROW: Outbound: the manifest presented | STATUS: Declared
 
 ## 9 — Spend & Resource Governor
 
@@ -242,6 +282,11 @@ Qualifier: crossing-decision service
 
 Qualifiers: throttle (per-action windows over self-reported action counts, plus sentinel-metered counts when a sentinel posts them (D1 options A and B are on main; the source label is unauthenticated); governor-parseable periods; `session` Declared). on-report metering (gateway-metered tokens, self-reported spend, sentinel-metered actions only as an unauthenticated label; no adversarial test of that path; compute has no observer (dropped, reason stated))
 
+**README cross-check** (`tools/check_one_liners.py`: the row must carry the same status):
+
+- README-ROW: services/spend-governor/README.md | ROW: Integer arithmetic; no float | STATUS: Enforced
+- README-ROW: services/spend-governor/README.md | ROW: Self-reported `/spend` is truthful | STATUS: Declared
+
 ## 10 — FORCE Gateway
 
 **Old wording** (verbatim, `v2-one-liners-source.md` row 10): An LLM-traffic proxy that injects FORCE runtime constraints on outbound model calls and dashboards hygiene telemetry. Governs what the AI says while FIELD governs what it is.
@@ -267,6 +312,11 @@ Qualifiers: org-wide when deployed as the LLM egress proxy (not the default depl
 
 KEYLESS: not live-verified - needs ANTHROPIC_API_KEY (the real upstream call and the real judge: every test uses a mock upstream and a mock judge).
 
+**README cross-check** (`tools/check_one_liners.py`: the row must carry the same status):
+
+- README-ROW: services/force-gateway/README.md | ROW: Every instrumented proxied call | STATUS: Enforced
+- README-ROW: services/force-gateway/README.md | ROW: A sycophancy drift signal | STATUS: Declared
+
 ## 11 — Agent Lifecycle Manager
 
 **Old wording** (verbatim, `v2-one-liners-source.md` row 11): provisioning-to-decommission: authority expiry, re-attestation cadences, orphan detection for agents whose human owner left. (FIELD-I/D · CIO/CHRO)
@@ -289,6 +339,11 @@ KEYLESS: not live-verified - needs ANTHROPIC_API_KEY (the real upstream call and
 **Declared words** (no test, no implementation, or only a mechanism): re-attestation cadences (one threshold only); the owner left (roster membership only); the sweep running on an estate (the roster is unset by default, so every scheduled tick is a recorded skip); attested_by is the human; the roster is current; authority expiry enforced here (report only).
 
 Qualifier: provision → decommission, named re-attestation (name recorded, not authenticated)
+
+**README cross-check** (`tools/check_one_liners.py`: the row must carry the same status):
+
+- README-ROW: services/lifecycle-manager/README.md | ROW: A witnessing estate's latest | STATUS: Enforced
+- README-ROW: services/lifecycle-manager/README.md | ROW: `attested_by` is the human | STATUS: Declared
 
 ## 12 — Executive Attestation Reporter
 
@@ -314,6 +369,11 @@ Qualifier: provision → decommission, named re-attestation (name recorded, not 
 **Declared words** (no test, no implementation, or only a mechanism): incidents; replays; AI-governance attestation as a compliance statement; the CEO signs (no role binding); a valid signature means the named person approved the pack; the pack covers everything the organisation runs; served packs being signed on an estate.
 
 Qualifier: quarterly (UTC-quarter window), Ed25519-signed by a named signer (CLI; served packs unsigned drafts unless F4). F4 is on main: a served pack is signed with the estate key only when FIELD_ATTEST_SIGNER and FIELD_ATTEST_SIGN_KEY are set, and the repository's compose and Fly files forward them blank, so served packs are unsigned drafts until the environment sets them (Declared).
+
+**README cross-check** (`tools/check_one_liners.py`: the row must carry the same status):
+
+- README-ROW: services/attestation-reporter/README.md | ROW: Every number carries its | STATUS: Enforced
+- README-ROW: services/attestation-reporter/README.md | ROW: A valid signature means | STATUS: Declared
 
 ## Deviations from the plan's qualifier text
 

@@ -6,8 +6,8 @@ import logging
 import threading
 from contextlib import asynccontextmanager
 
-from field_core.authn import auth_headers
 from field_core.startup import warn_open
+from field_core.guarded_operator import perimeter_headers
 
 from typing import Any
 
@@ -245,7 +245,7 @@ def collect_evidence(agent_id: str) -> EvidenceSources:
 
     def _get(url: str) -> Any:
         try:
-            resp = httpx.get(url, timeout=5.0, headers=auth_headers())
+            resp = httpx.get(url, timeout=5.0, headers=perimeter_headers())
             return resp.json() if resp.status_code == 200 else None
         except Exception:
             return None
@@ -274,7 +274,7 @@ def collect_evidence(agent_id: str) -> EvidenceSources:
         # ledger answered and the chain was NOT verified: carry the status so the engine keeps
         # it a gap (mirrors attestation-reporter "answered HTTP n ... investigate").
         try:
-            resp = httpx.get(url, timeout=5.0, headers=auth_headers())
+            resp = httpx.get(url, timeout=5.0, headers=perimeter_headers())   # C-1181 (rebuild of PR 572): perimeter only
         except Exception as exc:
             if _is_tls_failure(exc):
                 # a bad/expired/mismatched certificate is a standing fault (or an interposer): a gap

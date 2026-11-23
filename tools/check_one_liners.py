@@ -14,11 +14,16 @@ is about the word. This script reads the file and checks, with git, at the commi
   required and at least 3 non-space characters, so a citation cannot pass by pointing at an unrelated test or by
   naming a letter;
 * the file has the global line first, twelve system rows numbered 1 to 12, every REQUIRED QUALIFIER verbatim, an
-  old-wording provenance line, and every keyless row carrying "not live-verified - needs ANTHROPIC_API_KEY".
+  old-wording provenance line, and every keyless row carrying "not live-verified - needs ANTHROPIC_API_KEY";
+* README cross-check (P308, carried from e_gate in PR 308): a ``README-ROW`` line names a service README row and the
+  status E1 gives it. That README (in the working tree) must have exactly one table row whose guarantee cell starts
+  with the given text, and its status cell must open with the same bold word: ``**Enforced`` for Enforced,
+  ``**Declared`` for Declared. A mismatch in either direction fails, as does a row that is missing or ambiguous.
 
 Citation grammar (one per line, anywhere in the file; ``|`` separates fields)::
 
     - ENFORCED: <word or phrase> | CITE: <path>::<test_name> @ <commit> | KEY: <token>
+    - README-ROW: services/<service>/README.md | ROW: <start of the guarantee cell> | STATUS: Enforced|Declared
 
 It proves that the test exists at the commit and mentions the word. It does NOT run the test and cannot judge whether
 the test proves the word: that is the independent adversarial review the E-gate also requires. Standard library only.
@@ -71,6 +76,11 @@ CITE_RE = re.compile(
     r"^\s*-\s*ENFORCED:\s*(?P<word>.+?)\s*\|\s*CITE:\s*(?P<path>[\w./-]+)::(?P<test>\w+)\s*@\s*(?P<commit>[0-9a-f]{7,40})"
     r"\s*\|\s*KEY:\s*(?P<key>[^|\n]+?)\s*$", re.M)
 ROW_RE = re.compile(r"^##\s+(\d+)\s+[-—]\s+\S", re.M)
+README_ROW_RE = re.compile(
+    r"^\s*-\s*README-ROW:\s*(?P<path>services/[\w-]+/README\.md)\s*\|\s*ROW:\s*(?P<row>[^|\n]*?\S)\s*"
+    r"\|\s*STATUS:\s*(?P<status>Enforced|Declared)\s*$", re.M)
+#: A README row's status cell opens with a bold status word: ``**Enforced in code**``, ``**Declared only**``, ...
+README_STATUS_RE = re.compile(r"^\*\*(Enforced|Declared)\b")
 
 
 class Report:
@@ -173,6 +183,34 @@ def check_citation(repo: Path, rep: Report, word: str, path: str, test: str, com
     rep.check(key.strip().lower() in body.lower(), f"the test mentions the key {key.strip()!r} (word: {word}): {label}")
 
 
+def readme_table_rows(text: str) -> list[tuple[str, str]]:
+    """``(guarantee cell, status cell)`` for every table row whose second cell opens with a bold status word. An escaped
+    pipe (``\\|``) stays inside its cell."""
+    rows = []
+    for line in text.splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in re.split(r"(?<!\\)\|", line.strip())[1:-1]]
+        if len(cells) >= 2 and README_STATUS_RE.match(cells[1]):
+            rows.append((cells[0], cells[1]))
+    return rows
+
+
+def check_readme_row(repo: Path, rep: Report, path: str, row: str, status: str) -> None:
+    label = f"{path} row {row[:50]!r}"
+    try:
+        text = (repo / path).read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        rep.check(False, f"README exists and reads as UTF-8: {path}")
+        return
+    want = normalise(row).lower()
+    hits = [st for cell, st in readme_table_rows(text) if normalise(cell).lower().startswith(want)]
+    if not rep.check(len(hits) == 1, f"the README row is found exactly once ({len(hits)} found): {label}"):
+        return
+    found = README_STATUS_RE.match(hits[0]).group(1)
+    rep.check(found == status, f"the README row says {found}, E1 says {status}: {label}")
+
+
 def check_file(path: Path, repo: Path) -> int:
     rep = Report()
     try:
@@ -202,6 +240,13 @@ def check_file(path: Path, repo: Path) -> int:
         return 2
     for m in cites:
         check_citation(repo, rep, m["word"], m["path"], m["test"], m["commit"], m["key"])
+    # README cross-check (P308): every README-ROW line must parse, and the row must say what E1 says
+    readme_rows = list(README_ROW_RE.finditer(text))
+    readme_lines = [ln for ln in text.splitlines() if re.match(r"^\s*-\s*README-ROW:", ln)]
+    rep.check(len(readme_lines) == len(readme_rows),
+              f"every README-ROW line parses ({len(readme_rows)} of {len(readme_lines)})")
+    for m in readme_rows:
+        check_readme_row(repo, rep, m["path"], m["row"], m["status"])
     # keyless rows: a line that says KEYLESS must carry the exact text
     for ln in text.splitlines():
         if re.search(r"\bKEYLESS\b", ln):
