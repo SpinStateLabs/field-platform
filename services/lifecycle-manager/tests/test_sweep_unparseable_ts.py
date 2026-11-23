@@ -194,7 +194,7 @@ def _cli_run(monkeypatch, tmp_path, agents, tokens):
 
     ledger = _Ledger()
     clients = {"registry": _Registry(agents), "delegation": _Delegation(tokens), "ledger": ledger, "killswitch": None}
-    monkeypatch.setattr(cli, "estate_clients", lambda pair, timeout=20.0: clients)
+    monkeypatch.setattr(cli, "estate_clients", lambda pair, timeout=20.0, verify=True: clients)   # PR 869 adds verify
     monkeypatch.setattr(cli, "operator_pair", lambda *a, **k: None)
     roster = tmp_path / "owners.csv"
     roster.write_text(ROSTER, encoding="utf-8")

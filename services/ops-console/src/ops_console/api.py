@@ -22,6 +22,7 @@ import logging
 import os
 import re
 import time
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from importlib import resources
@@ -34,6 +35,7 @@ from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from field_core import operator_auth, operator_health
+from field_core.startup import warn_open
 from field_core.authn import HEADER as AUTH_HEADER, install as install_authn, shared_secret
 from field_core.http_errors import install_validation_handler
 from field_core.buildinfo import build_sha
@@ -199,17 +201,23 @@ class Overview(BaseModel):
     token_usage: Section
 
 
+#: The kill-switch's own bounds for the same two fields (its KillRequest: operator at most 200, reason at most 1000), so a bad
+#: value is one 422 here and not one refusal per agent or domain upstream (S9-31). ``resolved_by`` uses the operator bound.
+MAX_OPERATOR_CHARS = 200
+MAX_REASON_CHARS = 1000
+
+
 class OperatorAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    operator: str = Field(min_length=1, description="Human operator — recorded")
-    reason: str = Field(default="via ops-console", min_length=1)
+    operator: str = Field(min_length=1, max_length=MAX_OPERATOR_CHARS, description="Human operator — recorded")
+    reason: str = Field(default="via ops-console", min_length=1, max_length=MAX_REASON_CHARS)
 
 
 class ResolveAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    resolved_by: str = Field(min_length=1)
+    resolved_by: str = Field(min_length=1, max_length=MAX_OPERATOR_CHARS)
 
 
 #: The registry's agent id grammar (agent_registry/models.py), the only ids a bulk action may name.
@@ -221,8 +229,8 @@ class BulkAction(BaseModel):
 
     action: Literal["kill", "drill", "revive"]
     agent_ids: list[str] = Field(min_length=1, max_length=100)
-    operator: str = Field(min_length=1, description="Human operator — recorded")
-    reason: str = Field(default="via ops-console (bulk)", min_length=1)
+    operator: str = Field(min_length=1, max_length=MAX_OPERATOR_CHARS, description="Human operator — recorded")
+    reason: str = Field(default="via ops-console (bulk)", min_length=1, max_length=MAX_REASON_CHARS)
 
     @field_validator("agent_ids")
     @classmethod
@@ -238,8 +246,8 @@ class BulkAction(BaseModel):
 class FleetHalt(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    operator: str = Field(min_length=1, description="Human operator — recorded")
-    reason: str = Field(min_length=1)
+    operator: str = Field(min_length=1, max_length=MAX_OPERATOR_CHARS, description="Human operator — recorded")
+    reason: str = Field(min_length=1, max_length=MAX_REASON_CHARS)
     confirm: Literal["HALT"] = Field(
         description="Must be the literal word HALT — a typed confirmation")
     domains: list[str] | None = Field(
@@ -268,10 +276,32 @@ class FleetHalt(BaseModel):
 class CheckRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    agent_id: str = Field(min_length=1)
-    action: str = Field(min_length=1)
-    token_id: str | None = None
+    # B-S11-31: bounded here because the sentinel does not bound them and the verdict lands on the ledger.
+    agent_id: str = Field(min_length=1, max_length=128)
+    action: str = Field(min_length=1, max_length=500)
+    token_id: str | None = Field(default=None, min_length=1, max_length=200)
     irreversible: bool = False
+
+    @field_validator("agent_id")
+    @classmethod
+    def _registry_id_only(cls, v: str) -> str:
+        if not AGENT_ID_RE.fullmatch(v):
+            raise ValueError("agent_id must match " + AGENT_ID_RE.pattern)
+        return v
+
+    @field_validator("action", mode="before")
+    @classmethod
+    def _strip_action(cls, v):
+        return v.strip() if isinstance(v, str) else v
+
+    @field_validator("action", "token_id")
+    @classmethod
+    def _one_line(cls, v: str | None) -> str | None:
+        # C0, DEL and C1 controls (Cc, NEL U+0085 included) and the line / paragraph separators (Zl U+2028, Zp U+2029):
+        # none can forge a ledger record, but each can start a new line in a viewer or a terminal (reviewer C1 on #1246)
+        if v is not None and (not v or any(unicodedata.category(c) in ("Cc", "Zl", "Zp") for c in v)):
+            raise ValueError("must be one line with no control characters")
+        return v
 
 
 #: Manifest viewer guard. The console reads a file named by a registrant-set
@@ -1016,4 +1046,5 @@ def create_app(
         is real and lands on the ledger like any other check."""
         return _proxy(app.state.sentinel, "/check", req.model_dump())
 
+    warn_open("ops-console", operator_layer=True)
     return app

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import logging
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -17,6 +18,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 
 from field_core import alerts, operator_auth, operator_health
+from field_core.startup import warn_open
 
 from field_core.authn import install as install_authn
 from field_core.http_errors import install_validation_handler
@@ -55,6 +57,10 @@ from sealed_ledger.store import (
 ANCHOR_KEY_ENV = "FIELD_LEDGER_ANCHOR_KEY"
 ARCHIVE_DIR_ENV = "FIELD_LEDGER_ARCHIVE_DIR"
 _UNSET: Any = object()
+# S5-10: caps on the free text that lands in the hash chain (a hostile or buggy caller otherwise writes megabytes into
+# every event, forever). The append PAYLOAD is deliberately not capped here: that is a separate decision.
+NAME_MAX = 200
+REASON_MAX = 2000
 
 #: B-GL-heavy-route-inflight: how many whole-ledger requests (GET /verify, GET /events with no filter) one ledger
 #: process runs at once. Default 1; 0 = no limit (the queueing that preceded this). A request past the limit is
@@ -120,8 +126,8 @@ EVENT_TYPE_PATTERN = r"^[a-z0-9_.-]+$"
 
 
 class AppendRequest(BaseModel):
-    event_type: str = Field(min_length=1, pattern=EVENT_TYPE_PATTERN)
-    agent_id: str | None = None
+    event_type: str = Field(min_length=1, max_length=NAME_MAX, pattern=EVENT_TYPE_PATTERN)
+    agent_id: str | None = Field(None, max_length=NAME_MAX)
     payload: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("payload")
@@ -132,9 +138,17 @@ class AppendRequest(BaseModel):
 
     # F2b (additive): the caller's claim. All three absent = a pre-F2b body.
     # A ledger without F2b ignores them (this model never forbade extras).
-    caller_id: str | None = None
-    caller_ts: str | None = None
-    caller_signature: str | None = None
+    # Bounded (S12-19): a valid ed25519 base64 signature is 88 characters, a caller id is at most 63.
+    caller_id: str | None = Field(default=None, max_length=200)
+    caller_ts: str | None = Field(default=None, max_length=64)
+    caller_signature: str | None = Field(default=None, max_length=200)
+
+    @field_validator("event_type")
+    @classmethod
+    def _event_type_not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("event_type must not be blank")
+        return v
 
     def caller_claim(self) -> dict[str, Any] | None:
         """The three caller fields, or None when the body carried none."""
@@ -144,17 +158,17 @@ class AppendRequest(BaseModel):
 
 
 class RotateRequest(BaseModel):
-    operator: str = Field(min_length=1)
-    reason: str = Field(min_length=1)
+    operator: str = Field(min_length=1, max_length=NAME_MAX)
+    reason: str = Field(min_length=1, max_length=REASON_MAX)
 
 
 class HoldRequest(BaseModel):
-    by: str = Field(min_length=1)
-    reason: str = Field(min_length=1)
+    by: str = Field(min_length=1, max_length=NAME_MAX)
+    reason: str = Field(min_length=1, max_length=REASON_MAX)
 
 
 class HoldReleaseRequest(BaseModel):
-    by: str = Field(min_length=1)
+    by: str = Field(min_length=1, max_length=NAME_MAX)
 
 
 class HoldStatus(BaseModel):
@@ -165,7 +179,7 @@ class HoldStatus(BaseModel):
 class RetentionApplyRequest(BaseModel):
     days: int = Field(ge=0, le=MAX_RETENTION_DAYS,
                       description="archive closed segments closed more than this many days ago")
-    operator: str = Field(min_length=1)
+    operator: str = Field(min_length=1, max_length=NAME_MAX)
     archive_dir: str | None = Field(
         None, description="default FIELD_LEDGER_ARCHIVE_DIR, else FIELD_DATA_DIR/ledger-archive"
     )
@@ -200,6 +214,10 @@ class HealthResponse(operator_health.OperatorHealthFields):
     caller_keyring: str = "off"  # "on" when FIELD_LEDGER_CALLER_KEYRING names a directory
     caller_keys: int = 0  # <caller_id>.pub.pem files in it (0 when off or unreadable)
     require_caller_signature: bool = False  # FIELD_LEDGER_REQUIRE_CALLER_SIGNATURE=1
+    # S8-22: a non-blank value that is not a recognised on/off spelling reads as OFF (the pinned parse);
+    # these say so, so a typo does not look like a deliberate off.
+    require_signing_value_ignored: bool = False
+    require_caller_signature_value_ignored: bool = False
     # G23: ntfy alert counters (field_core.alerts.health_fields; never the topic, token or URL), always present:
     alerts_channel: str = "ntfy"
     alerts_configured: bool = False
@@ -211,6 +229,9 @@ class HealthResponse(operator_health.OperatorHealthFields):
     alerts_last_failure_class: str | None = None
     alerts_last_failure_at: str | None = None
     alerts_last_success_at: str | None = None
+    # S11-20: the served read-lane width and whether FIELD_LEDGER_READ_CONCURRENCY was refused (never the value):
+    read_concurrency: int = 1
+    read_concurrency_invalid: bool = False
 
     # No return annotation on purpose (OpenAPI keeps the fields; see ledger.py).
     @model_serializer(mode="wrap")
@@ -221,12 +242,43 @@ class HealthResponse(operator_health.OperatorHealthFields):
         return data
 
 
+_log = logging.getLogger(__name__)
+
+MAX_OUT_DIR = 4096
+
+
+def _bad_out_dir(value: str) -> bool:
+    """A NUL byte, a lone surrogate or more than 4096 characters: Path() and mkdir would raise
+    ValueError (a 500) before any handler. Checked before the path is touched."""
+    if len(value) > MAX_OUT_DIR or "\x00" in value:
+        return True
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return True
+    return False
+
+
 def data_root() -> Path:
     return Path(os.environ.get("FIELD_DATA_DIR", "./var"))
 
 
 def data_path() -> Path:
     return data_root() / "ledger" / "events.jsonl"
+
+
+_log = logging.getLogger(__name__)
+
+_FLAG_ON = ("1", "true", "yes", "on")
+_FLAG_OFF = ("0", "false", "no", "off")
+
+
+def flag_value_ignored(env_name: str) -> bool:
+    """True when ``env_name`` holds a non-blank value that is neither a recognised ON nor a recognised
+    OFF spelling. The parse still reads it as OFF (pinned), so a typo such as ``enabled`` or ``treu``
+    silently leaves a fail-closed policy off: this makes that visible (S8-22)."""
+    raw = os.environ.get(env_name, "").strip().lower()
+    return bool(raw) and raw not in _FLAG_ON and raw not in _FLAG_OFF
 
 
 def require_signing_from_env() -> bool:
@@ -372,6 +424,15 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
     guard_retention = op_health.guard("retention")
     guard_hold = op_health.guard("hold")
     app.state.store = store if store is not None else _open_default_store()
+    app.state.flags_ignored = {}
+    for env_name, field in ((REQUIRE_SIGNING_ENV, "require_signing_value_ignored"),
+                            (REQUIRE_CALLER_SIGNATURE_ENV, "require_caller_signature_value_ignored")):
+        app.state.flags_ignored[field] = flag_value_ignored(env_name)
+        if app.state.flags_ignored[field]:
+            # The value is NOT echoed (a variable pointed at a secret by mistake must not land in a log).
+            _log.warning("%s is set to a value that is not a recognised on/off spelling (%d characters); it "
+                         "is read as OFF. Use 1/true/yes/on to arm it or 0/false/no/off to say off.",
+                         env_name, len(os.environ.get(env_name, "").strip()))
     if registry is _UNSET and store is not None:
         registry = None
     app.state.registry = registry
@@ -446,7 +507,9 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
         # require_signing (+ key_error only on "error") from the config loaded
         # at start — no key file is read here. F2b: caller_keyring /
         # caller_keys (one directory listing) / require_caller_signature.
-        return HealthResponse(ok=True, build_sha=build_sha(), **info,
+        return HealthResponse(ok=True, build_sha=build_sha(), **info, **app.state.flags_ignored,
+                              read_concurrency=_store().read_concurrency,
+                              read_concurrency_invalid=_store().read_concurrency_invalid,
                               **_store().signing.health_fields(),
                               **_store().caller_policy.health_fields(), **alerts.health_fields(), **operator)
 
@@ -554,9 +617,10 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
         """Write an auditor export bundle. The served export is never signed
         (`signed: false`); signing is `ledger export --sign-key` only."""
         s = _store()
-        if out_dir is not None and "\x00" in out_dir:
-            # a NUL makes Path.resolve()/mkdir raise ValueError (a bare 500)
-            raise HTTPException(422, "out_dir is not a valid path")
+        if out_dir is not None and _bad_out_dir(out_dir):
+            # S7-25 (rebuild of PR 873): Path()/mkdir raise ValueError (a bare 500) on these
+            raise HTTPException(422, "out_dir must be a path of at most 4096 characters, "
+                                "without NUL bytes or unencodable characters")
         target = Path(out_dir) if out_dir else s.path.parent / "exports"
         if operator_auth.mode() != operator_auth.OFF:
             # Armed: the bundle may only land under the export root
@@ -587,8 +651,13 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except OSError as exc:
             # the errno NAME only: str(exc) carries the server's absolute path
+            _log.warning("export failed: %s", type(exc).__name__)
             name = errno.errorcode.get(exc.errno or 0, type(exc).__name__)
             raise HTTPException(status_code=500, detail=f"export failed ({name})") from exc
+        except ValueError as exc:  # e.g. a stored event whose ts is not ISO 8601 (S7-25, rebuild of PR 873)
+            _log.warning("export failed: %s", type(exc).__name__)
+            raise HTTPException(status_code=500,
+                                detail="export failed: a stored event could not be read") from exc
 
     @app.post("/rotate", response_model=RotationResult)
     def rotate(req: RotateRequest, _op: object = Depends(guard_rotate)) -> RotationResult:
@@ -674,8 +743,10 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except (LedgerBusy, SigningRequired) as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
-        except (LedgerCorrupt, OSError) as exc:
+        except LedgerCorrupt as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+        except OSError as exc:                  # S5-10: the OS text carries the server path
+            raise HTTPException(status_code=500, detail=f"retention apply failed ({type(exc).__name__})") from exc
         return RetentionApplyResult(**result)
 
     @app.get("/retention/check", response_model=RetentionCheck)
@@ -685,4 +756,7 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
         status ``ok``."""
         return retention_check(_store(), _registry())
 
+    warn_open("sealed-ledger", operator_layer=True, extra=(
+        ([REQUIRE_SIGNING_ENV] if not require_signing_from_env() else [])
+        + ([REQUIRE_CALLER_SIGNATURE_ENV] if not require_caller_signature_from_env() else [])))
     return app

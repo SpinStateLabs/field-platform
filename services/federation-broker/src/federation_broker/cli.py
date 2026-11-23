@@ -1,4 +1,4 @@
-"""``fedbroker`` CLI — add-contract | contracts | crossing | keygen | sign | serve."""
+"""``fedbroker`` CLI — add-contract | deactivate | activate | contracts | crossing | keygen | sign | serve."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import os
 import sys
 from enum import Enum
 from pathlib import Path
+from urllib.parse import quote
 
 import typer
 
@@ -74,6 +75,21 @@ def _fail(resp: httpx.Response) -> None:
         detail = " ".join(resp.text.split())[:200] or "(empty body)"
     typer.echo(f"error {resp.status_code}: {detail}", err=True)
     raise typer.Exit(code=1)
+
+
+def _die(message: str) -> "typer.Exit":
+    """One line on stderr, exit 1. Callers pass only fixed text and exception TYPE names: never key or file content."""
+    typer.echo(f"error: {message}", err=True)
+    return typer.Exit(code=1)
+
+
+def _manifest(path: Path) -> dict:
+    from field_core.validation import load_manifest
+
+    try:
+        return load_manifest(path)
+    except Exception as exc:  # missing/unreadable file, YAML syntax error, non-mapping: the text may quote content
+        raise _die(f"cannot load manifest {path} ({type(exc).__name__})") from None
 
 
 @app.command()
@@ -145,6 +161,48 @@ def add_contract(
     typer.echo(resp.text)
 
 
+def _client() -> httpx.Client:
+    """The one client behind deactivate/activate: never reads the process's proxy variables and never follows a
+    redirect, so the perimeter secret, the operator pair and the contract's public key cannot travel through an
+    ambient proxy or to a redirect target (C-57, C-575). The headers stay per request (``_hdr``)."""
+    return httpx.Client(timeout=10.0, trust_env=False, follow_redirects=False)
+
+
+def _set_active(contract_id: str, active: bool) -> None:
+    """GET the stored contract, then re-PUT it with only ``active`` changed (same id, key, scopes, ref), so the
+    operator never hand-writes the full body (including the pasted key). Last write wins: a change made to the
+    contract between the GET and the PUT is overwritten."""
+    path = f"/contracts/{quote(contract_id, safe='')}"
+    with _reachable(), _client() as client:
+        resp = client.get(f"{_base()}/contracts", headers=_hdr("GET", "/contracts"))
+        if resp.status_code != 200:
+            _fail(resp)
+        try:
+            stored = next(c for c in resp.json() if c.get("contract_id") == contract_id)
+        except (StopIteration, ValueError, AttributeError, TypeError):
+            # repr(): a control character (a newline) in the id cannot split the one error line
+            typer.echo(f"error: no contract with id {contract_id!r}", err=True)
+            raise typer.Exit(code=1) from None
+        # the path is quoted once, and the SAME string is signed and requested (C-1181)
+        put = client.put(f"{_base()}{path}", json={**stored, "active": active}, headers=_hdr("PUT", path))
+        if put.status_code != 200:
+            _fail(put)
+    typer.echo(put.text)
+
+
+@app.command()
+def deactivate(contract_id: str = typer.Argument(...)) -> None:
+    """Deactivate a contract (kept, not deleted): crossings for its org are BLOCKed until a contract is active
+    again, and the org may then register a new contract id."""
+    _set_active(contract_id, False)
+
+
+@app.command()
+def activate(contract_id: str = typer.Argument(...)) -> None:
+    """Reactivate a deactivated contract. Refused (409) while another active contract holds the same org."""
+    _set_active(contract_id, True)
+
+
 @app.command()
 def contracts() -> None:
     with _reachable():
@@ -183,25 +241,24 @@ def crossing(
     ),
 ) -> None:
     """Submit a crossing request; exit 0 ALLOW, 1 BLOCK (or a refused request)."""
-    from field_core.validation import load_manifest
-
     if direction is Direction.outbound:
         body = {"direction": "outbound", "counterparty_org": org,
-                "agent_id": agent_id, "manifest": load_manifest(manifest),
+                "agent_id": agent_id, "manifest": _manifest(manifest),
                 "manifest_signature": signature,  # the broker refuses one (422)
                 "scope": scope, "data_class": data_class}
     else:
         body = {"direction": "inbound", "counterparty_org": org,
                 "counterparty_agent_id": agent_id,
-                "counterparty_manifest": load_manifest(manifest),
+                "counterparty_manifest": _manifest(manifest),
                 "manifest_signature": signature,
                 "scope": scope, "data_class": data_class}
-    resp = httpx.post(
-        f"{_base()}/crossing",
-        json=body,
-        timeout=15.0,
-        headers=_hdr("POST", "/crossing"),
-    )
+    with _reachable():   # rebuild of PR 663: unreachable is one line, exit 1 (main's helper; no userinfo)
+        resp = httpx.post(
+            f"{_base()}/crossing",
+            json=body,
+            timeout=15.0,
+            headers=_hdr("POST", "/crossing"),
+        )
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)
@@ -259,9 +316,17 @@ def sign(
 ) -> None:
     """Sign a manifest; prints the base64 signature for the crossing request."""
     from field_core.signing import sign_manifest
-    from field_core.validation import load_manifest
 
-    typer.echo(sign_manifest(load_manifest(manifest), key.read_text(encoding="ascii")))
+    data = _manifest(manifest)
+    try:
+        pem = key.read_text(encoding="ascii")
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise _die(f"cannot read --key ({type(exc).__name__})") from None
+    try:
+        signature = sign_manifest(data, pem)
+    except Exception as exc:  # the reason may quote key material
+        raise _die(f"--key is not an Ed25519 private key PEM ({type(exc).__name__})") from None
+    typer.echo(signature)
 
 
 @app.command()

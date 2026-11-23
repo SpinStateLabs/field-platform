@@ -51,16 +51,18 @@ from __future__ import annotations
 
 from field_core.guarded_operator import (LEDGER_GUARDED, REGISTRY_GUARDED, Routes, request_headers)
 
+import hashlib
 import logging
 from collections.abc import Mapping
 import os
+import stat
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
 from field_core.errors import upstream_error
 from field_core.manifest import FieldManifest
-from field_core.validation import load_manifest, validate_manifest_data
+from field_core.validation import parse_manifest_text, validate_manifest_data
 
 log = logging.getLogger("field_core.clients")
 
@@ -149,6 +151,14 @@ class HttpLike(Protocol):
     def post(self, url: str, **kwargs: Any) -> Any: ...
     def get(self, url: str, **kwargs: Any) -> Any: ...
     def patch(self, url: str, **kwargs: Any) -> Any: ...
+
+
+def _transport_text(exc: BaseException) -> str:
+    """What an unreachable-error says about a failure to reach a service: the exception TYPE only (S7-5, as
+    ``field_agent.liveness`` already does, C-704). ``str(exc)`` is whatever the HTTP stack wrote: a bad header value
+    (``Illegal header value b'<the FIELD_SHARED_SECRET>\\n'``) quotes the secret, a URL error quotes the URL with any
+    credentials in it. Callers copy this text into 502 details and logs. The original exception stays as ``__cause__``."""
+    return type(exc).__name__
 
 
 class LedgerUnreachableError(Exception):
@@ -333,7 +343,7 @@ class LedgerClient:
                 **auth,
             )
         except Exception as exc:
-            raise LedgerUnreachableError(str(exc)) from exc
+            raise LedgerUnreachableError(_transport_text(exc)) from exc
         if resp.status_code != 201:
             raise LedgerUnreachableError(
                 upstream_error(resp, "ledger append"),
@@ -349,7 +359,7 @@ class LedgerClient:
             resp = self._client.get(f"{self._base}/retention/check",
                                     **_request_auth(self._own_client, "GET", "/retention/check", LEDGER_GUARDED))
         except Exception as exc:
-            raise LedgerUnreachableError(str(exc)) from exc
+            raise LedgerUnreachableError(_transport_text(exc)) from exc
         if resp.status_code != 200:
             raise LedgerUnreachableError(
                 upstream_error(resp, "ledger retention check")
@@ -365,7 +375,7 @@ class LedgerClient:
             resp = self._client.get(f"{self._base}/events", params=params,
                                     **_request_auth(self._own_client, "GET", "/events", LEDGER_GUARDED))
         except Exception as exc:
-            raise LedgerUnreachableError(str(exc)) from exc
+            raise LedgerUnreachableError(_transport_text(exc)) from exc
         if resp.status_code != 200:
             raise LedgerUnreachableError(
                 upstream_error(resp, "ledger events read")
@@ -398,7 +408,7 @@ class RegistryClient:
             resp = self._client.get(f"{self._base}/agents/{agent_id}",
                                     **_request_auth(self._own_client, "GET", f"/agents/{agent_id}", REGISTRY_GUARDED))
         except Exception as exc:
-            raise RegistryUnreachableError(str(exc)) from exc
+            raise RegistryUnreachableError(_transport_text(exc)) from exc
         if resp.status_code == 404:
             raise AgentNotRegisteredError(agent_id)
         if resp.status_code != 200:
@@ -425,7 +435,7 @@ class RegistryClient:
             resp = self._client.get(f"{self._base}/agents", params=params,
                                     **_request_auth(self._own_client, "GET", "/agents", REGISTRY_GUARDED))
         except Exception as exc:
-            raise RegistryUnreachableError(str(exc)) from exc
+            raise RegistryUnreachableError(_transport_text(exc)) from exc
         if resp.status_code != 200:
             raise RegistryUnreachableError(
                 upstream_error(resp, "registry")
@@ -462,7 +472,7 @@ class RegistryClient:
         except HeaderCollisionError:
             raise
         except Exception as exc:
-            raise RegistryUnreachableError(str(exc)) from exc
+            raise RegistryUnreachableError(_transport_text(exc)) from exc
         if resp.status_code == 412 and if_updated_at is not None:
             raise AgentRowChangedError(agent_id)
         if resp.status_code == 404:
@@ -486,20 +496,61 @@ class RegistryClient:
 #: ``invalid`` -> the file exists but is unparseable or schema-invalid
 RESOLVE_REASONS = ("ok", "no_ref", "missing", "invalid")
 
+#: The most bytes a manifest file may have before the resolver refuses to read it (C-1086, reviewer C-883
+#: F-C883-2): a manifest is a few KiB; a ref to something larger, to a device, a FIFO or a directory is not a
+#: manifest and is never read. The read itself is bounded to this many bytes plus one, so a file that grows
+#: between the stat and the read is still refused rather than read whole.
+MAX_MANIFEST_BYTES = 1024 * 1024
+
 
 class ManifestResolver:
-    """Loads + validates the manifest a registry record points at, with an
-    mtime cache. manifest_ref may be absolute or relative to manifest_dir."""
+    """Loads + validates the manifest a registry record points at, with a
+    content cache (sha256 of the bytes read: a rewrite whose mtime was put back,
+    or one inside the clock's resolution, is never served stale; reviewer C-528
+    F-C528-3). manifest_ref may be absolute or relative to manifest_dir."""
 
     def __init__(self, manifest_dir: str | Path | None = None):
         self.manifest_dir = Path(
             manifest_dir or os.environ.get("FIELD_MANIFEST_DIR", ".")
         )
-        self._cache: dict[str, tuple[float, FieldManifest]] = {}
+        self._cache: dict[str, tuple[str, FieldManifest]] = {}
 
     def resolve(self, manifest_ref: str | None) -> FieldManifest | None:
         """None = missing/invalid (caller blocks with I.manifest)."""
         return self.resolve_detail(manifest_ref)[0]
+
+    @staticmethod
+    def _read_bounded(path: Path) -> bytes | None | bool:
+        """The file's bytes, ``None`` when nothing is there, ``False`` when what is there is not a manifest file.
+
+        The decision is made on the open DESCRIPTOR, never on the path twice (reviewer Q-59 F-Q59-4): a stat on
+        the path and an open of the path are two looks, and a FIFO or device swapped in between would be opened
+        and block or never end. ``O_NONBLOCK`` makes the open of a FIFO return at once; ``fstat`` on the
+        descriptor says what was really opened; only a regular file of at most MAX_MANIFEST_BYTES is read, and the
+        read stops at the cap plus one byte whatever the size said."""
+        try:
+            fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+        except (FileNotFoundError, NotADirectoryError, ValueError):  # ValueError: an embedded NUL is no usable path
+            return None
+        except OSError:  # it exists but cannot be opened (no permission, a loop of symlinks)
+            return False
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode) or st.st_size > MAX_MANIFEST_BYTES:
+                return False  # a directory, device, FIFO or socket, or more bytes than a manifest has: never read
+            raw = b""
+            while len(raw) <= MAX_MANIFEST_BYTES:  # bounded even if the file grew since the fstat
+                chunk = os.read(fd, MAX_MANIFEST_BYTES + 1 - len(raw))
+                if not chunk:
+                    break
+                raw += chunk
+        except OSError:
+            return False
+        finally:
+            os.close(fd)
+        if len(raw) > MAX_MANIFEST_BYTES:
+            return False
+        return raw
 
     def resolve_detail(
         self, manifest_ref: str | None
@@ -516,15 +567,17 @@ class ManifestResolver:
         path = Path(manifest_ref)
         if not path.is_absolute():
             path = self.manifest_dir / path
-        try:
-            mtime = path.stat().st_mtime
-        except (OSError, ValueError):  # ValueError: an embedded NUL is no usable path
+        raw = self._read_bounded(path)
+        if raw is None:
             return None, "missing"
+        if raw is False:
+            return None, "invalid"
+        digest = hashlib.sha256(raw).hexdigest()
         cached = self._cache.get(str(path))
-        if cached and cached[0] == mtime:
+        if cached and cached[0] == digest:
             return cached[1], "ok"
         try:
-            data = load_manifest(path)
+            data = parse_manifest_text(raw.decode("utf-8"), path)
         except Exception:
             return None, "invalid"
         result = validate_manifest_data(data)
@@ -534,7 +587,7 @@ class ManifestResolver:
             manifest = FieldManifest.from_dict(data)
         except Exception:
             return None, "invalid"
-        self._cache[str(path)] = (mtime, manifest)
+        self._cache[str(path)] = (digest, manifest)
         return manifest, "ok"
 
 

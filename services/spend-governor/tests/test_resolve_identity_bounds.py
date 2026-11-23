@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
@@ -150,12 +151,40 @@ def test_a_blank_body_name_is_refused_even_when_authenticated(stack, armed):
 # ---- the CLI's message -------------------------------------------------------------------------------------------------
 
 
+class _InProcessHttpx:
+    """The CLI's ``httpx`` name: ``Client(...).request`` goes to the in-process app; every other attribute (the
+    exception classes the CLI names) is the real module's."""
+
+    def __init__(self, client):
+        self._client = client
+
+    def __getattr__(self, name):
+        return getattr(httpx, name)
+
+    def Client(self, **kw):
+        app = self._client
+
+        class _C:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def request(self, method, url, **rkw):
+                return app.request(method, url.replace("http://127.0.0.1:8006", ""),
+                                   json=rkw.get("json"), params=rkw.get("params"))
+
+        return _C()
+
+
 def test_the_cli_reports_a_blank_resolver_as_one_error_line_exit_1(stack, monkeypatch):
     client, _, _ = stack
     esc_id = open_escalation(client)
-    monkeypatch.setenv("FIELD_GOVERNOR_URL", "http://gov.invalid")
-    monkeypatch.setattr(cli.httpx, "post", lambda url, **kw: client.post(url.replace("http://gov.invalid", ""),
-                                                                           json=kw.get("json")))
+    # the CLI sends through one httpx.Client (S10-12): stand in for the CLI's httpx only (never patch the real module,
+    # which TestClient itself uses), at the loopback default, so nothing is looked up or sent outside the process
+    monkeypatch.delenv("FIELD_GOVERNOR_URL", raising=False)
+    monkeypatch.setattr(cli, "httpx", _InProcessHttpx(client))
     res = runner.invoke(cli.app, ["resolve", esc_id, "--by", "   "])
     assert res.exit_code == 1, res.output
     err = res.stderr.strip()

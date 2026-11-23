@@ -156,6 +156,18 @@ _RUBRIC = (
 )
 
 
+def _finite_confidence(raw: Any) -> float:
+    """``raw`` as a finite float, else ``ValueError``. NaN and the infinities pass the precision floor the wrong way
+    (``nan < floor`` is False; ``min(1.0, nan)`` is 1.0), and a bool is a flag, not a score: ``float(True)`` would be
+    a perfect 1.0 (S5-19)."""
+    if isinstance(raw, bool):
+        raise ValueError("confidence is a boolean, not a number")
+    value = float(raw)
+    if not math.isfinite(value):
+        raise ValueError("confidence is not a finite number")
+    return value
+
+
 class AnthropicSuggester:  # pragma: no cover — Declared-untested without keys
     """Real upstream: stateless, prompt-defined, version-pinned. The API key
     comes ONLY from the environment — never from the repo."""
@@ -198,9 +210,8 @@ class AnthropicSuggester:  # pragma: no cover — Declared-untested without keys
         data = json.loads(text.strip())
         framework = data["framework"]
         statement = data["statement"]
-        confidence = float(data["confidence"])
-        if not math.isfinite(confidence):      # C-1082 F-CW-1: min(1.0, nan) is 1.0, which would clear any floor
-            raise ValueError("suggester confidence is not a finite number")
+        # C-1082 F-CW-1 / S5-19: min(1.0, nan) is 1.0, which would clear any floor; a bool is not a score
+        confidence = _finite_confidence(data["confidence"])
         return (
             None if framework is None else str(framework),
             None if statement is None else str(statement)[:300],
@@ -224,9 +235,14 @@ def resolve_suggester():
 def resolve_suggest_floor(default: float = 0.8) -> float:
     raw = os.environ.get("CROSSWALK_SUGGEST_FLOOR", "")
     try:
-        return max(0.0, min(1.0, float(raw)))
+        floor = float(raw)
     except ValueError:
         return default
+    # NaN and the infinities are not floors, and a NEGATIVE one would clamp to 0.0, which admits every proposal
+    # (S5-19): all of them fall back to the default. An explicit 0 stays 0, a value above 1 stays 1.
+    if not math.isfinite(floor) or floor < 0:
+        return default
+    return min(1.0, floor)
 
 
 def _review(path: str, confidence: float, rationale: str,
@@ -257,9 +273,8 @@ def suggest(manifest: dict[str, Any], suggester,
             framework, statement, confidence, rationale = (
                 suggester.suggest_one(path, values[path])
             )
-            confidence = float(confidence)
-            if not math.isfinite(confidence):  # C-1082 F-CW-1: `nan < floor` is False, so a NaN would clear the floor
-                raise ValueError("non-finite confidence")
+            # C-1082 F-CW-1 / S5-19: `nan < floor` is False, so a NaN would clear the floor; a bool is not a score
+            confidence = _finite_confidence(confidence)
         except Exception as exc:  # fail conservative, never raise
             out.append(_review(
                 path, 0.0,
@@ -273,7 +288,7 @@ def suggest(manifest: dict[str, Any], suggester,
                 path, confidence,
                 f"proposed framework {framework!r} is not a known framework "
                 f"({rationale})", model))
-        elif confidence < floor:
+        elif not confidence >= floor:       # not `<`: a NaN floor must refuse, not admit
             out.append(_review(
                 path, confidence,
                 f"confidence {confidence:.2f} below floor {floor:.2f} "
