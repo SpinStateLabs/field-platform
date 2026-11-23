@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from field_agent._transport import AuthedClient
 from field_agent.errors import NoSpendCapError, UsageReportError
+from field_core.errors import upstream_error
 
 import os
 from typing import Any
@@ -74,9 +75,9 @@ class UsageClient:
             "FIELD_GOVERNOR_URL", "http://127.0.0.1:8006"
         )).rstrip("/")
         if client is None:
-            import httpx
+            from field_core import http as _fhttp
 
-            client = httpx.Client(timeout=5.0)
+            client = _fhttp.client(timeout=5.0)
         self._client = AuthedClient(client)
 
     def report(
@@ -101,20 +102,23 @@ class UsageClient:
                 },
             )
         except Exception as exc:
+            # the exception TYPE only: its text can carry the URL, a proxy or an address (as liveness.py does, S9-4)
             raise UsageReportError(
-                f"spend-governor unreachable — usage NOT metered: {exc}"
-            ) from exc
+                f"spend-governor unreachable ({type(exc).__name__}) — usage NOT metered"
+            ) from exc   # main's S-2-20 test keeps the cause; only the MESSAGE drops the exception's text (S9-4)
         if resp.status_code == 404:
-            try:
-                detail = resp.json().get("detail", resp.text)
-            except Exception:
-                detail = resp.text
-            raise NoSpendCapError(detail)
+            # the governor's own words are not relayed (C-642); a 404 is how it says "no cap"
+            raise NoSpendCapError(f"{upstream_error(resp, 'usage report')}: no spend cap configured for this agent")
         if resp.status_code != 201:
-            raise UsageReportError(
-                f"usage report returned {resp.status_code}: {resp.text}"
-            )
-        return UsageReport.model_validate(resp.json())
+            raise UsageReportError(upstream_error(resp, "usage report"))
+        try:
+            return UsageReport.model_validate(resp.json())
+        except Exception as exc:
+            # a 201 whose body is not the expected JSON: the library's error carries the body (JSONDecodeError.doc,
+            # a ValidationError's input repr), so only the type name is kept and the raise is OUTSIDE this block
+            # (inside it __context__ would hold the error) (C-785)
+            bad = type(exc).__name__
+        raise UsageReportError(f"usage report returned an unusable reply ({bad}) — usage NOT metered")
 
     def spend(
         self,
@@ -139,19 +143,17 @@ class UsageClient:
             resp = self._client.post(f"{self._base}/spend", json=body)
         except Exception as exc:
             raise UsageReportError(
-                f"spend-governor unreachable — spend NOT metered: {exc}"
-            ) from exc
+                f"spend-governor unreachable ({type(exc).__name__}) — spend NOT metered"
+            ) from exc   # as in report(): the cause is kept, the message carries the type only
         if resp.status_code == 404:
-            try:
-                detail = resp.json().get("detail", resp.text)
-            except Exception:
-                detail = resp.text
-            raise NoSpendCapError(detail)
+            raise NoSpendCapError(f"{upstream_error(resp, 'spend report')}: no spend cap configured for this agent")
         if resp.status_code != 201:
-            raise UsageReportError(
-                f"spend report returned {resp.status_code}: {resp.text}"
-            )
-        return SpendStatusLite.model_validate(resp.json())
+            raise UsageReportError(upstream_error(resp, "spend report"))
+        try:
+            return SpendStatusLite.model_validate(resp.json())
+        except Exception as exc:
+            bad = type(exc).__name__        # raised below, outside the block: see report() (C-785)
+        raise UsageReportError(f"spend report returned an unusable reply ({bad}) — spend NOT metered")
 
 
 def _get(obj: Any, key: str) -> Any:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import sys
 from pathlib import Path
@@ -125,8 +126,7 @@ def verify_chain_cmd(
             err=True,
         )
     try:
-        with jsonl.open(encoding="utf-8") as fh:
-            lines = fh.readlines()  # same lines as iterating the file
+        raw = jsonl.read_bytes()  # bytes first: a decode error then carries the offset in the FILE
     except FileNotFoundError:
         hint = ""
         if jsonl.with_name(f"{jsonl.stem}.segments.journal").exists():
@@ -140,6 +140,12 @@ def verify_chain_cmd(
             err=True,
         )
         raise typer.Exit(code=2)
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:  # not valid UTF-8 is chain evidence, like an unparseable line (offset only, never the bytes)
+        typer.echo(f"TAMPERED — file is not valid UTF-8 at byte {exc.start}", err=True)
+        raise typer.Exit(code=1)
+    lines = io.StringIO(text, newline=None).readlines()  # same lines (universal newlines) as iterating the file
     events = []
     for line_no, line in enumerate(lines, start=1):
         line = line.strip()
@@ -191,7 +197,9 @@ def alert_test_cmd(
 
 @app.command("alert-topic-init")
 def alert_topic_init_cmd(
-    out: Path = typer.Option(..., "--out", help="File to write the new topic to."),
+    # a str, not a Path: click stats a Path option while parsing, and a NUL in it is a ValueError that escapes before
+    # this command runs; as text it reaches the handler below and is a named exit 2
+    out: str = typer.Option(..., "--out", help="File to write the new topic to."),
     force: bool = typer.Option(False, "--force", help="Replace an existing file."),
 ) -> None:
     """Write a new unguessable ntfy topic to --out. The topic is never printed:
@@ -199,12 +207,12 @@ def alert_topic_init_cmd(
     from field_core import alerts
 
     try:
-        alerts.write_topic_file(out, overwrite=force)
+        alerts.write_topic_file(Path(out), overwrite=force)
     except FileExistsError:
         typer.echo(f"alert-topic-init: {out} exists; nothing written (use --force to replace)",
                    err=True)
         raise typer.Exit(code=1)
-    except OSError as exc:
+    except (OSError, ValueError) as exc:  # ValueError: a NUL in the path
         typer.echo(f"alert-topic-init: cannot write {out} ({type(exc).__name__}); nothing written",
                    err=True)
         raise typer.Exit(code=2)

@@ -13,7 +13,7 @@ variable, ``FORCE_GATEWAY_URL``:
   when ``FORCE_GATEWAY_URL`` is the target, the platform headers:
   ``x-force-passthrough: judge`` (the gateway forwards the call uninstrumented,
   so a judge's call is never re-injected, re-sampled or counted as hygiene
-  traffic) and ``auth_headers()`` (so a secret estate's gateway accepts it).
+  traffic) and ``perimeter_headers()`` (so a secret estate's gateway accepts it).
   Neither platform header is sent to ``ANTHROPIC_BASE_URL`` or the default
   host: the shared secret must never reach a third party, and there is no way
   to tell whether an ``ANTHROPIC_BASE_URL`` is a gateway.
@@ -47,7 +47,7 @@ import os
 from urllib.parse import urlparse
 
 from field_core import posture_flag
-from field_core.authn import auth_headers
+from field_core.guarded_operator import perimeter_headers
 from field_core.hosts import is_internal_host
 
 DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
@@ -104,13 +104,13 @@ def self_identity_headers() -> dict[str, str]:
 
 def anthropic_headers(key: str, version: str = ANTHROPIC_VERSION) -> dict[str, str]:
     """Headers for a platform caller's Messages call (read per call, like
-    ``auth_headers``). Platform headers — passthrough, the F1 self-identity
+    ``perimeter_headers``). Platform headers — passthrough, the F1 self-identity
     pair, the perimeter secret — ride only to ``FORCE_GATEWAY_URL``."""
     headers = {"x-api-key": key, "anthropic-version": version}
     if via_force_gateway():
         headers[PASSTHROUGH_HEADER] = PASSTHROUGH_JUDGE
         headers.update(self_identity_headers())
-        headers.update(auth_headers())
+        headers.update(perimeter_headers())
     return headers
 
 
@@ -140,7 +140,11 @@ def cleartext_ok(base: str) -> bool:
     IP (``field_core.hosts``: not ``is_private``), ``localhost``, a single-label name (a compose service such as ``forcegw``),
     or a ``.internal`` / ``.local`` name (Fly private network, mDNS). Anything else over http would
     put the key on a network we do not control. (C-117, reviewer C-187 F-C187-1.)"""
-    u = urlparse(base)
+    try:
+        u = urlparse(base)
+        u.port                            # raises ValueError for a port out of range
+    except ValueError:                    # an unbalanced bracket ('http://[::1') or a bad port: refused, not raised
+        return False
     if u.scheme == "https":
         return True
     if u.scheme != "http":
@@ -156,8 +160,18 @@ def make_http_client(key: str, *, timeout: float = 30.0):
     import httpx
 
     base = anthropic_base_url()
-    if not cleartext_ok(base):
+    # the variable that decided the base URL: the only thing a refusal about a malformed value may name
+    var = GATEWAY_URL_ENV if via_force_gateway() else BASE_URL_ENV
+    try:
         u = urlparse(base)
+        u.port                            # raises ValueError for a port out of range
+        usable = u.scheme in ("http", "https") and bool(u.hostname)
+    except ValueError:
+        u, usable = None, False
+    if not usable:
+        # unparseable, no host, or not http(s): the URL may hold credentials, so the text names the variable only
+        raise InsecureBaseURLError(f"{var} is not a usable http(s) base URL: refusing to send the Anthropic key")
+    if not cleartext_ok(base):
         what = f"{u.scheme or 'an unknown scheme'} to host {u.hostname!r}"
         if via_force_gateway():
             # the platform headers (perimeter secret, token id) ride here: never in clear
@@ -176,5 +190,9 @@ def make_http_client(key: str, *, timeout: float = 30.0):
             _warned.add(base)
             _log.warning("ANTHROPIC_BASE_URL is plain %s to host %r: the key is sent unencrypted",
                          u.scheme or "unknown", u.hostname)
-    return httpx.Client(base_url=base, timeout=timeout, headers=anthropic_headers(key),
-                        trust_env=False)
+    try:
+        return httpx.Client(base_url=base, timeout=timeout, headers=anthropic_headers(key),
+                            trust_env=False)
+    except (ValueError, httpx.InvalidURL):   # a port out of range, a bad authority: httpx refuses it here
+        raise InsecureBaseURLError(
+            f"{var} is not a usable http(s) base URL: refusing to send the Anthropic key") from None

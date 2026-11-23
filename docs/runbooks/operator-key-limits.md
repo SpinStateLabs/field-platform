@@ -1,0 +1,156 @@
+# Operator key layer: declared limits
+
+Three limits of the operator-key layer that the code states but no runbook
+did (card C-46; reviewer cards C-20 and C-34). Each is a documented limit, not a
+defect, and each cites the code that says so by file and symbol (a function,
+constant or quoted expression), so a cite survives the code moving; re-grep the
+quoted phrase if it does not resolve.
+
+## 1. Retired-key memory: in process memory, per registry path, capped
+
+What it does: when a load of the operators file at a higher generation removes
+a key hash, the verifier remembers that hash and refuses it in ANY file that is
+not a new highest generation: a restored backup, a stale `.prev`, or a second
+file at the same generation as the highest seen, even one above the generation
+that removed it. Only a re-issue in a file above the highest generation seen
+makes the key live again (C-1147, Don's ruling of 2026-11-02 on PR 355: a new
+high clears its own keys from the retired table, then `returned = {h for h in
+present if h in retired}` in `_apply_retired_memory` refuses every retired hash
+still present). It learns a hash only from a higher-generation load
+that LACKS it (`_apply_retired_memory` in `packages/field-core/src/field_core/operator_auth.py`, the `removed` sets);
+a higher file that still carries the hash retires nothing.
+
+The limits:
+- The memory is in process memory only: "Memory resets on a process restart"
+  (the comment above `MAX_RETIRED_HASHES` in `operator_auth.py`). It is also kept per registry path (`os.path.abspath`,
+  `_apply_retired_memory` in `operator_auth.py`), and each service that loads the file has its own
+  (`packages/field-core/tests/test_operator_auth_format2.py`, test
+  `test_retired_memory_is_per_process_and_per_path`).
+- It learns only from loads this process makes, and only from a STRICTLY higher
+  generation (`_apply_retired_memory`: `generation > st["generation"]` and `generation > st["high_generation"]`). A file at the SAME generation as the
+  highest seen is not "below the high-water mark" (`_apply_retired_memory`, `generation < st["high_generation"]`, tests
+  `<`), so it is not refused for hashes the highest file merely lacked; but a
+  hash already RETIRED is refused there (C-1147, decided: the narrow rule;
+  `packages/field-core/tests/test_operator_retired_key_narrow_rule_c1147.py`).
+  Only a hash that was never retired passes in a second file with the same
+  generation number.
+- It is capped at `MAX_RETIRED_HASHES = 4096` (constant `MAX_RETIRED_HASHES` in `operator_auth.py`); when
+  full, the oldest generations are dropped (the `len(retired) > MAX_RETIRED_HASHES` trim in `_apply_retired_memory`). The
+  eviction is silent: no log line and no counter. Eviction removes the hash
+  from the retired table only. In a running process a stale file BELOW the
+  highest generation seen is still refused for every hash the highest file
+  lacks (`returned |= present - st["high_hashes"]` in `_apply_retired_memory`, the below-high-water rule), evicted or
+  not; an evicted hash matches again only in a file at or above the highest
+  generation seen, or after a restart. The set of sightings that feeds the
+  `operator_retired_hash_seen` counter and its ERROR log stops growing at the
+  same cap (`len(_retired_seen) < MAX_RETIRED_HASHES` in `_apply_retired_memory`), so after that those two stop reporting
+  new sightings while refusal of the hashes still held in memory continues.
+
+Consequence: after a service restarts, restoring a stale `operators.json.prev`
+that still holds a retired key makes that key match again until a load at a
+higher generation that lacks it is seen. The restored file loads as a normal
+file. A restart is what clears the high-water mark too; filling the table
+alone does not let a stale lower-generation file back in a running process.
+
+What to do: do not restore a `.prev` of the operators file after a key has been
+retired unless the restored generation is the intended one. After any such
+restore, check with the verify-hash route (section 3) that the retired key's
+hash is not `matchable_now`, and run the check against EVERY service that loads
+the file, not one.
+
+The rotation tool does this itself: its auto-revert renames `operators.json.prev`
+back, a generation DECREASE (the module docstring of `packages/field-core/src/field_core/rotation_events.py`, on `reverted`).
+By the below-high-water rule, a running service that has already seen the higher
+file refuses any hash that the higher file lacked and the reverted file holds,
+until it restarts; a service that restarts after the revert has no such memory.
+I did not trace whether a reverted PROMOTE reaches this case; treat it as one
+until the rotator's behaviour is read.
+
+## 2. Observer memory is per process: a restart records `startup: true`
+
+What it does: the ledger's operator observer writes an event per service at
+its first observation (`"startup": true`) and one each time the observed value
+changes (the module docstring of `services/sealed-ledger/src/sealed_ledger/operator_observer.py`).
+
+The limit: "first observation" means first for this ledger process. The
+previous values live in the observer's own dictionaries.
+
+False alarm: after the ledger process restarts, the mode and registry events
+record `startup: true` again for every service, whether or not anything changed
+(`OperatorObserver._observe` in `operator_observer.py`: the mode event uses its precomputed `startup`, the
+registry event the previous value `previous`). The break-glass and retired-hash
+events write a startup row only when the value is non-zero (`previous_bg is
+None and any(bg)` in `_observe_rotation`; `previous_n is None and n > 0` in `_observe_self_witness`).
+
+Missed alarm (the half that matters): a disarm, a downgrade, a generation
+decrease or a break-glass key change that happens while the ledger is down is
+recorded only as `startup: true`, or not at all. The generation-decrease event
+needs a previous value (`previous is not None and gen < previous`,
+`OperatorObserver._observe_rotation`) and `sealed_key_changed` is
+`previous is not None and ...` (`_observe_self_witness`), so neither fires on a first
+observation. After any ledger restart, compare the startup values with the
+last rows written before the restart, by hand.
+
+The observer also writes at most `MAX_WITNESS_ROWS = 256` rows per event
+(constant `MAX_WITNESS_ROWS` in `operator_observer.py`, applied in `_witness_rows`); rows beyond that are dropped without
+a marker.
+
+## 3. `/operator/verify-hash` is a hash-match oracle behind one secret
+
+What it does: `POST /operator/verify-hash` takes a key hash (never a key) and
+says whether that hash is the named row's current or next key and whether it
+would authenticate now (the `POST /operator/verify-hash` entry of the module docstring of
+`packages/field-core/src/field_core/operator_health.py`, answer built by `verify_hash_answer`). The answer also carries the registry format, its
+generation and a prefix of the registry file's sha256, so a holder of the
+secret learns those too.
+
+What is enforced at the edge: both shipped proxy configs refuse this route and
+`/operator/rotation-state` (403, never proxied) unless the request comes from
+the proxy's own loopback with no forwarding hop (`integration/demo/Caddyfile:18-40`,
+`integration/fly/Caddyfile:21-41`), and CI pins that
+(`.github/workflows/ci.yml`, the three steps named "Key rotation R2 — ... refuses /operator/verify-hash and
+/operator/rotation-state except from ...": the demo proxy, the Fly edge, and the GB10 18080/18443 listeners).
+
+What is not: on the compose network (the demo layout) the service
+ports are reachable without the proxy, and inside the machine on the Fly image
+(where the in-machine rotator calls `127.0.0.1:800x` directly,
+`integration/fly/Caddyfile:27-28`), so a holder of the perimeter secret who can
+reach a service port can call the route directly (card C-48; a second,
+internal-only secret for it is proposed in card C-54; PR 374 builds it as
+`FIELD_INTERNAL_SECRET_SHA256` or `FIELD_INTERNAL_SECRET`, and until that is
+merged and set nothing requires it). The route exists only when the operator
+layer is not off (off means no registry file configured and no true
+`FIELD_OPERATOR_REQUIRE`, `operator_auth.py` `mode()`) and a perimeter secret is
+configured (`internal_routes_enabled` in
+`operator_health.py`); there is no further check and I found no rate
+limit (handler `verify_hash` in `install_routes`, `operator_health.py`: secret gate, body cap, answer).
+A holder of the secret can therefore test candidate hashes against any row
+except the break-glass identity, which is refused (403).
+
+How to call it (the shape sections 1 and 3 refer to): send
+`POST <service>/operator/verify-hash` with the header `x-field-auth: <the
+perimeter secret>` and a body of exactly
+`{"operator_id": "<id>", "key_sha256": "<64 lower-case hex>"}`, from the
+service's own network position (the shipped edges refuse it from elsewhere,
+above). The answer names `matched` (`current`, `next` or `none`),
+`matchable_now`, `retired`, and the registry format, generation and file hash
+prefix (`verify_hash_answer` in `operator_health.py`). Other answers: 401 without the
+`x-field-auth` header (`authn.py`), 404 when the operator layer is off (no registry
+file and no true `FIELD_OPERATOR_REQUIRE`) or no perimeter secret is set, 413 for a body over `MAX_VERIFY_BODY` = 1024 bytes
+(constant `MAX_VERIFY_BODY` in `operator_health.py`, checked in the `verify_hash` route), 422 for any other field or a malformed
+hash, 503 when the operators file is unavailable (`UNAVAILABLE_DETAIL`, `verify_hash_answer`). Never put a key in
+the body, only its hash.
+
+Record: a question about a non-break-glass row writes no ledger event and
+counts as no refusal (the `POST /operator/verify-hash` entry of the `operator_health.py` module docstring); I did not check what the
+service's ordinary request log or the edge log keep. A break-glass question
+increments `breakglass_attempt_count` (`oa.note_breakglass(used=False)` in `verify_hash_answer`, `operator_health.py`, at both break-glass checks),
+which the observer ledgers.
+
+Assumption, not a control: guessing a key through the oracle is impractical
+only while keys are high-entropy. Keys made by `tools/operator_keygen.py`
+are `fok_` plus 32 random bytes (`generate_key` in `tools/operator_keygen.py`), but the parser
+that reads a key (verifier and registry file alike) checks only a character
+pattern with a length of 1 to 256
+(`_KEY_RE` in `operator_auth.py`), so there is no entropy or useful minimum
+length. A hand-made or short key is not protected by this argument.

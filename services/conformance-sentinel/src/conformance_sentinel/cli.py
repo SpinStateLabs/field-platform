@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from field_core.authn import auth_headers
+from field_core.guarded_operator import perimeter_headers
+from conformance_sentinel import headers as _headers
 from field_core.errors import upstream_error
 
+import json
 import os
 import sys
 
@@ -15,6 +17,9 @@ for _stream in (sys.stdout, sys.stderr):
         _stream.reconfigure(encoding="utf-8")
 
 import httpx
+
+#: captured at import: tests replace the module-level ``httpx`` with a stand-in that has no exception classes
+_HTTP_ERRORS = (httpx.HTTPError, httpx.InvalidURL)
 
 from conformance_sentinel import __version__
 
@@ -38,21 +43,41 @@ def check(
     irreversible: bool = typer.Option(False, "--irreversible"),
 ) -> None:
     """Ask the sentinel; exit 0 ALLOW, 2 ESCALATE, 1 BLOCK."""
-    resp = httpx.post(
-        f"{_base()}/check",
-        json={"agent_id": agent_id, "action": action, "token_id": token_id,
-              "irreversible": irreversible},
-        timeout=15.0,
-        headers=auth_headers(),
-    )
+    try:
+        resp = httpx.post(
+            f"{_base()}/check",
+            json={"agent_id": agent_id, "action": action, "token_id": token_id,
+                  "irreversible": irreversible},
+            timeout=15.0,
+            headers=perimeter_headers(),
+            follow_redirects=False,
+        )
+    except _HTTP_ERRORS as exc:
+        typer.echo(f"error: sentinel unreachable ({type(exc).__name__})", err=True)
+        raise typer.Exit(code=1)
     if resp.status_code != 200:
-        typer.echo(f"error {resp.status_code}: {resp.text}", err=True)
+        # main's "error <status>" form (test_sentinel_cli_check pins it), and still never the body (C-642): the status
+        # is the one upstream_error already formatted (an int, or None for anything else)
+        detail = upstream_error(resp, "/check")
+        typer.echo(f"error {detail.rsplit(' ', 1)[-1]}: {detail}", err=True)
         raise typer.Exit(code=1)
-    verdict = resp.json()
-    typer.echo(resp.text)
-    if verdict["decision"] == "BLOCK":
+    # S6-13, fail closed: only the exact decision 'ALLOW' exits 0. A body that is not JSON, not an object, has no
+    # decision or a decision this CLI does not know is a refusal, never an allow.
+    try:
+        verdict = resp.json()
+    except (ValueError, RecursionError):
+        verdict = None
+    decision = verdict.get("decision") if isinstance(verdict, dict) else None
+    if decision not in ("ALLOW", "BLOCK", "ESCALATE"):
+        shown = decision if isinstance(decision, str) and len(decision) <= 40 else None
+        typer.echo("error: sentinel answered 200 with "
+                   + (f"an unknown decision {shown!r}" if shown is not None else "no readable decision")
+                   + "; treated as BLOCK", err=True)
         raise typer.Exit(code=1)
-    if verdict["decision"] == "ESCALATE":
+    typer.echo(json.dumps(verdict, ensure_ascii=True))   # the parsed verdict re-serialised, never the raw body (B4)
+    if decision == "BLOCK":
+        raise typer.Exit(code=1)
+    if decision == "ESCALATE":
         raise typer.Exit(code=2)
 
 
@@ -93,7 +118,7 @@ def clauses() -> None:
     """List the clauses the sentinel enforces. Exit 1 on a refusal, an unreachable service or a body of the wrong shape:
     a 401 body must never print as if it were a clause."""
     try:
-        resp = httpx.get(f"{_base()}/clauses", timeout=10.0, headers=auth_headers())
+        resp = httpx.get(f"{_base()}/clauses", timeout=10.0, headers=perimeter_headers())
     except httpx.HTTPError as exc:   # the class only: the text of a transport error can carry the URL
         typer.echo(f"error: sentinel unreachable ({type(exc).__name__})", err=True)
         raise typer.Exit(code=1)
@@ -109,6 +134,22 @@ def clauses() -> None:
         raise typer.Exit(code=1)
     for cid, text in body.items():
         typer.echo(f"{cid:22s} {text}")
+
+
+def _write_atomic(path, text: str) -> None:
+    """Write ``text`` to ``path`` through a temporary file and ``os.replace``; a failure leaves the old file (or none)
+    and no temporary file."""
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
 
 
 @app.command()
@@ -145,9 +186,9 @@ def score(
 
     registry_base = os.environ.get("FIELD_REGISTRY_URL", "http://127.0.0.1:8001").rstrip("/")
     delegation_base = os.environ.get("FIELD_DELEGATION_URL", "http://127.0.0.1:8003").rstrip("/")
-    sentinel = httpx.Client(base_url=_base(), timeout=15.0, headers=auth_headers())
-    registry = httpx.Client(base_url=registry_base, timeout=10.0, headers=auth_headers())
-    delegation = httpx.Client(base_url=delegation_base, timeout=10.0, headers=auth_headers())
+    sentinel = _headers.sentinel_client(_base())
+    registry = _headers.registry_client(registry_base)
+    delegation = _headers.delegation_client(delegation_base)
 
     try:
         try:
@@ -211,11 +252,6 @@ def score(
     meta = build_meta(runner="live", mode=mode,
                       ledger_seeds_included=ledger_down_cmd is not None,
                       engine_commit=commit)
-    if out_json:
-        pathlib.Path(out_json).write_text(render_json(sc, meta), encoding="utf-8")
-    if out_md:
-        pathlib.Path(out_md).write_text(render_markdown(sc, meta), encoding="utf-8")
-
     typer.echo(f"seeds run: {sc.run_seed_count}/{sc.total_seeds}"
                + (f" (skipped: {', '.join(sc.skipped_seed_ids)})" if sc.skipped_seed_ids else ""))
     typer.echo(f"gated catch: {len(sc.gated_caught_ids)}/{sc.violation_count}"
@@ -229,6 +265,17 @@ def score(
                f"  tokens/judgment: {sc.tokens_per_judgment}")
     typer.echo("gates: " + ("PASS" if sc.gates_passed else "FAIL")
                + " (proposed; ratified at PoC exit)")
+    # The files are written AFTER the summary so an unwritable path cannot lose the printed result, each through a
+    # temporary file and os.replace so a failed run leaves no half file; the OSError text carries a path, so only its
+    # class is printed.
+    try:
+        if out_json:
+            _write_atomic(pathlib.Path(out_json), render_json(sc, meta))
+        if out_md:
+            _write_atomic(pathlib.Path(out_md), render_markdown(sc, meta))
+    except OSError as exc:
+        typer.echo(f"scorecard file not written ({type(exc).__name__}); the summary above is the only copy", err=True)
+        raise typer.Exit(code=1)
     if not sc.gates_passed:
         raise typer.Exit(code=3)
 
