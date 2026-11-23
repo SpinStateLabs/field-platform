@@ -8,6 +8,11 @@ Labs actually runs (dogfood estate = GB10, sentinel **enforce**).
 |---|---|---|
 | `ssl-timekeeping-agent.yaml` | daily timesheet drafting + client portal entry | `agents/ssl-timekeeping-agent/SKILL.md` |
 | `ssl-invoicing-agent.yaml` | client invoicing + Zoho Books | `agents/ssl-invoicing-agent/SKILL.md` |
+| `ssl-fp-architect.yaml` | field-platform ROLE-LOOP role agent: reads specs, ADRs and code; writes ADRs, spec Deltas and readiness checks | `agents/ssl-fp-architect/SKILL.md` |
+| `ssl-fp-frontdoor-engineer.yaml` | field-platform ROLE-LOOP role agent: ROLE-LOOP front-door engineer | `agents/ssl-fp-frontdoor-engineer/SKILL.md` |
+| `ssl-fp-red-team.yaml` | field-platform ROLE-LOOP role agent: ROLE-LOOP red team | `agents/ssl-fp-red-team/SKILL.md` |
+| `ssl-fp-router-engineer.yaml` | field-platform ROLE-LOOP role agent: ROLE-LOOP router engineer | `agents/ssl-fp-router-engineer/SKILL.md` |
+| `ssl-fp-runtime-engineer.yaml` | field-platform ROLE-LOOP role agent: ROLE-LOOP runtime engineer | `agents/ssl-fp-runtime-engineer/SKILL.md` |
 | `conformance-sentinel.yaml` / `force-gateway.yaml` / `compliance-crosswalk.yaml` | the PLATFORM SERVICES' own self-manifests (F1), not business agents: each is a byte copy of the file the service ships (`services/<service>/src/<package>/self_manifest.yaml`). Never edit the copy: re-copy the packaged file. `tools/tests/test_self_manifests_in_sync.py` fails on the first differing byte | none (no skill) |
 | `deployment-agent.yaml` | SKETCH ONLY, not installed: the ADR-0079 deployment agent (a GB10 program, not a skill). No roster row, no token, no copy to any estate volume; every figure is a `[placeholder]` | `tools/deployment_agent/README.md` |
 | `canary-gb10.yaml` / `canary-fly.yaml` | GATE-VERIFICATION agents, not business agents. Every live check that mutates estate state (kill, revive, drill, mint, revoke, attest) runs against the canary and never a real agent. `tools/estate_probe.py` refuses any other id | `docs/runbooks/v1.2-deploy-rollback.md` §4 |

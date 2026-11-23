@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Iterable
@@ -56,6 +57,66 @@ _HASHED_OPTIONAL_KEYS = ("signing_failed", *_CALLER_KEYS)
 #: F2/F2b keys left OUT of a serialised event when None (pre-F2 readers are
 #: ``extra="forbid"`` and must keep parsing unsigned lines).
 _OMIT_WHEN_NONE = ("signature", *_HASHED_OPTIONAL_KEYS)
+
+
+def _refuse(self, *args, **kwargs):
+    raise TypeError(f"a LedgerEvent payload is read-only ({type(self).__name__}): copy it first")
+
+
+class _FrozenDict(dict):
+    """A read-only dict (still ``== dict`` and still JSON-serialisable). Every mutator raises TypeError;
+    a copy or deepcopy is an ordinary mutable ``dict``."""
+
+    __setitem__ = __delitem__ = clear = pop = popitem = setdefault = update = _refuse
+    __ior__ = __init__ = _refuse   # __init__: ``d.__init__(k=v)`` rewrites a dict subclass in place
+    __hash__ = None  # type: ignore[assignment]
+
+    def __reduce__(self):
+        return (dict, (dict(self),))
+
+    def copy(self):
+        return dict(self)
+
+
+class _FrozenList(list):
+    """A read-only list (still ``== list`` and JSON-serialisable); a copy is an ordinary ``list``."""
+
+    __setitem__ = __delitem__ = __iadd__ = __imul__ = __init__ = _refuse
+    append = clear = extend = insert = pop = remove = reverse = sort = _refuse
+    __hash__ = None  # type: ignore[assignment]
+
+    def __reduce__(self):
+        return (list, (list(self),))
+
+    def copy(self):
+        return list(self)
+
+
+def _deep_freeze(value: Any) -> Any:
+    """``value`` with every dict/list at any depth replaced by a read-only copy (the input is not touched,
+    so a caller's own dict is never aliased)."""
+    t = type(value)
+    if t is dict or t is _FrozenDict:
+        out = dict.__new__(_FrozenDict)
+        dict.update(out, value)
+        for k, v in value.items():
+            tv = type(v)
+            if tv is not str and tv is not int and tv is not float and tv is not bool and v is not None:
+                dict.__setitem__(out, k, _deep_freeze(v))
+        return out
+    if t is list or t is _FrozenList:
+        out = list.__new__(_FrozenList)
+        list.extend(out, value)
+        for i, v in enumerate(value):
+            tv = type(v)
+            if tv is not str and tv is not int and tv is not float and tv is not bool and v is not None:
+                list.__setitem__(out, i, _deep_freeze(v))
+        return out
+    if isinstance(value, dict):          # another dict/list subclass: same treatment, as plain read-only copies
+        return _deep_freeze(dict(value))
+    if isinstance(value, list):
+        return _deep_freeze(list(value))
+    return value
 
 
 class LedgerEvent(BaseModel):
@@ -95,11 +156,118 @@ class LedgerEvent(BaseModel):
         return data
 
 
+def _plain_event(data: dict[str, Any]) -> "LedgerEvent":
+    return LedgerEvent.model_validate(data)
+
+
+class ReadOnlyLedgerEvent(LedgerEvent):
+    """A ``LedgerEvent`` a caller cannot change: attribute assignment raises, and ``payload`` is a deep read-only
+    copy (``dict``/``list`` subclasses whose every mutator, ``__init__`` included, raises ``TypeError``; still
+    ``==`` a plain dict/list and still JSON-serialisable). It is what the sealed-ledger parse cache hands out
+    (B-GL-ledger-cache-immutable): the cache keeps its own, plain ``LedgerEvent`` objects private, so a caller
+    cannot corrupt them. Build one with ``ReadOnlyLedgerEvent.of(event)``; ``LedgerEvent`` itself is unchanged
+    (plain, mutable, validated exactly as before). Equal to a ``LedgerEvent`` with the same fields (either side
+    of ``==``); unhashable, as a ``LedgerEvent`` is. A ``model_dump()``, ``LedgerEvent(**event.model_dump())``,
+    a pickle round trip (which yields a plain ``LedgerEvent``) are ordinary mutable data. ``copy.deepcopy`` is NOT: it
+    returns a ``ReadOnlyLedgerEvent`` (fields still refuse assignment) whose payload is a plain, detached, mutable
+    ``dict``/``list`` tree.
+
+    Refused (``TypeError``/``ValidationError``): field assignment, any ``_name`` assignment including
+    ``__dict__``, ``__init__`` after construction (re-initialisation), ``__setstate__``, assigning ``__class__``
+    (``ev.__class__ = X`` and ``object.__setattr__(ev, "__class__", X)``), and every payload mutator at any depth.
+
+    NOT stopped (a deliberate low-level bypass): ``vars(ev)[k] = ...`` / ``ev.__dict__[k] = ...`` (the dict
+    itself), ``object.__setattr__(ev, field, ...)``, the unbound base calls ``LedgerEvent.__init__(ev, ...)``, ``BaseModel.__init__(ev, ...)`` and
+    ``BaseModel.__setstate__(ev, state)``, ``validate_assignment`` (``model_config`` flipped), ``gc`` (finding and
+    rewriting the objects), the unbound ``dict.`` / ``list.`` methods on a payload container (``dict.__setitem__``,
+    ``dict.update``, ``list.sort``, ``list.append``, ... not only ``__setitem__``), ``type.__setattr__``,
+    descriptor ``__set__`` calls, ctypes, ``model_construct``.
+    CONSEQUENCE: the sealed-ledger hands every caller the SAME twin of an event (built once, kept beside the
+    parse cache), so a bypass on a handed-out event changes what every LATER caller of ``events()`` /
+    ``snapshot()`` / the API receives, in this process, until the file changes; that includes ``verify_anchors``,
+    ``verify_witness`` and the CLI F2 check, which all read ``snapshot()``, so a bypass can make them report ok. ``verify()`` is unaffected (it
+    reads the private plain events, never the twin). No in-repo caller does this."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    def __init__(self, /, **data: Any) -> None:
+        # Constructing is fine, RE-initialising a live (possibly shared) event is not: ``ev.__init__(**forged)``
+        # rewrites it in place through the ordinary Python API. ``of`` fills the slots directly, never via here.
+        if hasattr(self, "__pydantic_fields_set__"):
+            raise TypeError("a ReadOnlyLedgerEvent cannot be re-initialised: build a new one")
+        super().__init__(**data)
+
+    def __setstate__(self, state: Any) -> None:
+        raise TypeError("a ReadOnlyLedgerEvent cannot be rewritten through __setstate__")
+
+    def __reduce__(self):
+        # pickle / copy.copy-by-reduce rebuild a DETACHED, plain, mutable LedgerEvent, never this shared one.
+        return (_plain_event, (self.model_dump(),))
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        # pydantic sends ``_name`` assignments (``__dict__`` too) past ``frozen`` to ``object.__setattr__``.
+        if name.startswith("_"):
+            raise TypeError(f"a ReadOnlyLedgerEvent is read-only: cannot set {name!r}")
+        super().__setattr__(name, value)
+
+    @property  # type: ignore[misc]
+    def __class__(self):
+        return type(self)
+
+    @__class__.setter
+    def __class__(self, value):
+        raise TypeError("the class of a ReadOnlyLedgerEvent cannot be reassigned")
+
+    @classmethod
+    def of(cls, event: LedgerEvent) -> "ReadOnlyLedgerEvent":
+        """A read-only copy of ``event`` (a LedgerEvent that was already validated; nothing is re-validated,
+        and ``event``, payload included, is not aliased or touched)."""
+        # What ``model_construct`` does, minus its per-field defaulting loop (about 2x cheaper per event; it is
+        # on the first hand-out of every cached event). Pinned against ``model_construct`` by a test, because it
+        # sets pydantic's own four instance slots.
+        fields = dict(event.__dict__)
+        fields["payload"] = _deep_freeze(fields["payload"])
+        new = cls.__new__(cls)
+        setter = object.__setattr__
+        setter(new, "__dict__", fields)
+        setter(new, "__pydantic_fields_set__", set(event.__pydantic_fields_set__))
+        setter(new, "__pydantic_extra__", None)
+        setter(new, "__pydantic_private__", None)
+        return new
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, LedgerEvent):
+            return self.__dict__ == other.__dict__
+        return NotImplemented
+
+    __hash__ = None  # type: ignore[assignment]
+
+
 def _canonical_bytes(record: dict[str, Any]) -> bytes:
     """Deterministic serialization: sorted keys, no whitespace, UTF-8."""
     return json.dumps(
         record, sort_keys=True, separators=(",", ":"), ensure_ascii=False
     ).encode("utf-8")
+
+
+def reject_non_finite(value: Any) -> None:
+    """Raise ``ValueError`` if a NaN or infinite float sits anywhere in ``value``.
+
+    A payload with one cannot be re-verified: the seal hashes a ``NaN`` token but
+    the served JSON carries ``null``, so the chain reads as tampered. Iterative,
+    so a deep payload cannot hit the recursion limit. The message never carries
+    the value or a key (both are caller data).
+    """
+    stack = [value]
+    while stack:
+        v = stack.pop()
+        if isinstance(v, float):
+            if not math.isfinite(v):
+                raise ValueError("payload carries a non-finite number")
+        elif isinstance(v, dict):
+            stack.extend(v.values())
+        elif isinstance(v, (list, tuple)):
+            stack.extend(v)
 
 
 def compute_event_hash(event: LedgerEvent | dict[str, Any]) -> str:
@@ -149,6 +317,7 @@ def make_event(
     event_id: str | None = None,
 ) -> LedgerEvent:
     """Build a sealed event linked to ``prev_hash``."""
+    reject_non_finite(payload)
     partial = {
         "event_id": event_id or str(uuid.uuid4()),
         "ts": ts or datetime.now(timezone.utc).isoformat(),

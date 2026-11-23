@@ -107,11 +107,14 @@ def test_a_malformed_ledger_url_is_exit_2_and_not_echoed(monkeypatch, url):
     assert "hunter2" not in r.output and url not in r.output
 
 
-def test_unreachable_url_does_not_print_userinfo(monkeypatch):
+def test_a_url_with_userinfo_is_refused_before_any_request_and_never_printed(monkeypatch):
+    # PR 988 (S11-23, rebuild #1154): a FIELD_LEDGER_URL carrying user:pass is refused up front ("nothing was sent"),
+    # where it used to reach the request and fail as unreachable; the userinfo is still never printed
     monkeypatch.setenv("FIELD_LEDGER_URL", "http://alice:hunter2@127.0.0.1:1")
     r = runner.invoke(cli_app, ["rotate", "--operator", "o", "--reason", "r"])
     assert r.exit_code == 2, r.output
-    assert "unreachable" in r.stderr and "hunter2" not in r.output and "alice" not in r.output
+    assert "must not carry credentials" in r.stderr and "nothing was sent" in r.stderr
+    assert "hunter2" not in r.output and "alice" not in r.output
 
 
 def test_a_nul_byte_in_the_anchors_path_is_refused_before_anything_is_rotated(seg, tmp_path):

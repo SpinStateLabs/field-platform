@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import unicodedata
 from datetime import datetime, timezone
 from typing import Any
 
@@ -9,6 +10,31 @@ from pydantic import BaseModel, ConfigDict
 
 from compliance_crosswalk.mapping import CONTROLS, FRAMEWORKS, Citation, Control
 from field_core.validation import validate_manifest_data
+
+
+#: Unicode categories that cannot appear in text printed into the report or the evidence pack: control (Cc), invisible
+#: format (Cf: marks, zero-width characters, bidirectional overrides), line or paragraph separator (Zl, Zp) and, from
+#: PR 563 / Q-47 F-Q47-3, an unpaired surrogate (Cs: it cannot be encoded as UTF-8, so a response or a pack file
+#: carrying it was a server error). The signer is REFUSED for holding one (evidence_pack._checked_signer); free text
+#: from a caller or a service answer is instead made one line (S5-17).
+REFUSED_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp", "Cs"})
+ONE_LINE_MAX = 200
+
+
+def one_line(value: Any, limit: int = ONE_LINE_MAX) -> str:
+    """``value`` as ONE line of table-safe text: every control, format and line-break character and every ``|`` (a
+    table cell edge) becomes a space, runs of whitespace collapse, and the result is capped at ``limit`` characters
+    (ending in an ellipsis when it was cut). So it cannot start a new line, heading, table row, ``Signer:`` line or
+    signature block: a forged ``\n\n## Signature\n\nSigner: Ann`` stays inside the one line it was printed on.
+    It does NOT escape inline Markdown (``**bold**``, links, ``![image](...)``) or raw inline HTML: the text stays on
+    one line of the Markdown, but a renderer that passes raw HTML still reads it as markup, and an unclosed raw-text
+    tag (``<script>``, ``<style>``, ``<textarea>``, ``<title>``, ``<xmp>``, ``<plaintext>``) hides EVERYTHING after it
+    in the rendered page, the signature block included."""
+    text = "".join(
+        " " if (c == "|" or unicodedata.category(c) in REFUSED_CATEGORIES) else c for c in str(value)
+    )
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
 class EvidenceSources(BaseModel):
@@ -78,6 +104,16 @@ def _has_placeholder(value: Any) -> bool:
 # declaration-only and must never read as estate-evidenced.
 GATE_CONTROL_IDS = ("FC-E-04", "FC-E-05", "FC-E-06")
 GATE_NOTE = "declared, enforced locally by the Claude Code gate, no estate evidence"
+#: FC-L-01 when evidence was collected but the ledger gave no /verify answer (503 busy, unreachable): not checked,
+#: neither verified nor failed. The evidence pack keys its "not-checked" gap on this exact detail.
+LEDGER_VERIFY_NOT_CHECKED = "ledger verify unavailable (busy or unreachable) - chain not verified; retry"
+#: gap kind -> its label in a Markdown "Gaps" list (the JSON carries the kind itself)
+GAP_LABELS = {"not-declared": "not declared", "not-evidenced": "not evidenced", "not-checked": "not checked"}
+#: the FC-L-01 "not-checked" gap detail: fixed text, so Markdown and JSON say the same
+LEDGER_NOT_CHECKED_GAP = (
+    "the ledger did not answer /verify (busy or unreachable), so the chain was not verified on this run; "
+    "this is not a pass: re-run the pack"
+)
 GATE_NOTE_UNDECLARED = ("not declared in the manifest, so the Claude Code gate enforces nothing for this key "
                         "(a manifest that is not governed by the gate legitimately omits it); no estate evidence")
 
@@ -141,14 +177,30 @@ def _evidenced(
         ok = sources.registry_record is not None
         return ok, "registry record found" if ok else "agent not in registry"
     if control.control_id == "FC-I-01":
-        ok = bool(sources.registry_record and sources.registry_record.get("owner"))
+        owner = (sources.registry_record or {}).get("owner")
+        ok = isinstance(owner, str) and bool(owner.strip())  # blank is no owner; a non-str is none
         return ok, "human owner on registry record" if ok else "no owner on record"
     if control.control_id == "FC-L-01":
-        ok = bool(sources.ledger_verify and sources.ledger_verify.get("ok"))
+        if sources.ledger_verify is None:
+            # No /verify answer (503 busy, refused, unreachable): the chain was not checked, which is
+            # not a failed check, so unevidenced (None), not False. It is still never silent: the
+            # evidence pack records a "not-checked" gap for it (don.reviewer C1 on the rebuild of PR
+            # 1093: the 503 can be provoked, so "no gaps" must never be the headline then).
+            return None, LEDGER_VERIFY_NOT_CHECKED
+        verify = sources.ledger_verify
+        if "ok" not in verify and "http_status" in verify:
+            # The ledger answered (not 503) but gave no usable verdict: not verified, a gap.
+            return False, (
+                f"ledger answered HTTP {verify['http_status']} to /verify - "
+                "chain NOT verified; investigate"
+            )
+        if verify.get("tls_failed") is True and "ok" not in verify:
+            return False, "ledger TLS failed: chain NOT verified; investigate"
+        ok = verify.get("ok") is True  # strict: "false"/1/missing never read as verified
         return ok, (
             "ledger chain verified"
             if ok
-            else f"ledger verify failed: {(sources.ledger_verify or {}).get('reason')}"
+            else f"ledger verify failed: {verify.get('reason') or 'no ok:true in /verify answer'}"
         )
     if control.control_id == "FC-E-01":
         n = events.get("kill.drill.complete", 0) + events.get("kill.agent", 0)
@@ -161,7 +213,7 @@ def _evidenced(
         return n > 0, f"{n} delegation token(s) for agent"
     if control.control_id == "FC-D-02":
         n = events.get("delegation.revoke", 0)
-        revoked = sum(1 for t in (sources.tokens or []) if t.get("revoked"))
+        revoked = sum(1 for t in (sources.tokens or []) if t.get("revoked") is True)
         ok = n > 0 or revoked > 0
         return ok, f"{n} revoke event(s), {revoked} revoked token(s)"
     if control.control_id == "FC-E-03":
@@ -195,15 +247,17 @@ def evaluate(
                 manifest_path=control.manifest_path,
                 statement=control.statement,
                 declared=declared,
-                declared_detail=declared_detail,
+                # S5-17: both details can carry caller text (a manifest value, a ledger-verify reason); one line each,
+                # in the JSON as well as the Markdown, so the two never disagree
+                declared_detail=one_line(declared_detail),
                 evidenced=evidenced,
-                evidence_detail=evidence_detail,
+                evidence_detail=one_line(evidence_detail),
                 citations=control.citations,
             )
         )
     evidence_collected = any(c.evidenced is not None for c in coverages)
     return CoverageReport(
-        agent_id=agent_id,
+        agent_id=None if agent_id is None else one_line(agent_id),
         generated_at=datetime.now(timezone.utc).isoformat(),
         manifest_valid=validation.ok,
         frameworks=FRAMEWORKS,
@@ -212,6 +266,29 @@ def evaluate(
         evidenced_count=sum(1 for c in coverages if c.evidenced),
         evidence_collected=evidence_collected,
     )
+
+
+def _not_checked(control: ControlCoverage) -> bool:
+    """FC-L-01 with evidence collected but no /verify answer: not checked (neither verified nor failed)."""
+    return (control.evidenced is None and control.control_id == "FC-L-01"
+            and control.evidence_detail == LEDGER_VERIFY_NOT_CHECKED)
+
+
+def coverage_gaps(report: CoverageReport) -> list[dict[str, Any]]:
+    """Every gap a coverage report shows, in control order: not declared, not evidenced (a collected check failed),
+    not checked (FC-L-01: the ledger gave no /verify answer). The evidence pack and ``crosswalk run`` both print this
+    list (B7), so the two can never disagree. An offline run's uncollected evidence is an unknown, not a gap."""
+    gaps: list[dict[str, Any]] = []
+    for control in report.controls:
+        if not control.declared:
+            gaps.append({"control_id": control.control_id, "kind": "not-declared", "detail": control.declared_detail})
+        if control.evidenced is False:
+            gaps.append({"control_id": control.control_id, "kind": "not-evidenced", "detail": control.evidence_detail})
+        elif _not_checked(control):
+            # don.reviewer C1 (rebuild of PR 1093): not checked is not failed, but it is never silent; a provoked
+            # 503 on /verify must not let a report say "No gaps recorded" as it would for a verified chain
+            gaps.append({"control_id": control.control_id, "kind": "not-checked", "detail": LEDGER_NOT_CHECKED_GAP})
+    return gaps
 
 
 def render_markdown(report: CoverageReport) -> str:
@@ -230,11 +307,28 @@ def render_markdown(report: CoverageReport) -> str:
     add("| Control | L | Statement | Declared | Evidenced | Evidence |")
     add("|---|---|---|---|---|---|")
     for c in report.controls:
-        evidenced = "—" if c.evidenced is None else ("✓" if c.evidenced else "✗")
+        # B7: an unanswered /verify is "✗" (not verified), never the "—" of a run that collected nothing
+        evidenced = ("✗" if _not_checked(c) else "—") if c.evidenced is None else ("✓" if c.evidenced else "✗")
         add(
             f"| {c.control_id} | {c.letter} | {c.statement} | "
             f"{'✓' if c.declared else '✗'} | {evidenced} | {c.evidence_detail} |"
         )
+    add("")
+    add("## Gaps")
+    add("")
+    gaps = coverage_gaps(report)
+    if gaps:
+        add("Each gap stands until remediated and re-checked:")
+        add("")
+        for gap in gaps:
+            add(f"- {gap['control_id']} — {GAP_LABELS[gap['kind']]}: {gap['detail']}")
+    elif report.evidence_collected:
+        add("No gaps recorded on this run: every control is declared, and no collected evidence check failed.")
+    else:
+        add("No declaration gaps.")
+    if not report.evidence_collected:
+        add("")
+        add("Evidence was not collected (offline run): every \"—\" above is an unknown, not a pass.")
     add("")
     add("## Framework mapping (source-grounded citations)")
     add("")

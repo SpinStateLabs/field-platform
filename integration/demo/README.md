@@ -11,7 +11,16 @@ enforcement stack. Every number and event below is synthetic demo data.
 ```
 
 Verified path: boots all 7 services as local processes (~21 s total on the
-build machine). The compose path (`docker-compose.yml` + `Dockerfile`) is
+build machine) behind **one** path-routed listener, the local counterpart of the
+compose Caddy proxy: `http://127.0.0.1:$PORT/registry`, `/ledger`, `/delegation`,
+`/sentinel`, `/killswitch`, `/governor`, `/replay` (the prefix is stripped before
+the service sees the request, as Caddy's `handle_path` does). `PORT` is optional:
+by default the demo takes a free port, so a listener already on 8001-8007 no longer
+breaks it; set `PORT=18081 ./run_demo.sh` to choose one (it exits non-zero if that
+port is taken or a service is not healthy behind it). The services themselves listen
+on free loopback ports that only the proxy uses (`path_proxy.py`, standard library,
+127.0.0.1 only; it also refuses the internal key-rotation routes when a request carries
+`X-Forwarded-For`, like the Caddyfile). The compose path (`docker-compose.yml` + `Dockerfile`) is
 verified on GB10 (aarch64) and in CI (x86_64) and publishes a SINGLE host
 port: a Caddy proxy on :8080 path-routes to every service
 (`/registry`, `/ledger`, `/delegation`, `/sentinel`, `/killswitch`,
@@ -30,7 +39,7 @@ root `/`). Per-service host ports are no longer published — see
 | 4 | Draft 5 arrives with the meter at 96% of the $500 cap → **ESCALATE** `E.spend_threshold`, queued for a human | E |
 | 5 | Agent tries `transfer funds` → **BLOCK** `D.scope`; the function body never ran | D + E |
 | 6 | Kill drill: killed, verified, restored — ~53 ms measured | E |
-| 7 | incident-replay writes the RACI-ready post-mortem (`out/post-mortem.md`) | L |
+| 7 | incident-replay writes the RACI-structured post-mortem (`out/post-mortem.md`) | L |
 | 8 | Board pack — attestation-reporter renders JSON+HTML+PDF | all |
 
 Ledger integrity is verified at the end: every event above is on the intact
@@ -39,6 +48,7 @@ hash chain.
 ## Files
 
 - `run_demo.sh` — the scenario driver (verified)
+- `path_proxy.py` — the one-port path router `run_demo.sh` starts (pinned by `tools/tests/test_demo_path_proxy.py`)
 - `agent/invoicing_agent.py` — the governed agent (`Governor.check` on every
   tool call; spend metered per draft)
 - `agent/timesheet.csv` — synthetic input
