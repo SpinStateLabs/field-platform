@@ -11,7 +11,7 @@ import json
 import pytest
 
 from compliance_crosswalk import regwatch
-from compliance_crosswalk.mapping import SRC_EU_OFFICIAL, SRC_NIST, SRC_OSFI
+from compliance_crosswalk.mapping import SRC_EU_ART12, SRC_EU_ART14, SRC_EU_OFFICIAL, SRC_NIST, SRC_OSFI
 from compliance_crosswalk.staleness import StaleStore
 from test_regwatch import FakeFetcher, by_framework, page, store  # noqa: F401 (fixture)
 
@@ -92,3 +92,62 @@ def test_check_file_refuses_a_damaged_record_and_writes_nothing(store, tmp_path)
         regwatch.check_file("osfi-e23", page, "tester", store=store)
     assert DAMAGED_TEXT in str(exc.value)
     assert json.loads(store.path.read_text(encoding="utf-8"))["sources"] == before
+
+
+# --- reviewer round (roley.reviewer, don.reviewer): the invariant is that a standing stale flag is never cleared or hidden ----
+
+
+def _write_record(store, url, record):
+    data = json.loads(store.path.read_text(encoding="utf-8"))
+    data["sources"][url] = record
+    store.path.write_text(json.dumps(data), encoding="utf-8")
+
+
+def test_C1_a_standing_flag_survives_a_damaged_run_and_flag_active_stays_true(store):  # noqa: F811
+    regwatch.run_check(store, FakeFetcher())
+    changed = FakeFetcher({SRC_NIST: page("NIST text that is entirely different now.")})
+    assert regwatch.run_check(store, changed)["exit_code"] == regwatch.EXIT_CHANGED
+    flag_before = [f for f in store.active() if f["framework"] == "nist-ai-rmf"]
+    assert flag_before, "the change run must leave a standing flag"
+    _write_record(store, SRC_NIST, 5)
+    report = regwatch.run_check(store, changed)
+    row = by_framework(report)["nist-ai-rmf"]
+    assert row["status"] == "store-damaged" and row["flag_active"] is True
+    assert [f for f in store.active() if f["framework"] == "nist-ai-rmf"] == flag_before   # not cleared, not rewritten
+    assert report["exit_code"] == regwatch.EXIT_UNREACHABLE
+
+
+def test_C1_a_flag_on_another_framework_is_untouched_by_a_damaged_run(store):  # noqa: F811
+    regwatch.run_check(store, FakeFetcher())
+    regwatch.run_check(store, FakeFetcher({SRC_NIST: page("NIST text that is entirely different now.")}))
+    flag_before = [f for f in store.active() if f["framework"] == "nist-ai-rmf"]
+    _write_record(store, SRC_OSFI, 5)
+    report = regwatch.run_check(store, FakeFetcher({SRC_NIST: page("NIST text that is entirely different now.")}))
+    rows = by_framework(report)
+    assert rows["osfi-e23"]["status"] == "store-damaged" and rows["nist-ai-rmf"]["flag_active"] is True
+    assert [f for f in store.active() if f["framework"] == "nist-ai-rmf"] == flag_before
+
+
+def test_C2_a_damaged_mirror_record_and_a_change_on_the_other_mirror_in_the_same_framework(store):  # noqa: F811
+    official_down = {SRC_EU_OFFICIAL: ConnectionError("down")}
+    regwatch.run_check(store, FakeFetcher(official_down))                 # baseline the mirror tier
+    before_art12 = json.loads(store.path.read_text(encoding="utf-8"))["sources"][SRC_EU_ART12]
+    _write_record(store, SRC_EU_ART12, 5)
+    report = regwatch.run_check(store, FakeFetcher({**official_down, SRC_EU_ART14: page("Article 14 text is entirely different now.")}))
+    row = by_framework(report)["eu-ai-act"]
+    by_url = {s["url"]: s["status"] for s in row["sources"]}
+    assert by_url[SRC_EU_ART12] == "store-damaged" and by_url[SRC_EU_ART14] == "changed"
+    assert row["status"] == "changed" and report["exit_code"] == regwatch.EXIT_CHANGED
+    assert json.loads(store.path.read_text(encoding="utf-8"))["sources"][SRC_EU_ART12] == 5   # left as stored
+    assert before_art12 != 5
+
+
+def test_C3_a_non_dict_record_is_never_echoed_by_run_check_or_check_file(store, tmp_path):  # noqa: F811
+    regwatch.run_check(store, FakeFetcher())
+    _write_record(store, SRC_OSFI, "SECRET-STORED-VALUE")
+    assert "SECRET-STORED-VALUE" not in json.dumps(regwatch.run_check(store, FakeFetcher()))
+    src = tmp_path / "osfi.html"
+    src.write_bytes(FakeFetcher().default)
+    with pytest.raises(regwatch.ManualFileRefused) as exc:
+        regwatch.check_file("osfi-e23", src, "tester", store=store)
+    assert "SECRET-STORED-VALUE" not in str(exc.value)
