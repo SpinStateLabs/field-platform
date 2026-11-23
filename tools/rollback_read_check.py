@@ -378,6 +378,10 @@ def main() -> int:
     parser.add_argument("--types", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.role:
+        # Python puts this script's directory first on sys.path. Run from a checkout, that is the checkout's tools/, whose
+        # estate_probe would shadow the extracted release's. Dropping it here works on every Python version (-P needs 3.11).
+        here = Path(__file__).resolve().parent
+        sys.path[:] = [p for p in sys.path if not p or Path(p).resolve() != here]
         role = role_write if args.role == "write" else role_read
         return role(args.tree, Path(args.work), json.loads(args.types))
     try:
