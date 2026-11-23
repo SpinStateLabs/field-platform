@@ -119,3 +119,14 @@ def test_the_422_does_not_tell_an_existing_file_from_a_missing_one(registry, tmp
     a, b = _post(client, there), _post(client, absent)
     assert a.status_code == b.status_code == 422
     assert a.content == b.content and a.json()["detail"]["reason"] == "missing"
+
+
+def test_a_patch_that_leaves_the_manifest_dir_gets_the_same_body_and_no_echo(registry):
+    """The PATCH containment path (C-1144) builds the same refusal: a 422, not a 500, and the ref is not reflected."""
+    client, _ = registry
+    assert client.post("/agents", json=BODY).status_code == 201
+    key = "a1b2c3d4" * 8
+    r = client.patch(f"/agents/{BODY['agent_id']}", json={"manifest_ref": f"../{key}.yaml"})
+    assert r.status_code == 422, r.text
+    assert set(r.json()["detail"]) == {"error", "reason", "hint"} and r.json()["detail"]["reason"] == "missing"
+    assert key not in r.text and "a1b2c3d4" not in r.text

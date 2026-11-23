@@ -351,7 +351,7 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
                 and not _ref_is_inside_manifest_dir(patch.manifest_ref)):
             # Don's ruling on PR 371 (C-1144, Q-59 F-Q59-3): the containment runs on EVERY PATCH of a manifest_ref, the
             # operator layer OFF included (only the containment: the resolvability check runs only when an operator mode is armed, LOG-ONLY and ENFORCE).
-            raise HTTPException(422, _unresolvable(patch.manifest_ref, "missing"))
+            raise HTTPException(422, _unresolvable("missing"))
         # ``before`` must be the row THIS write changed, read in the same
         # atomic step: a separate get() first let a concurrent PATCH's kill
         # land in between, so an edit of another field ledgered a second
