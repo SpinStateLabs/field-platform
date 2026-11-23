@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from agent_registry.discover import ACCOUNT_PATTERNS, discover, scan_service_accounts
+from agent_registry.discover import ACCOUNT_PATTERNS, discover, looks_like_automation, scan_service_accounts
 from agent_registry.models import AgentRecord, AgentStatus
 
 HEADER = "account,type,owner,notes\n"
@@ -17,24 +17,24 @@ def _rec(agent_id="old-bot", name="Old Bot", owner="Pat Owner", status=AgentStat
 
 @pytest.mark.parametrize("name", ["kai_nakamura", "rai-chu", "jsmith@thai.example", "gmail.", "mail-relay"])
 def test_human_names_are_not_automation(name):
-    assert not ACCOUNT_PATTERNS.search(name)
+    assert not looks_like_automation(name)
 
 
 @pytest.mark.parametrize("name", ["ai-pricing-experiment", "ai_summarizer", "team.ai-helper", "svc-x@ai.example"])
 def test_ai_tokens_are_still_flagged(name):
-    assert ACCOUNT_PATTERNS.search(name)
+    assert looks_like_automation(name)
 
 
 @pytest.mark.parametrize("name", ["openai-key", "openai_worker", "bob@openai.com", "mlai_worker", "azure-openai-svc",
                                   "anthropic-prod", "x@ai.example", "x.ai.y", "genai.runner", "xai-key"])
 def test_vendor_named_ai_accounts_are_still_flagged(name):
     """don.reviewer B1 on #1024: the ``ai`` anchor must not lose an AI vendor account typed as a user or left blank."""
-    assert ACCOUNT_PATTERNS.search(name)
+    assert looks_like_automation(name)
 
 
 @pytest.mark.parametrize("name", ["claude.martin", "gemini_ross", "mistral.jean", "shanghai.li", "mikhail-p"])
 def test_a_person_whose_name_is_or_holds_a_vendor_word_is_not_flagged(name):
-    assert not ACCOUNT_PATTERNS.search(name)
+    assert not looks_like_automation(name)
 
 
 def test_a_vendor_account_with_a_human_type_is_a_candidate():
@@ -86,48 +86,122 @@ def test_a_killed_agent_is_still_registered():
     assert discover([_rec(status=AgentStatus.KILLED)], accounts_csv=csv_text).candidates == []
 
 
-# --- fail-open fix (PR 1024 advisory O1; controller ruling 2026-11-23) -----------------------------------------------------
-# The scanner must not flag FEWER names than main. Every name below is one main's unanchored ``ai[-_.]`` flagged (plus the
-# Unicode forms main's case-insensitive search caught); each must still be flagged, except the names in LEFT_UNFLAGGED,
-# which are left out on purpose and listed with the reason. Source: 50 hand-picked names probed by the 1024 advisory.
+# --- fail-open fix, inverted design (PR 1024 advisory O1; controller rulings 2026-11-23) -----------------------------------
+# ACCOUNT_PATTERNS is MAIN's rule. looks_like_automation = that rule on the folded name + whole-token AI vendor names, MINUS a
+# narrow person-shaped exclusion. So nothing main flags can be lost by a forgotten format; the DIFFERENTIAL test below proves
+# it over a corpus: every name main flags is flagged, except the listed person-shaped names.
+
+import re  # noqa: E402
 
 from agent_registry.discover import looks_like_automation  # noqa: E402
 
-FLAGGED_ON_MAIN = [
+B = chr(92)            # a backslash, spelt this way so no tool re-escapes it
+
+#: main's rule, copied literally from origin/main (aa7f84c8) discover.py: the reference of the differential test.
+MAIN_RULE = re.compile(r"(^svc[-_.]|^bot[-_.]|[-_.]bot$|agent|automation|ai[-_.])", re.I)
+
+#: AI-ish service names (the 1024 advisory's probe, wave2's realm/ARN forms, the Unicode forms).
+SERVICE_NAMES = [
     "my-ai-bot", "AI_agent", "agentai", "openai-key", "bob@openai.com", "ai-runner", "svc-llm", "AI-Ops", "x.ai.y",
     "genai.runner", "vertexai-sa", "azureai-svc", "svc@vertexai.example", "h2oai-key", "c3ai-svc", "stabilityai-svc",
     "perplexityai-key", "togetherai-key", "fireworksai_key", "deepai-key", "jasperai-key", "scaleai-x", "metaai_bot",
     "chatai-runner", "myai-helper", "teamai.sync", "llamaai-x", "copilotai-svc", "OPENAI_API", "mistralai-svc",
     "cohereai_x", "langchain-ai-svc", "privateai.worker", "inworldai-key", "ai.example", "my_ai_svc", "bedrock-ai-runner",
-    "rag2ai-job", "llm-ai_x",
-    "a\u0131-x",              # dotless i: the case-insensitive search folds it to i
-    "A\u0130-x",              # capital I with dot above
-    "open\u200bai-key",       # a zero-width space inside "openai": the format character is stripped before matching
+    "rag2ai-job", "llm-ai_x", "prod1ai-x", "x@ai.example", "ai-pricing-experiment", "ai_summarizer",
+    "team.ai-helper", "svc-x@ai.example", "openai_worker", "mlai_worker", "azure-openai-svc", "anthropic-prod", "xai-key",
+    "kaia.ai.fan", "ai.chen", "xai.li",
+    # a vendor name INSIDE a fused token, no service word after it: not person-shaped
+    "bedrockopenai-x", "fooperplexityai.q", "barmistralai_y",
+    # realm / path / ARN forms (wave2, re-measured against main)
+    "CORP" + B + "ai-runner", "arn:aws:iam::123456789012:role/ai-runner", "serviceAccount:ai-runner",
+    "system:serviceaccount:prod:ai-runner", "CORP" + B + "kai_nakamura", "a/b/kai-x",
+    # a non-ASCII letter before ai
+    "\u00e9ai-svc", "\u00e9ai_x",
+    # Unicode forms main's case-insensitive search caught
+    "a\u0131-x", "A\u0130-x",
+    # service words next to a person-looking token: flagged on purpose (a review queue prefers a false positive)
+    "mai.job", "kai.sync", "lai_runner", "tsai.worker", "desai-key", "bhai.svc",
 ]
 
-#: Flagged on main, deliberately NOT flagged now. A fused ``ai`` followed only by the single letter x is
-#: indistinguishable from a person's name (lai-x, kai-x), and ``prod1ai`` is not a vendor word.
-LEFT_UNFLAGGED = {"prod1ai-x": "fused 'ai' + a one-letter suffix: the same shape as the person lai-x"}
+#: Names that look like people and carry nothing main's rule needs: the ONLY names main flags that the head may not.
+PEOPLE_EXCLUDED = {
+    "kai_nakamura": "ai fused after k, then a surname",
+    "rai-chu": "ai fused after r, then a surname",
+    "jsmith@thai.example": "thai. in a mail domain, no service word",
+    "shanghai.li": "shanghai. then a surname",
+    "mai.tran": "mai. then a surname", "lai-x": "lai- then one letter", "tsai.wu": "tsai. then a surname",
+    "tsai.ing-wen": "tsai. then a name", "desai-p": "desai- then an initial", "desai.r": "desai. then an initial",
+    "bhai.k": "bhai. then an initial", "kai.smith": "kai. then a surname", "kai_s": "kai_ then an initial",
+    "lai.wong": "lai. then a surname", "mai-t": "mai- then an initial", "mai.nguyen": "mai. then a surname",
+    "tsai_c": "tsai_ then an initial", "desai-k": "desai- then an initial", "bhai_m": "bhai_ then an initial",
+    "anjali.desai-nair": "desai- then a surname part", "li.tsai-chen": "tsai- then a surname part",
+    "thai-food-co": "thai- then words", "mai.t": "mai. then an initial", "kai.l": "kai. then an initial",
+    "p.desai-jones": "desai- then a surname",
+    "kai-nguyen.mai-tran": "two person parts", "raj.bhai-patel": "bhai- then a surname",
+}
 
-PEOPLE_NOT_FLAGGED = ["kai_nakamura", "rai-chu", "jsmith@thai.example", "shanghai.li", "mai.tran", "lai-x", "claude.martin",
-                      "gemini_ross", "mistral.jean", "mikhail-p", "aimee", "naim_ali", "maid", "paid", "email", "chair",
-                      "said", "gmail.", "mail-relay"]
+#: Ordinary logins main does not flag either (no ai before a separator): must stay unflagged.
+PEOPLE_NEVER_FLAGGED = [
+    "kai", "lai", "mai", "tsai", "desai", "bhai", "kaitlyn", "aimee", "aisha", "aidan", "naim_ali", "mikhail-p", "maid",
+    "paid", "email", "chair", "said", "gmail.", "mail-relay", "claude.martin", "gemini_ross", "mistral.jean",
+    "deepaiyer", "sandeepaiyer", "jasperaiken", "philanthropic.lead", "taiwan.li", "hair.stylist", "hawaii.office",
+]
+
+#: Flagged by the head and not by main: whole-token AI vendor names (huggingface_token, Anthropic_Admin ...) and the
+#: names the folding reveals. Listed so no new flag appears silently.
+GAINS = ["huggingface_token", "Anthropic_Admin", "my-huggingface", "OPENAI", "openai", "vertexai", "anthropic-prod",
+         "\uff41\uff49-bot2", "a\u200bi-runner", "\u200bopenai"]
+
+CORPUS = SERVICE_NAMES + list(PEOPLE_EXCLUDED) + PEOPLE_NEVER_FLAGGED + GAINS
 
 
-@pytest.mark.parametrize("name", [n for n in FLAGGED_ON_MAIN])
-def test_every_name_main_flagged_is_still_flagged(name):
-    assert looks_like_automation(name), name
+def test_the_corpus_is_large():
+    assert len(CORPUS) >= 100, len(CORPUS)
 
 
-@pytest.mark.parametrize("name,why", sorted(LEFT_UNFLAGGED.items()))
-def test_the_deliberately_unflagged_names_are_exactly_the_listed_ones(name, why):
-    assert why and not looks_like_automation(name)
-    assert name not in FLAGGED_ON_MAIN
+def test_the_listed_people_are_exactly_the_names_main_flags_that_the_head_does_not():
+    """The DIFFERENTIAL: head_flagged is a superset of main_flagged minus PEOPLE_EXCLUDED, and the exclusions are listed,
+    not implied."""
+    lost = sorted({n for n in CORPUS if MAIN_RULE.search(n) and not looks_like_automation(n)})
+    assert lost == sorted(PEOPLE_EXCLUDED), set(lost) ^ set(PEOPLE_EXCLUDED)
 
 
-@pytest.mark.parametrize("name", PEOPLE_NOT_FLAGGED)
-def test_people_stay_unflagged(name):
+@pytest.mark.parametrize("name", sorted(set(SERVICE_NAMES)))
+def test_every_service_name_is_flagged(name):
+    assert looks_like_automation(name), name.encode("unicode_escape")
+
+
+@pytest.mark.parametrize("name", sorted(PEOPLE_EXCLUDED))
+def test_the_listed_people_are_not_flagged(name):
+    assert PEOPLE_EXCLUDED[name] and not looks_like_automation(name), name
+
+
+@pytest.mark.parametrize("name", PEOPLE_NEVER_FLAGGED)
+def test_ordinary_logins_are_not_flagged(name):
     assert not looks_like_automation(name), name
+
+
+@pytest.mark.parametrize("name", GAINS)
+def test_the_listed_gains_are_flagged(name):
+    assert looks_like_automation(name), name.encode("unicode_escape")
+
+
+def test_no_name_outside_the_listed_gains_is_flagged_by_the_head_and_not_by_main():
+    new = sorted({n for n in CORPUS if looks_like_automation(n) and not MAIN_RULE.search(n)})
+    assert new == sorted(set(GAINS)), set(new) ^ set(GAINS)
+
+
+@pytest.mark.parametrize("name", ["CORP" + B + "ai-runner", "arn:aws:iam::123456789012:role/ai-runner", "serviceAccount:ai-runner",
+                                  "system:serviceaccount:prod:ai-runner", "\u00e9ai-svc", "prod1ai-x", "c3ai-svc", "ai.example"])
+def test_a_path_realm_digit_or_non_ascii_prefix_never_hides_an_ai_account(name):
+    """The shapes the third advisory re-measured: main flags them and so does the head."""
+    assert MAIN_RULE.search(name) and looks_like_automation(name)
+
+
+@pytest.mark.parametrize("name", ["mai.job", "kai.sync", "lai_runner", "tsai.worker"])
+def test_a_person_looking_token_next_to_a_service_word_stays_flagged(name):
+    """README: mai.job and kai.sync stay flagged, a review queue prefers a false positive."""
+    assert looks_like_automation(name)
 
 
 @pytest.mark.parametrize("name", ["\uff41\uff49-bot2", "\uff4f\uff50\uff45\uff4e\uff41\uff49-key", "a\u200bi-runner",
@@ -177,3 +251,13 @@ def test_the_scanner_itself_surfaces_the_folded_and_fused_names(account):
 def test_the_scanner_does_not_surface_people():
     csv_text = HEADER + "".join(f"{n},human,o@x.test,\n" for n in ["kai_nakamura", "lai-x", "claude.martin", "aimee"])
     assert scan_service_accounts(csv_text, [])[0] == []
+
+
+from agent_registry.discover import _AI_VENDOR_TOKENS  # noqa: E402
+
+
+@pytest.mark.parametrize("vendor", sorted(_AI_VENDOR_TOKENS))
+@pytest.mark.parametrize("form", ["{v}", "{v}-x", "{v}_q", "svc-{v}", "{v}.q", "{V}-Q"])
+def test_every_listed_vendor_token_is_flagged_in_every_position(vendor, form):
+    """All 21 vendor tokens, not a sample: bare, with a separator and one letter, prefixed, upper-case."""
+    assert looks_like_automation(form.format(v=vendor, V=vendor.upper())), form.format(v=vendor, V=vendor.upper())

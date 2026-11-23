@@ -59,31 +59,65 @@ AI_NODE_MARKERS = (
 )
 
 # Service-account naming patterns that indicate automation identity.
-# ``ai`` counts as a token only at the start of the name or after a separator: kai_nakamura, rai-chu and
-# jsmith@thai.example are people (S12-11). AI vendor names count anywhere in the name, so a shadow account such as
-# openai-key or bob@openai.com is still found (don.reviewer B1 on #1024). Words that are also personal names (claude,
-# gemini, mistral) are not vendor tokens on their own: claude.martin is a person.
-# A name that fuses a vendor or product onto ``ai`` (vertexai-sa, h2oai-key, myai-helper, teamai.sync) was flagged by the
-# unanchored ``ai[-_.]`` this rule replaced; dropping it entirely made the scanner miss them (fail-open, don.reviewer
-# re-verdict and the 1024 advisory: 21 of 50 names). So ``<alnum>ai<sep>`` counts again when it is followed by a service-type
-# word at the end of the name (key, svc, sa, api, token, worker, bot, agent, runner, helper, sync, job, service, daemon),
-# which keeps people such as kai_nakamura, rai-chu, mai.tran, lai-x and jsmith@thai.example unflagged.
-_FUSED_AI_SERVICE = (r"[a-z0-9]ai[-_.](?:key|svc|sa|api|token|worker|bot|agent|runner|helper|sync|job|service|daemon)"
-                     r"(?![a-z0-9])")
-_AI_VENDORS = ("openai|anthropic|huggingface|geminiai|mistralai|cohereai|vertexai|azureai|stabilityai|perplexityai|"
-               "togetherai|fireworksai|deepai|jasperai|scaleai|llamaai|copilotai")
-ACCOUNT_PATTERNS = re.compile(
-    r"(^svc[-_.]|^bot[-_.]|[-_.]bot$|agent|automation|(?:^|[-_.@])(?:ml|gen|x)?ai[-_.]"
-    rf"|{_FUSED_AI_SERVICE}|{_AI_VENDORS})", re.I)
+# ``ACCOUNT_PATTERNS`` is MAIN'S rule, unchanged: the base. Anything it flags stays flagged unless ``_person_shaped`` removes
+# it, so a name main flags cannot be lost by a pattern that forgot a format (fail-open, PR 1024 advisory, three rounds).
+# On top of it: AI vendor names as WHOLE tokens (``huggingface_token``, ``Anthropic_Admin``) are flagged too, and the name is
+# NFKC-normalised with its format characters removed first (``looks_like_automation``).
+ACCOUNT_PATTERNS = re.compile(r"(^svc[-_.]|^bot[-_.]|[-_.]bot$|agent|automation|ai[-_.])", re.I)
 ACCOUNT_TYPE_MARKERS = ("service", "bot", "application", "automation")
+
+_OTHER_AUTOMATION = re.compile(r"(^svc[-_.]|^bot[-_.]|[-_.]bot$|agent|automation)", re.I)
+_AI_BEFORE_SEPARATOR = re.compile(r"ai(?=[-_.])", re.I)
+#: Words that make a name a service when they are a separator-delimited token (``kai.sync``, ``mai.job`` stay flagged: a
+#: review queue prefers a false positive).
+_SERVICE_WORDS = frozenset(("key", "svc", "sa", "api", "token", "worker", "bot", "agent", "runner", "helper", "sync", "job",
+                            "service", "daemon"))
+#: AI vendor and product tokens. Whole-token match flags a name; a token that CONTAINS one is never person-shaped.
+#: Words that are also personal names (claude, gemini, mistral) are deliberately not listed: claude.martin is a person.
+_AI_VENDOR_TOKENS = frozenset((
+    "openai", "anthropic", "huggingface", "geminiai", "mistralai", "cohereai", "vertexai", "azureai", "stabilityai",
+    "perplexityai", "togetherai", "fireworksai", "deepai", "jasperai", "scaleai", "llamaai", "copilotai", "xai", "genai",
+    "mlai", "metaai"))
+
+
+def _fold(account: str) -> str:
+    """NFKC, then the format characters (Unicode category Cf: zero-width space and joiner, bidi marks, soft hyphen) removed:
+    ``open<ZWSP>ai-key``, a Kelvin sign and full-width letters match like their plain forms."""
+    return "".join(ch for ch in unicodedata.normalize("NFKC", account) if unicodedata.category(ch) != "Cf")
+
+
+def _person_shaped(text: str, tokens: list[str]) -> bool:
+    r"""True when the ONLY reason main's rule flags ``text`` is an ``ai`` fused after ASCII letters before a separator, like
+    ``kai_nakamura``, ``rai-chu``, ``tsai.wu``, ``desai-p`` and ``jsmith@thai.example``. It is NOT person-shaped (so it stays
+    flagged) when the name has a path or realm prefix character (``\``, ``/``, ``:``: CORP\ai-runner, role/ai-runner,
+    serviceAccount:ai-runner), a service word or vendor token, an ``ai`` at the start or after a separator or digit or any
+    non-ASCII-letter character (ai.example, x.ai.y, prod1ai-x, c3ai-svc, and e-acute + ai-svc), or a vendor name inside the token."""
+    if any(c in text for c in "\\/:"):
+        return False
+    if any(tok in _SERVICE_WORDS or tok in _AI_VENDOR_TOKENS for tok in tokens):
+        return False
+    for m in _AI_BEFORE_SEPARATOR.finditer(text):
+        i = m.start()
+        if i == 0 or not (text[i - 1].isascii() and text[i - 1].isalpha()):
+            return False
+        start = i
+        while start > 0 and text[start - 1].isalnum():
+            start -= 1
+        if any(v in text[start:i + 2].lower() for v in _AI_VENDOR_TOKENS):
+            return False
+    return True
 
 
 def looks_like_automation(account: str) -> bool:
-    """``ACCOUNT_PATTERNS`` on the name after NFKC normalisation with the format characters (Unicode category Cf: zero-width
-    space and joiner, bidi marks, soft hyphen, the Kelvin-style compatibility forms fold to their plain letters) removed, so
-    ``open<ZWSP>ai-key`` and a full-width ``ａｉ-bot`` are matched like their plain forms. The candidate keeps the raw name."""
-    folded = "".join(ch for ch in unicodedata.normalize("NFKC", account) if unicodedata.category(ch) != "Cf")
-    return bool(ACCOUNT_PATTERNS.search(folded))
+    """Main's rule on the folded name, plus whole-token AI vendor names, minus the person-shaped exclusion (``_person_shaped``).
+    The candidate keeps the raw name."""
+    text = _fold(account)
+    tokens = [tok for tok in re.split(r"[\W_]+", text.lower()) if tok]
+    if _OTHER_AUTOMATION.search(text) or any(tok in _AI_VENDOR_TOKENS for tok in tokens):
+        return True
+    if not _AI_BEFORE_SEPARATOR.search(text):
+        return False
+    return not _person_shaped(text, tokens)
 
 
 def _normalize(text: str) -> str:

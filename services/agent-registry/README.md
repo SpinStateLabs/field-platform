@@ -100,12 +100,16 @@ registry serve [--port 8001]
   expect false positives (e.g. non-AI automation accounts) — it produces a
   review queue, not a verdict. False negatives are possible if an AI node
   type contains none of the known markers.
-  The service-account name rule (`discover.ACCOUNT_PATTERNS`, applied after NFKC normalisation and with format characters
-  removed): `ai` counts as a token at the start of a name or after a separator, a fused `<alnum>ai<sep>` counts only when a
-  service word follows (key, svc, sa, api, token, worker, bot, agent, runner, helper, sync, job, service, daemon), and a
-  listed AI vendor name counts anywhere. So `kai_nakamura`, `jsmith@thai.example` and `claude.martin` are not flagged, and
-  `vertexai-sa`, `h2oai-key` and `open<ZWSP>ai-key` are. A fused name with no service word and no listed vendor (for
-  example `prod1ai-x`) is not flagged: a false negative this heuristic accepts.
+  The service-account name rule starts from main's rule (`discover.ACCOUNT_PATTERNS`: `svc-`/`bot-` prefixes, a `-bot`
+  suffix, `agent`, `automation`, and `ai` before a separator) applied after NFKC normalisation with the Unicode format
+  characters removed, adds listed AI vendor names as whole tokens (`huggingface_token`), and subtracts ONE narrow
+  person-shaped exclusion: a name whose only match is an `ai` fused after ASCII letters before a separator
+  (`kai_nakamura`, `rai-chu`, `tsai.wu`, `desai-p`, `jsmith@thai.example`). The exclusion never applies when the name has a
+  path or realm character (`\`, `/`, `:`: `CORP\ai-runner`, an ARN ending `role/ai-runner`), a service word token (key, svc,
+  sa, api, token, worker, bot, agent, runner, helper, sync, job, service, daemon), a vendor token, or an `ai` at the start,
+  after a separator, after a digit or after a non-ASCII letter. So names such as `mai.job` and `kai.sync` stay flagged:
+  a review queue prefers a false positive. Nothing main flags is lost except the listed person-shaped names
+  (`tests/test_discover_heuristics.py` proves it differentially over a corpus).
   A **retired** agent does not make a candidate "registered": the candidate is surfaced and the note names the retired
   agent; a **killed** agent still counts as registered (it may still run; an owner decision is open); an owner who owns
   only retired agents no longer makes an API key's owner known. `registered_agents` stays the full count.
