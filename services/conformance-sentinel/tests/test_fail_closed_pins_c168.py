@@ -169,7 +169,8 @@ def test_a_registry_error_answer_is_a_block_never_an_allow(stack, status):
     active = {"agent_id": AGENT_ID, "status": "active", "manifest_ref": str(stack.manifest_path)}
     engine(stack).registry._client = Http({("GET", "/agents/"): (status, active)})
     v = check(stack, token)
-    assert v["decision"] == "BLOCK" and v["clause_id"] == "R.unregistered"
+    # B16: an unusable registry answer is still a BLOCK, under its own clause (not "unregistered")
+    assert v["decision"] == "BLOCK" and v["clause_id"] == "R.registry_unreachable"
     assert f"registry returned {status}" in " ".join(v["reasons"])
 
 
