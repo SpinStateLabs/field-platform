@@ -51,7 +51,8 @@ keeps its 1-based line number and the sha-256 of its exact bytes (without the ne
 stripped). Unparseable lines are counted per file, never fatal: both parsers are wrapped so that any
 `Exception` raised while reading one line (the stdlib raises OverflowError, RecursionError and
 ValueError on hostile input, not only JSONDecodeError) counts that line as unparsed. JSONL records
-with a duplicated key take the last value (standard `json.loads`). Signature matching looks at the
+with a duplicated key take the last value (standard `json.loads`). A repeated query parameter keeps every value (`S.pivot`): the parameter counts as tampered when any value
+in the hostile request is absent from all the values the benign request gave the same name. Signature matching looks at the
 first 8 KB of a path, a query key/value and a user-agent.
 
 ### 3.2 Sessions

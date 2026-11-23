@@ -40,7 +40,7 @@ from agent_registry.models import (
     SecretHit,
     ShadowCandidate,
 )
-from agent_registry.redaction import ScanInputError, check_size, find_secrets
+from agent_registry.redaction import MAX_SCAN_BYTES, ScanInputError, check_size, find_secrets
 
 # n8n node-type substrings that indicate an AI/agent workload.
 AI_NODE_MARKERS = (
@@ -151,7 +151,8 @@ def scan_service_accounts(
     """CSV columns (header required): account,type[,owner][,notes] — extras ignored.
 
     Raises ScanInputError on a CSV over 1 MiB, one the csv module cannot read (by
-    line), or a header with neither ``account`` nor ``name`` (never a silent 0)."""
+    line), a header with neither ``account`` nor ``name`` (never a silent 0), or a
+    row with more fields than the header (an unquoted comma; by line, never the row)."""
     check_size(csv_text, "accounts_csv")
     lines = _CountedLines(csv_text.lstrip("\ufeff"))  # an Excel export's BOM is not a header
     reader = csv.DictReader(lines)
@@ -161,11 +162,16 @@ def scan_service_accounts(
             raise ScanInputError(
                 "accounts_csv: the header has neither an 'account' nor a 'name' column"
             )
-        parsed = [row for row in reader]
+        parsed = [(reader.line_num, row) for row in reader]
     except csv.Error as exc:
         raise _unreadable_csv("accounts_csv", lines.count, exc) from None
     candidates, scanned = [], 0
-    for row in parsed:
+    for line_num, row in parsed:
+        if None in row:   # DictReader keeps the surplus fields of a long row under the key None, as a list
+            raise ScanInputError(
+                f"accounts_csv line {line_num}: more fields than the header "
+                "(quote any value that contains a comma)"
+            )
         row = {(k or "").strip().lower(): (v or "").strip() for k, v in row.items()}
         account = row.get("account") or row.get("name") or ""
         if not account:
@@ -434,16 +440,27 @@ def discover(
     )
 
 
-def load_n8n_file(path: str) -> dict[str, Any] | list[dict[str, Any]]:
+def read_scan_file(path: str | Path) -> str:
+    """The text of one scanner input file, or ``ScanInputError``: unreadable, over 1 MiB or not UTF-8. Reads at most
+    1 MiB + 1 byte, so an oversized file is refused without being loaded. The message names the file (its base name),
+    never its bytes."""
     name = Path(path).name
     try:
-        with open(path, encoding="utf-8") as fh:
-            return json.load(fh)
-    except FileNotFoundError:
-        raise ScanInputError(f"{name}: no such file") from None
-    except OSError as exc:  # permission denied, a directory, ...
-        raise ScanInputError(f"{name}: cannot read ({exc.strerror or type(exc).__name__})") from None
+        with open(path, "rb") as fh:
+            data = fh.read(MAX_SCAN_BYTES + 1)
+    except (OSError, ValueError):  # a missing file, a directory, a NUL in the path
+        raise ScanInputError(f"{name} cannot be read") from None
+    if len(data) > MAX_SCAN_BYTES:
+        raise ScanInputError(f"{name} is larger than the scanner accepts: at most {MAX_SCAN_BYTES} bytes (1 MiB)")
+    try:
+        return data.decode("utf-8")
     except UnicodeDecodeError:
         raise ScanInputError(f"{name} is not UTF-8 text") from None
-    except json.JSONDecodeError as exc:  # position only: the message never carries file content
-        raise ScanInputError(f"{name}: not valid JSON (line {exc.lineno}, column {exc.colno})") from None
+
+
+def load_n8n_file(path: str) -> dict[str, Any] | list[dict[str, Any]]:
+    text = read_scan_file(path)
+    try:
+        return json.loads(text)
+    except (ValueError, RecursionError):  # JSONDecodeError is a ValueError; deep nesting is a RecursionError
+        raise ScanInputError(f"{Path(path).name} is not valid JSON") from None

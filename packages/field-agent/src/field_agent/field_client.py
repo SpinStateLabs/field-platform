@@ -141,6 +141,9 @@ class FieldClient:
             raise ValueError("base_url must be an http:// or https:// URL with a host")
         if shared_secret and u.scheme != "https" and not _private_host(u.hostname):
             raise ValueError("the shared secret is only sent over https (or http to a loopback/private address)")
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 0 < timeout < float("inf"):
+            # None means "no timeout" to urllib (a stalled peer would block check() and killed() for ever); NaN and inf the same
+            raise ValueError("timeout must be a finite number of seconds greater than 0")
         self.base_url = base_url.rstrip("/")
         self.agent_id = agent_id
         self._token_id = token_id

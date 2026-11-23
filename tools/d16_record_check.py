@@ -62,7 +62,7 @@ def check_events(events: list, operator_id: str) -> tuple[bool, list[str]]:
         claimed = p.get("operator_claimed")
         fp = p.get("operator_key_fp")
         if authenticated == operator_id:
-            has_claim = isinstance(claimed, str) and claimed != ""
+            has_claim = isinstance(claimed, str) and claimed.strip() != ""      # a blank name is no name (S9-26)
             has_fp = isinstance(fp, str) and _FP_RE.fullmatch(fp) is not None
             h = ev.get("hash") if isinstance(ev, dict) else None
             hp = h[:HASH_PREFIX] if isinstance(h, str) and _HASH_RE.fullmatch(h) else "(no hash)"
@@ -114,8 +114,10 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         import estate_probe as ep
         try:
-            secret = Path(args.secret_file).read_text(encoding="utf-8").strip()
-        except OSError:
+            secret = Path(args.secret_file).read_text(encoding="utf-8-sig").strip()
+        except (OSError, UnicodeDecodeError):       # as estate_probe._secret(): a non-UTF-8 file is exit 2, not a traceback
+            secret = ""
+        if not secret:                              # unreadable, not UTF-8, empty or blank: nothing is sent (S9-26)
             print("error: the secret file cannot be read")
             return 2
         status, body = ep.Estate(args.base, secret).call("GET", "/ledger/events")

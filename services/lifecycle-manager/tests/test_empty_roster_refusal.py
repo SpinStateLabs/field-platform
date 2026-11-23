@@ -62,7 +62,7 @@ def stack(monkeypatch):
     ledger, kill = Ledger(), Kill()
     clients = {"registry": Registry(), "delegation": Delegation(),
                "ledger": ledger, "killswitch": kill}
-    monkeypatch.setattr(cli, "estate_clients", lambda pair, timeout=20.0: clients)
+    monkeypatch.setattr(cli, "estate_clients", lambda pair, timeout=20.0, verify=True: clients)
     monkeypatch.setattr(cli, "operator_pair", lambda *a, **k: None)
     return ledger, kill
 

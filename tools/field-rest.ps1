@@ -1,11 +1,11 @@
 # field-rest.ps1 — the three FIELD hooks over raw REST, for Claude skills that
 # run on rog-command (Cowork / Claude Code) and cannot import the Python SDK.
 #
-#   . "C:\Users\donal\My Drive\Spin State Labs\Projects\FORCE-FIELD\field-platform\tools\field-rest.ps1"
+#   . "<repo>\tools\field-rest.ps1"
 #   Get-FieldHeartbeat -Agent ssl-invoicing-agent                       # hook 3 LIVENESS (read)
 #   Send-FieldCheckin  -Agent ssl-invoicing-agent                       # hook 3 LIVENESS (check-in)
 #   Invoke-FieldCheck  -Agent ssl-invoicing-agent -Action "read timesheets"   # hook 1 ACTIONS
-#   Send-FieldSpend    -Agent ssl-invoicing-agent -Cents 1250 -Note "INV SSL-SA-2026-0906"  # hook 2 (cents only)
+#   Send-FieldSpend    -Agent ssl-invoicing-agent -Cents 1250 -Note "INV SSL-XX-2026-0906"  # hook 2 (cents only)
 #
 # Every function prints ONE line beginning with "FIELD " that the skill quotes
 # verbatim into its run report, and returns $true (proceed) / $false (stop).
@@ -33,7 +33,7 @@
 # the sentinel's gate, not this hook's): it prints retry_after and proceeds.
 #
 # SECRET (x-field-auth). $env:FIELD_SHARED_SECRET when it is set; otherwise the
-# file C:\Users\donal\.field-local\gb10-estate-secret ($env:FIELD_SECRET_FILE
+# file <home>\.field-local\gb10-estate-secret ($env:FIELD_SECRET_FILE
 # overrides the path), trimmed. Read per request, so a secret placed later is
 # honoured without re-loading the shim. A missing or empty file means no header
 # (an open estate answers; a perimeter estate answers 401 = HALT). A value with

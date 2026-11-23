@@ -63,6 +63,14 @@ for prune / apps destroy / volume delete / git push. NOT installed, no roster ro
 Placeholders (Don's): `spend_cap.limit` (schema needs a number > 0; `1` is a stand-in), `sentinel_max_age_s` (`300`,
 must exceed twice the watcher poll plus its timeout), `delegation.expiry` (`2026-11-22` = ADR date + 30 days), the
 rotation expiry (30 days is the ADR's proposal), rotation cadence, model-key cadence. The ADR states no other figure.
+
+### Renewal, and why the manifest is not deployable
+
+The manifest is a placeholder sketch and the agent is NOT deployable until a delegation mint exists. The ADR cap is
+"TTL at most 30 days" (as quoted in the manifest header; it is not lengthened). `delegation.expiry` in the sketch is
+a stand-in that lapses on its own (`2026-11-22`) and is not a decision. To renew: the operator mints a new delegation
+of at most 30 days, and the manifest `expiry` is then set from that mint (never invented in a PR). Until then the
+agent must not be installed, and `test_delegation_expiry_is_at_most_30_days_from_the_adr_date` still pins the cap.
 `model_provider` is a descriptive string because the schema requires the field and the ADR says "none".
 
 Validation, offline (no network), from the repo root with this checkout on `PYTHONPATH`:

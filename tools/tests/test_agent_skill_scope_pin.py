@@ -16,6 +16,9 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 AGENTS = ["ssl-invoicing-agent", "ssl-timekeeping-agent"]
+# ROLE-LOOP agents (PR 541 rebuild): their SKILL.md uses the `gov "<string>"` format, not the "Governed actions" table
+# that check() parses, so they are listed here to be counted, not pinned by check(). A sixth one must be added here.
+FP_AGENTS = ["ssl-fp-architect", "ssl-fp-frontdoor-engineer", "ssl-fp-red-team", "ssl-fp-router-engineer", "ssl-fp-runtime-engineer"]
 PS1 = ROOT / "tools" / "field-rest.ps1"
 HELPER = re.compile(r"\b(?:Invoke|Send|Get|Test|Write|Protect)-Field\w+")
 ACTION = re.compile(r'-Action\s+"([^"]+)"')
@@ -133,7 +136,7 @@ def _skill_agents(agents_dir: Path) -> list[str]:
 
 def test_every_agent_skill_md_in_the_repo_is_in_the_checked_list():
     """AGENTS is a constant; a new agents/<name>/SKILL.md must be added to it (and so pinned) or this test fails."""
-    assert _skill_agents(ROOT / "agents") == sorted(AGENTS)
+    assert _skill_agents(ROOT / "agents") == sorted(AGENTS + FP_AGENTS)
 
 
 def test_an_unlisted_agent_directory_with_a_skill_md_is_caught(tmp_path):

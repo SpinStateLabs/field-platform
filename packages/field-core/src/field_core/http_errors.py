@@ -8,7 +8,13 @@ of a value or assertion error (which a validator may build from the value), and 
 
 Any string in ``loc`` that is not a root (body, query, ...), a declared parameter, or a field name or alias of a model the
 app's routes take is replaced too: that is what keeps a caller-chosen dict key out (C-1034). A key that happens to equal a field name stays.
-Only the crosswalk service installs this so far; the other services still use FastAPI's default reply.
+Installed (``install_validation_handler(app)`` in each ``api.py``) by agent-registry, compliance-crosswalk,
+conformance-sentinel, delegation-authority, force-gateway, incident-replay, kill-switch, lifecycle-manager, ops-console,
+sealed-ledger and spend-governor. federation-broker does not call it: its ``api.py`` registers its own
+``RequestValidationError`` handler that drops ``input`` and redacts unknown ``loc`` names but keeps each message (its
+validators write explanatory text; whether that may stay is open, per a comment in that file). attestation-reporter and
+claude-approver register no handler, so they still answer FastAPI's default 422, which quotes ``input``; this file does
+not say whether that is deliberate. Check the current list with ``grep -rl install_validation_handler services/*/src``.
 """
 from __future__ import annotations
 
@@ -33,6 +39,10 @@ FIXED_MESSAGE_KINDS = frozenset({
 
 
 _LOC_ROOTS = frozenset({"body", "query", "path", "header", "cookie"})
+
+#: The most errors one 422 carries. A body with thousands of invalid list items answered with thousands of errors; the first
+#: MAX_ERRORS are kept and one final item states how many more there were (S9-5).
+MAX_ERRORS = 100
 
 
 def _model_names(tp: Any, seen: set, names: set) -> None:
@@ -79,12 +89,13 @@ def _known_names(app: Any) -> set:
     return names
 
 
-def redacted_loc(app: Any, err: dict) -> list:
+def redacted_loc(app: Any, err: dict, known: set | None = None) -> list:
     """The ``loc`` of one pydantic error with every string the caller could have chosen replaced by ``REDACTED_NAME``:
     a name that is not a root, a declared parameter or a field name or alias of a model the app takes, and the last
     part of an ``extra_forbidden`` error (C-1034, C-1128). A service that keeps its own handler, to keep the messages
     its validators write, calls this so a field NAME the caller sent is not repeated."""
-    known = _known_names(app)
+    if known is None:        # a caller with many errors computes the set once and passes it (S9-5)
+        known = _known_names(app)
     loc = [part if (not isinstance(part, str) or part in known) else REDACTED_NAME for part in err.get("loc", ())]
     if str(err.get("type", "")) == "extra_forbidden" and loc:
         loc[-1] = REDACTED_NAME
@@ -99,9 +110,11 @@ def install_validation_handler(app: Any) -> None:
     @app.exception_handler(RequestValidationError)
     async def _validation_error(request: Any, exc: RequestValidationError) -> Any:
         errors = []
-        for err in exc.errors():
+        all_errors = exc.errors()
+        known = _known_names(request.app)       # once per request, not once per error
+        for err in all_errors[:MAX_ERRORS]:
             kind = str(err.get("type", ""))
-            loc = redacted_loc(request.app, err)
+            loc = redacted_loc(request.app, err, known)
             if kind == "value_error" or kind.startswith("assertion"):
                 msg = VALUE_ERROR_MESSAGE
             elif kind in FIXED_MESSAGE_KINDS:
@@ -109,4 +122,6 @@ def install_validation_handler(app: Any) -> None:
             else:
                 msg = UNLISTED_KIND_MESSAGE
             errors.append({"type": kind, "loc": loc, "msg": msg})
+        if len(all_errors) > MAX_ERRORS:
+            errors.append({"type": "too_many_errors", "loc": [], "msg": f"{len(all_errors) - MAX_ERRORS} more errors"})
         return JSONResponse({"detail": errors}, status_code=422)
