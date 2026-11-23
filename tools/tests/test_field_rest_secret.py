@@ -85,6 +85,16 @@ def _safe_env(env: dict[str, str], shim: Path, tmp_path: Path) -> dict[str, str]
     return env
 
 
+# C-726 (reviewer C-693 F-C693-1): the decoy finds the shim's real defaults by SHAPE, and
+# test_windows_pins_without_powershell_c726.py checks that this shape matches the shim's code exactly once per default.
+# Since B14 the defaults are built from $HOME (`Join-Path $HOME '.field-local\<name>'`), so no account is named here.
+_PROFILE = r"Join-Path \$HOME '\.field-local\\"
+
+
+def _real_default(name: str) -> "re.Pattern[str]":
+    return re.compile(_PROFILE + re.escape(name) + "'")
+
+
 def decoy_shim(tmp_path: Path, real_tokens: Path, home: Path) -> Path:
     """A copy of the REAL shim whose only change is its path defaults: the $HOME token default becomes
     `home`, the $HOME secret default a tmp path. `real_tokens` is a decoy the test plants where the old
@@ -92,9 +102,8 @@ def decoy_shim(tmp_path: Path, real_tokens: Path, home: Path) -> Path:
     Every line of logic is the shim's own, so a fallback in it shows up here, against files the
     test owns, instead of against the real .field-local."""
     source = SHIM.read_text(encoding="utf-8")
-    swaps = {r"Join-Path $HOME '.field-local\gb10-estate-secret'":
-             f"Join-Path '{tmp_path}' 'decoy-default-secret'",
-             r"Join-Path $HOME '.field-local\tokens-gb10.json'": f"Join-Path '{home}' 'tokens-gb10.json'"}
+    swaps = {_real_default("gb10-estate-secret"): f"Join-Path '{tmp_path}' 'decoy-default-secret'",
+             _real_default("tokens-gb10.json"): f"Join-Path '{home}' 'tokens-gb10.json'"}
     for old, new in swaps.items():
         if isinstance(old, re.Pattern):
             source, hits = old.subn(lambda _m, new=new: new, source)
