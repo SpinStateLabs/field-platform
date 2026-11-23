@@ -82,9 +82,11 @@ def _fold(account: str) -> str:
 
 
 def looks_like_automation(account: str) -> bool:
-    """Main's rule on the folded name, plus whole-token AI vendor names. The candidate keeps the raw name."""
+    """Main's rule on the RAW name or on the folded name, plus whole-token AI vendor names. The raw-name test is what makes
+    "everything main flags is flagged" true by construction: NFKC can compose a trailing combining mark into the last letter of
+    a keyword (``agent`` + U+0308 becomes ``agen`` + U+1E97) and so remove a match main has. The candidate keeps the raw name."""
     text = _fold(account)
-    if ACCOUNT_PATTERNS.search(text):
+    if ACCOUNT_PATTERNS.search(account) or ACCOUNT_PATTERNS.search(text):
         return True
     return any(tok in _AI_VENDOR_TOKENS for tok in re.split(r"[\W_]+", text.lower()) if tok)
 

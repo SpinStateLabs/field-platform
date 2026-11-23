@@ -111,6 +111,8 @@ SERVICE_NAMES = [
     "rag2ai-job", "llm-ai_x", "prod1ai-x", "x@ai.example", "ai-pricing-experiment", "ai_summarizer",
     "team.ai-helper", "svc-x@ai.example", "openai_worker", "mlai_worker", "azure-openai-svc", "anthropic-prod", "xai-key",
     "kaia.ai.fan", "ai.chen", "xai.li",
+    # a combining mark after the last letter of a keyword: NFKC composes it and the folded name loses the match
+    "agent" + chr(0x0308), "automation" + chr(0x0301), "reagent" + chr(0x0323) + "-1",
     # service accounts the person-shaped exclusion of the previous head let through (wave2-engineer, re-measured on main)
     "chatai-prod@proj.iam.gserviceaccount.com", "moonshotai-etl", "teamai-prod", "dataai-etl", "corpai_ingest",
     "svcai-prod", "prodai-1", "CORP|chatai-prod", "CORP%5Cchatai-prod",
@@ -273,3 +275,34 @@ def test_every_listed_vendor_token_is_flagged_in_every_position(vendor, form):
 def test_the_module_lists_at_least_these_vendor_tokens():
     from agent_registry.discover import _AI_VENDOR_TOKENS
     assert set(VENDORS) <= set(_AI_VENDOR_TOKENS)
+
+
+# --- property: anything main's rule matches on the RAW name is flagged, whatever folding does ---------------------------------
+
+_PROPERTY_BASES = ["agent", "automation", "reagent", "svc-x", "bot-y", "x-bot", "kai_nakamura", "ai-runner", "my-ai-bot",
+                   "openai-key", "svc-ai", "ai.example"]
+_PROPERTY_INSERTS = ([chr(c) for c in range(0x0300, 0x0370)]                       # every combining diacritical mark
+                     + [chr(c) for c in (0x00AD, 0x200B, 0x200C, 0x200D, 0x200E, 0x2060, 0xFEFF, 0x202E, 0x1E97, 0xFF21,
+                                         0x212A, 0x0131, 0x0130, 0x3164, 0x00E9, 0x0041, 0x002D, 0x002E, 0x005F)])
+
+
+def _property_names():
+    for base in _PROPERTY_BASES:
+        for ch in _PROPERTY_INSERTS:
+            for pos in range(len(base) + 1):
+                yield base[:pos] + ch + base[pos:]
+
+
+def test_anything_main_matches_on_the_raw_name_is_flagged_regardless_of_folding():
+    """The invariant, as a property over ~12k generated names: if main's rule matches the raw name, the head flags it."""
+    checked = lost = 0
+    missed = []
+    for name in _property_names():
+        if MAIN_RULE.search(name):
+            checked += 1
+            if not looks_like_automation(name):
+                lost += 1
+                missed.append(name.encode("unicode_escape"))
+    assert checked > 5000, checked
+    assert lost == 0, missed[:10]
+
