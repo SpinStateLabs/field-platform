@@ -28,7 +28,7 @@ failing open: BEFORE passthrough and BEFORE any bypass window, ``/v1/messages``
 requires ``x-field-agent-id`` AND ``x-field-token`` (the delegation token id —
 B2's OAuth-style pattern at the egress; missing either ⇒ 401 naming both) and
 asks the sentinel ``POST /check {agent_id, token_id, action}`` through
-``SentinelClient`` (``FIELD_SENTINEL_URL``, ``auth_headers()``,
+``SentinelClient`` (``FIELD_SENTINEL_URL``, ``perimeter_headers()``,
 ``FORCE_GATEWAY_SENTINEL_TIMEOUT`` default 30 s). ``action`` is the
 ``x-field-action`` header when present (scope enforced against the manifest
 like any governed action), else exactly ``llm.messages``. ALLOW ⇒ the call
@@ -60,6 +60,7 @@ import os
 import re
 import sqlite3
 import time
+import unicodedata
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -70,7 +71,8 @@ from fastapi.responses import JSONResponse
 
 from field_core import posture_flag
 from field_core.startup import warn_open
-from field_core.authn import auth_headers, install as install_authn, shared_secret
+from field_core.authn import install as install_authn, shared_secret
+from field_core.guarded_operator import perimeter_headers
 from field_core.http_errors import install_validation_handler
 from field_core.buildinfo import build_sha
 from field_core.llm import AGENT_ID_HEADER, EGRESS_ACTION, TOKEN_HEADER
@@ -420,10 +422,20 @@ class _SentinelUrlLogFilter(logging.Filter):
         args = record.args
         if (self.origins and isinstance(args, tuple) and len(args) >= 2
                 and isinstance(record.msg, str) and record.msg.startswith("HTTP Request:")):
-            shown = public_origin(str(args[1]))
+            shown = _origin_key(public_origin(str(args[1])))
             if shown in self.origins:
                 record.args = (args[0], shown, *args[2:])
         return True
+
+
+def _origin_key(origin: str | None) -> str | None:
+    """``origin`` without the scheme's default port (http :80, https :443). httpx logs ``http://h:80/...`` as
+    ``http://h/...`` while ``public_origin`` of the configured base keeps ``:80`` (reviewer-R1 on #1272): both sides
+    of the filter compare in this form."""
+    for scheme, port in (("http://", ":80"), ("https://", ":443")):
+        if origin and origin.startswith(scheme) and origin.endswith(port):
+            return origin[: -len(port)]
+    return origin
 
 
 _SENTINEL_URL_LOG_FILTER = _SentinelUrlLogFilter()
@@ -433,12 +445,18 @@ logging.getLogger("httpx").addFilter(_SENTINEL_URL_LOG_FILTER)
 class SentinelUnavailable(RuntimeError):
     """The sentinel could not be asked, or did not answer a verdict: transport
     error, timeout, any non-200, or a body that is not a verdict. The caller
-    refuses 503 — a check that did not happen is never an ALLOW."""
+    refuses 503 — a check that did not happen is never an ALLOW. ``failure`` is
+    the transport exception's class name when there was one: the log names it
+    without chaining the exception, whose text can carry the URL (C-734)."""
+
+    def __init__(self, message: str, failure: str | None = None):
+        super().__init__(message)
+        self.failure = failure
 
 
 class SentinelClient:
     """`POST /check` on the conformance-sentinel (base `FIELD_SENTINEL_URL`,
-    perimeter `auth_headers()`, timeout `FORCE_GATEWAY_SENTINEL_TIMEOUT`).
+    perimeter `perimeter_headers()`, timeout `FORCE_GATEWAY_SENTINEL_TIMEOUT`).
     Injectable like field-core's clients (a TestClient qualifies)."""
 
     def __init__(self, client=None, base_url: str | None = None,
@@ -446,11 +464,12 @@ class SentinelClient:
         self._base = (base_url or resolve_sentinel_url() or "http://127.0.0.1:8004").rstrip("/")
         self.timeout = checked_sentinel_timeout(timeout) if timeout is not None else resolve_sentinel_timeout()
         self._client = client
-        _SENTINEL_URL_LOG_FILTER.origins.add(public_origin(self._base))   # C1: httpx's request line shows the origin
+        # C1: httpx's request line for this sentinel shows its origin only
+        _SENTINEL_URL_LOG_FILTER.origins.add(_origin_key(public_origin(self._base)))
         if self._client is None:
             import httpx
 
-            self._client = httpx.Client(timeout=self.timeout, headers=auth_headers())
+            self._client = httpx.Client(timeout=self.timeout, headers=perimeter_headers())
 
     @property
     def base_url(self) -> str:
@@ -465,7 +484,8 @@ class SentinelClient:
         else:
             failure = None
         if failure is not None:                           # raised outside the handler: no cause or context keeps the transport text
-            raise SentinelUnavailable(f"sentinel unreachable at {public_origin(self._base)}: {failure}")
+            raise SentinelUnavailable(f"sentinel unreachable at {public_origin(self._base)}: {failure}",
+                                      failure=failure)
         if resp.status_code != 200:
             raise SentinelUnavailable(f"sentinel returned {resp.status_code}")
         try:
@@ -647,6 +667,35 @@ def _ledger_event(app: FastAPI, event_type: str, payload: dict) -> None:
                     event_type, type(exc).__name__)
 
 
+#: What a caller may be told about a sentinel check that did not happen: a fixed category, never the sentinel's URL or the
+#: transport's exception text (S12-28). The three fixed texts and the status code come from SentinelClient.check.
+_SENTINEL_FIXED_REASONS = ("sentinel returned a non-JSON body", "sentinel returned no verdict")
+
+
+def _public_sentinel_reason(message: str) -> str:
+    if message in _SENTINEL_FIXED_REASONS or re.fullmatch(r"sentinel returned [0-9]{3}", message):
+        return message
+    if message.startswith("sentinel unreachable"):
+        return "sentinel unreachable"
+    return "sentinel check failed"
+
+
+#: `anthropic-version` is a date. It is forwarded to the upstream with the real x-api-key, so an arbitrary caller string
+#: must not reach it (a non-ASCII one raises UnicodeEncodeError inside httpx: a 500).
+_ANTHROPIC_VERSION = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+_HEADER_ID_MAX = 128
+
+
+def _header_value_ok(value: str) -> bool:
+    """1..128 characters, one line, no control or invisible-format character (S12-28)."""
+    return 1 <= len(value) <= _HEADER_ID_MAX and not any(
+        unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp") for ch in value)
+
+
+def _bad_header(name: str) -> HTTPException:
+    return HTTPException(422, f"{name} is not valid: 1 to {_HEADER_ID_MAX} characters, one line, no control characters")
+
+
 def _refuse(app: FastAPI, status: int, agent_id: str, action: str,
             clause_id: str | None, body: dict[str, Any]) -> JSONResponse:
     """A 403/503 refusal at the egress: ledgered `gateway.refused` (best-effort,
@@ -671,8 +720,11 @@ def _authorize(app: FastAPI, agent_id: str, token_id: str,
     try:
         verdict = sentinel.check(agent_id, token_id, action)
     except SentinelUnavailable as exc:
+        # the caller gets a fixed category; the log gets the exception CLASS (never its text, which can name the URL)
+        log.warning("sentinel check did not happen: %s",
+                    getattr(exc, "failure", None) or type(exc.__cause__ or exc).__name__)   # #1272: not chained
         return _refuse(app, 503, agent_id, action, None, {
-            "detail": f"sentinel check did not happen — refusing: {exc}",
+            "detail": f"sentinel check did not happen — refusing: {_public_sentinel_reason(str(exc))}",
             "decision": None, "clause_id": None})
     decision = verdict["decision"]
     context = verdict.get("context") or {}
@@ -1035,6 +1087,14 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
         x_field_token: str | None = Header(default=None),
         x_field_action: str | None = Header(default=None),
     ) -> dict[str, Any]:
+        # S12-28: what is forwarded or ledgered is bounded first, with fixed 422 text.
+        if not _ANTHROPIC_VERSION.fullmatch(anthropic_version):
+            raise HTTPException(422, "anthropic-version must be a date such as 2023-06-01")
+        for name, value in (("x-field-agent-id", x_field_agent_id), ("x-field-token", x_field_token)):
+            if value and (value != value.strip() or not _header_value_ok(value)):   # "" stays the 401 below
+                raise _bad_header(name)
+        if x_field_action is not None and (x_field_action.strip() and not _header_value_ok(x_field_action.strip())):
+            raise _bad_header("x-field-action")
         # F1 (enforce=1): identity and authority FAIL-CLOSED, before the
         # passthrough exemption and before any bypass window — the Gateway's
         # own trouble may drop instrumentation, never enforcement.

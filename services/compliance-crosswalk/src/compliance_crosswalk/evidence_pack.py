@@ -34,19 +34,13 @@ from datetime import datetime, timezone
 from typing import Any
 
 from compliance_crosswalk.engine import (
-    LEDGER_VERIFY_NOT_CHECKED,
+    GAP_LABELS,
+    LEDGER_NOT_CHECKED_GAP,  # noqa: F401 - moved to engine (B7); still importable from here
     REFUSED_CATEGORIES,
     EvidenceSources,
+    coverage_gaps,
     evaluate,
     one_line,
-)
-
-#: gap kind -> its label in the Markdown "Gaps" list (the JSON carries the kind itself)
-GAP_LABELS = {"not-declared": "not declared", "not-evidenced": "not evidenced", "not-checked": "not checked"}
-#: the FC-L-01 "not-checked" gap detail: fixed text, so Markdown and JSON say the same
-LEDGER_NOT_CHECKED_GAP = (
-    "the ledger did not answer /verify (busy or unreachable), so the chain was not verified on this run; "
-    "this is not a pass: re-run the pack"
 )
 from compliance_crosswalk.mapping import CONTROLS, FRAMEWORKS, INGESTION_LOG
 
@@ -187,38 +181,8 @@ def generate_pack(
     now = now or datetime.now(timezone.utc)
     generated_at = now.isoformat()
 
-    gaps: list[dict[str, Any]] = []
-    for control in coverage.controls:
-        if not control.declared:
-            gaps.append(
-                {
-                    "control_id": control.control_id,
-                    "kind": "not-declared",
-                    "detail": control.declared_detail,
-                }
-            )
-        if control.evidenced is False:
-            gaps.append(
-                {
-                    "control_id": control.control_id,
-                    "kind": "not-evidenced",
-                    "detail": control.evidence_detail,
-                }
-            )
-        elif (
-            control.evidenced is None
-            and control.control_id == "FC-L-01"
-            and control.evidence_detail == LEDGER_VERIFY_NOT_CHECKED
-        ):
-            # don.reviewer C1 (rebuild of PR 1093): not checked is not failed, but it is never silent; a provoked
-            # 503 on /verify must not let the pack say "No gaps recorded" as it would for a verified chain
-            gaps.append(
-                {
-                    "control_id": control.control_id,
-                    "kind": "not-checked",
-                    "detail": LEDGER_NOT_CHECKED_GAP,
-                }
-            )
+    # B7: the same list `crosswalk run` prints (engine.coverage_gaps), so the run and the pack never disagree
+    gaps: list[dict[str, Any]] = coverage_gaps(coverage)
 
     lines: list[str] = []
     add = lines.append

@@ -180,12 +180,12 @@ def suggest(
         import os
 
         import httpx
-        from field_core.authn import auth_headers
+        from field_core.guarded_operator import perimeter_headers
 
         base = os.environ.get("FIELD_GOVERNOR_URL", "http://127.0.0.1:8006").rstrip("/")
         try:
             resp = httpx.get(f"{base}/status/compliance-crosswalk",
-                             timeout=5.0, headers=auth_headers())
+                             timeout=5.0, headers=perimeter_headers())
         except Exception as exc:
             typer.echo(f"governor unreachable — refusing unmetered "
                        f"suggestions: {type(exc).__name__}", err=True)
@@ -400,8 +400,11 @@ def regwatch_set_stale(
 ) -> None:
     """Flag a framework's corpus stale — pack generation blocks until a
     named re-review clears it."""
+    from compliance_crosswalk.mapping import FRAMEWORKS
     from compliance_crosswalk.staleness import StaleStore, affected_controls
 
+    if framework not in FRAMEWORKS:     # S-2-16 (rebuild of PR 600): a named line, not a ValueError traceback
+        raise _die(f"unknown framework; known: {', '.join(sorted(FRAMEWORKS))}")
     problem = _plain_text_problem("--reason", reason, _MAX_REASON) or (
         None if new_version is None
         else _plain_text_problem("--new-version", new_version, _MAX_VERSION))
@@ -424,9 +427,21 @@ def regwatch_clear(
     reviewed_by: str = typer.Option(..., "--reviewed-by",
                                     help="Named human re-reviewer"),
 ) -> None:
+    from compliance_crosswalk.mapping import FRAMEWORKS
     from compliance_crosswalk.staleness import StaleStore
 
-    record = StaleStore().clear(framework, reviewed_by)
+    if framework not in FRAMEWORKS:
+        raise _die(f"unknown framework; known: {', '.join(sorted(FRAMEWORKS))}")
+    if not reviewed_by.strip():
+        raise _die("--reviewed-by must be a non-empty name: a re-review is NAMED")
+    try:
+        record = StaleStore().clear(framework, reviewed_by)
+    except KeyError:
+        raise _die(f"no active flag for {framework}")
+    except ValueError:
+        # StaleStore.clear refuses a reviewer name that is not plain text (PR 422/618 rule); a fixed line, never the
+        # name or the exception text (R-PR600 C2: without this the refusal would be a traceback)
+        raise _die("--reviewed-by is not an acceptable reviewer name: a re-review is NAMED in plain text")
     typer.echo(f"cleared: {record['framework']} re-reviewed by "
                f"{record['reviewed_by']} at {record['cleared_at']}")
 

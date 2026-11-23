@@ -29,7 +29,8 @@ secret), and a broken key file named on the command line refuses (exit 2)
 before anything is sent. The pair travels ONLY on the guarded routes in
 GUARDED_ROUTES (kill, revive, drill, attest, token revoke: RT1-10), never on a
 read, a check-in, a sentinel check or an introspection. With a key present, a
-cleartext non-loopback, non-private base is refused as for the secret.
+cleartext base is refused unless it is loopback (a private RFC 1918 address is
+allowed for the secret alone, never with an operator key: C-20).
 
 RULE 7 - CANARY-ONLY MUTATION. Every subcommand that changes estate state acts
 only on the EXACT canary ids (canary-gb10, canary-fly), confirmed in the
@@ -227,6 +228,22 @@ def is_loopback_base(base: str) -> bool:
         ip = ipaddress.ip_address(host)
     except ValueError:
         return False
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return ip.is_loopback
+
+
+def _loopback_host(host: str) -> bool:
+    """True only for ``localhost`` and a canonical loopback address (127.0.0.0/8, ``::1``, and an IPv4-mapped
+    127.x). Same spelling rules as ``_internal_host`` (it is the stricter half of that predicate): an
+    operator key goes over cleartext to loopback only, never to an RFC 1918 or other private address
+    (Phase G C-20, tools half)."""
+    host = (host or "").lower()
+    if not _internal_host(host):
+        return False
+    if host == "localhost":
+        return True
+    ip = ipaddress.ip_address(host)
     if ip.version == 6 and ip.ipv4_mapped is not None:
         ip = ip.ipv4_mapped
     return ip.is_loopback
@@ -1103,8 +1120,6 @@ def main(argv: list[str] | None = None) -> int:
                              f"{DEFAULT_TIMEOUT:g}); a request that outlasts it fails the check. It is also the retry "
                              f"budget of one call: a busy 503 with a Retry-After is resent while the wait leaves at "
                              f"least {RETRY_MIN_BUDGET:g} s of it")
-    parser.add_argument("--allow-plaintext", action="store_true",
-                        help="permit http:// to a non-loopback, non-private host with the secret")
     parser.add_argument("--allow-heavy", action="store_true",
                         help="permit /attest/pack, /ledger/verify and /ledger/events WITHOUT a filter against a "
                              "non-local base (default: refused, nothing sent; local bases are never refused); "
@@ -1154,10 +1169,12 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout, sys.stderr = _Redact(sys.stdout, secret, key), _Redact(sys.stderr, secret, key)
         parts = urllib.parse.urlsplit(args.base)
         host = parts.hostname or ""
-        local = _internal_host(host)
-        if parts.scheme != "https" and not local and not args.allow_plaintext:
-            _die("the secret or operator key would travel in cleartext: use https:// or a loopback/private "
-                 "address")
+        # An operator key travels in cleartext to loopback only (C-20, rebuild of PR 760); the perimeter
+        # secret alone keeps the loopback/private allowance.
+        local = _loopback_host(host) if key else _internal_host(host)
+        if parts.scheme != "https" and not local:
+            _die("the secret or operator key would travel in cleartext: use https://, or a loopback address "
+                 "(a private address is allowed for the secret alone, never with an operator key)")
     heavy = _heavy_routes(args.cmd, args)
     permit_heavy = allow_heavy(args.allow_heavy)
     if heavy and not permit_heavy and not is_loopback_base(args.base):

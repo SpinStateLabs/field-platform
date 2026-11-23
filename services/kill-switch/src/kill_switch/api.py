@@ -46,12 +46,14 @@ and records that it did.
 Heartbeat check-ins (v1.2): ``POST /heartbeat/{agent}`` records ``last_seen``
 in a small SQLite store and answers with the same semantics as the GET.
 ``GET /heartbeat`` never writes. ``GET /liveness`` reports which
-registry-active agents have not checked in inside a window. Stale means "no
+registry-active agents have not checked in inside a window, and lists an
+unregistered id that DID check in inside it (``unregistered``). Stale means "no
 check-in in the window" — NOT evidence that the process is dead.
 """
 
 from __future__ import annotations
 
+import ipaddress
 import math
 import os
 import logging
@@ -212,6 +214,9 @@ class LivenessReport(BaseModel):
     live: list[AgentLiveness]
     unregistered_check_ins_refused: int = 0
     unregistered_check_in_cap: int = 0
+    #: Check-ins from an id the registry has no ACTIVE record for, recorded with status ``unregistered`` and seen inside
+    #: the window: a shadow agent nobody registered, which is also told to halt. An older ghost ages out of this list.
+    unregistered: list[AgentLiveness] = Field(default_factory=list)
     note: str = (
         "Stale = no check-in inside the window. It is NOT evidence that the "
         "process is dead, and a live row is only evidence that the agent "
@@ -337,6 +342,29 @@ def _allowlist() -> set[str]:
     raw = os.environ.get("FIELD_KILL_ENDPOINT_ALLOWLIST", "")
     # lower-cased: the hostname it is compared with (urlsplit(...).hostname) always is. Matching stays EXACT.
     return {part.strip().lower() for part in raw.split(",") if part.strip()}
+
+
+#: What `urlsplit(endpoint).hostname` can be: a DNS-style name (letters, digits, `.`, `-`, `_`; no port, scheme, path,
+#: userinfo, wildcard or space) or an IP literal WITHOUT brackets.
+_BARE_HOST = re.compile(r"[a-z0-9_]([a-z0-9._-]*[a-z0-9._])?")
+
+
+def _usable_entry(entry: str) -> bool:
+    if _BARE_HOST.fullmatch(entry):
+        return True
+    try:
+        ipaddress.ip_address(entry)
+    except ValueError:
+        return False
+    return True
+
+
+def _allowlist_unusable() -> int:
+    """How many DISTINCT allowlist entries can never equal a hostname (S10-16): `host:8090`, `http://host`, `[::1]`, `host/path`,
+    `*.host`. A number only: an entry is operator text and never leaves in a response (C-1189). Matching is unchanged (such an
+    entry never matched), and the entries are not dropped from `_allowlist()`: an allowlist of only bad entries must still
+    answer `host_not_allowlisted`, not `allowlist_unset`."""
+    return sum(1 for entry in _allowlist() if not _usable_entry(entry))
 
 
 def _parse_method(raw: str | None) -> str | None:
@@ -815,6 +843,7 @@ def create_app(
                 "ledger_note_failures": app.state.ledger_note_failures.value,
                 "heartbeats_refused": app.state.heartbeats_refused.value,
                 "heartbeat_ids_refused": app.state.heartbeat_ids_refused.value,
+                "allowlist_entries_unusable": _allowlist_unusable(),
                 **op_health.health_fields(manifest_refs=_manifest_refs)}
 
     @app.post("/kill/{agent_id}", response_model=KillReport)
@@ -1044,6 +1073,17 @@ def create_app(
                 status=record.get("status", "<unknown>"),
             )
             (live if last_seen >= cutoff else stale).append(entry)
+        active_ids = {record["agent_id"] for record in agents}
+        unregistered = [
+            AgentLiveness(
+                agent_id=agent_id,
+                last_seen=row["last_seen"].isoformat(),
+                age_seconds=round((now - row["last_seen"]).total_seconds(), 3),
+                status="unregistered",
+            )
+            for agent_id, row in sorted(rows.items())
+            if row["status"] == "unregistered" and agent_id not in active_ids and row["last_seen"] >= cutoff
+        ]
         return LivenessReport(
             stale_after_seconds=stale_after,
             checked_at=now.isoformat(),
@@ -1051,6 +1091,7 @@ def create_app(
             live=live,
             unregistered_check_ins_refused=app.state.heartbeats_refused.value,
             unregistered_check_in_cap=MAX_UNREGISTERED_HEARTBEATS,
+            unregistered=unregistered,
         )
 
     @app.post("/drill/{agent_id}", response_model=DrillReport)

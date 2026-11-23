@@ -93,10 +93,16 @@ def test_the_503_detail_and_the_logs_show_the_origin_only_and_the_call_keeps_the
         client, stub = gateway_with(URL)
         r = client.post("/v1/messages", json=MSG, headers=HEADERS)
     assert r.status_code == 503
-    assert "sentinel.invalid:8004" in r.text
+    # main's #1295: the 503 body is a fixed category; the origin is in the exception's own message only
+    assert r.json()["detail"] == "sentinel check did not happen — refusing: sentinel unreachable"
     for canary in (PASSWORD, TOKEN, "svc-user"):
         assert_absent(canary, r.text, caplog.text)
     assert stub.posted == [URL.rstrip("/") + "/check"]               # the real call still goes to the full URL
+    with pytest.raises(SentinelUnavailable) as exc:
+        SentinelClient(client=DownClient(), base_url=URL, timeout=1.0).check("a-1", "t-1", "egress")
+    assert "http://sentinel.invalid:8004" in str(exc.value)
+    for canary in (PASSWORD, TOKEN, "svc-user", "base/path"):
+        assert_absent(canary, str(exc.value))
 
 
 def test_the_health_sentinel_url_of_a_plain_origin_is_unchanged():
@@ -156,10 +162,16 @@ def test_a_hostname_with_underscore_hyphen_or_dot_is_shown_c846(host):
     assert public_origin(f"http://{host}:8004") == f"http://{host}:8004"
 
 
-def test_the_503_text_names_the_exception_type_c846():
-    """The type name (never the message) tells the caller which failure mode occurred."""
+def test_the_log_names_the_exception_type_c846(caplog):
+    """The type name (never the message) says which failure mode occurred. main's #1295 keeps it out of the 503 body
+    and logs it; #1272 does not chain the transport exception, so the class rides on SentinelUnavailable.failure."""
+    caplog.set_level(logging.WARNING, logger="force_gateway")
     client, _ = gateway_with(URL)
-    assert "RuntimeError" in client.post("/v1/messages", json=MSG, headers=HEADERS).text
+    r = client.post("/v1/messages", json=MSG, headers=HEADERS)
+    assert "RuntimeError" not in r.text
+    logged = " ".join(rec.getMessage() for rec in caplog.records if rec.name == "force_gateway")
+    assert "RuntimeError" in logged
+    assert_absent(PASSWORD, logged)
 
 
 # ---- roley.reviewer C1 on #1272: the success path (a sentinel that answers) logs no userinfo, path or query ----------
@@ -224,3 +236,27 @@ def test_the_filter_rewrites_only_a_sentinel_origin_and_keeps_the_record():
     assert f.filter(mine) is True and mine.args[1] == "http://sentinel.example:8004"
     other = rec("https://api.example.org/v1/messages?x=1")
     assert f.filter(other) is True and other.args[1] == "https://api.example.org/v1/messages?x=1"
+
+
+@pytest.mark.parametrize("scheme,port", [("http", 80), ("https", 443)])
+def test_an_explicit_default_port_is_filtered_too_r1(caplog, scheme, port):
+    """reviewer-R1 on #1272: httpx logs http://h:80/... as http://h/... (and https :443 the same way), while the
+    configured base keeps the port; the filter compares both without the default port. A real httpx client on a
+    MockTransport produces httpx's own request line; nothing leaves the process."""
+    import httpx
+
+    def handler(request):
+        return httpx.Response(200, json={"decision": "ALLOW", "clause_id": None})
+
+    url = f"{scheme}://svc-user:{PASSWORD}@sentinel-r1.invalid:{port}/basepath-Qp41?token={TOKEN}#frag"
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http:
+        with caplog.at_level(logging.DEBUG):
+            verdict = SentinelClient(client=http, base_url=url, timeout=5.0).check("a-1", "t-1", "egress")
+    assert verdict["decision"] == "ALLOW"
+    lines = [r.getMessage() for r in caplog.records if r.name == "httpx" and r.getMessage().startswith("HTTP Request:")]
+    assert lines == [f'HTTP Request: POST {scheme}://sentinel-r1.invalid "HTTP/1.1 200 OK"']
+    text = caplog.text + " ".join(repr(r.args) for r in caplog.records)
+    assert_absent(PASSWORD, text)
+    assert_absent(TOKEN, text)
+    for marker in ("svc-user", "basepath-Qp41", "#frag"):
+        assert marker not in text, marker

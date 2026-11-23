@@ -1132,6 +1132,46 @@ def test_heavy_read_gate_width(tmp_path, monkeypatch, setting, width):
             t.join(10)
 
 
+@pytest.mark.parametrize("method,path_fn", [
+    ("GET", lambda tmp: "/verify"),
+    ("GET", lambda tmp: "/events"),
+    ("POST", lambda tmp: f"/export?out_dir={tmp / 'bundles'}"),
+])
+def test_every_served_heavy_read_waits_on_the_read_gate(tmp_path, monkeypatch, method, path_fn):
+    """B-1075-TESTS: test_heavy_read_gate_width only drives store.snapshot(); a /verify, /events or /export that
+    skipped the gate survived it. Hold the ONLY slot; the served route must not answer until it is released."""
+    monkeypatch.setenv("FIELD_LEDGER_READ_CONCURRENCY", "1")
+    s, p, hashes = three_segments(tmp_path / "ledger")
+    app = create_app(store=s)
+    held, release, done = threading.Event(), threading.Event(), threading.Event()
+    answers: list = []
+
+    def hold():
+        with s._gate():
+            held.set()
+            release.wait(30)
+
+    def call():
+        answers.append(TestClient(app).request(method, path_fn(tmp_path)))
+        done.set()
+
+    holder = threading.Thread(target=hold)
+    holder.start()
+    assert held.wait(10)
+    caller = threading.Thread(target=call, daemon=True)
+    caller.start()
+    try:
+        assert not done.wait(0.7), f"{method} {path_fn(tmp_path)} answered while the only read-gate slot was held"
+        release.set()
+        assert done.wait(10) and answers[0].status_code == 200, answers
+    finally:
+        release.set()
+        holder.join(10)
+        caller.join(10)
+        for lane in app.state.lanes.values():
+            lane.shutdown(wait=False, cancel_futures=True)
+
+
 # ------------------------------------------ C2PD-6 / C2PD-7: served startup
 
 
