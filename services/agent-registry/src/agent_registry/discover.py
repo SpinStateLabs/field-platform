@@ -59,8 +59,12 @@ AI_NODE_MARKERS = (
 
 # Service-account naming patterns that indicate automation identity.
 # ``ai`` counts as a token only at the start of the name or after a separator: kai_nakamura, rai-chu and
-# jsmith@thai.example are people (S12-11)
-ACCOUNT_PATTERNS = re.compile(r"(^svc[-_.]|^bot[-_.]|[-_.]bot$|agent|automation|(?:^|[-_.@])ai[-_.])", re.I)
+# jsmith@thai.example are people (S12-11). AI vendor names count anywhere in the name, so a shadow account such as
+# openai-key or bob@openai.com is still found (don.reviewer B1 on #1024). Words that are also personal names (claude,
+# gemini, mistral) are not vendor tokens on their own: claude.martin is a person.
+ACCOUNT_PATTERNS = re.compile(
+    r"(^svc[-_.]|^bot[-_.]|[-_.]bot$|agent|automation|(?:^|[-_.@])(?:ml|gen|x)?ai[-_.]"
+    r"|openai|anthropic|huggingface|geminiai|mistralai|cohereai)", re.I)
 ACCOUNT_TYPE_MARKERS = ("service", "bot", "application", "automation")
 
 
@@ -154,7 +158,8 @@ def scan_service_accounts(
     """CSV columns (header required): account,type[,owner][,notes] — extras ignored.
 
     Raises ScanInputError on a CSV over 1 MiB, one the csv module cannot read (by
-    line), or a header with neither ``account`` nor ``name`` (never a silent 0)."""
+    line), a header with neither ``account`` nor ``name`` (never a silent 0), or a
+    row with more fields than the header (an unquoted comma; by line, never the row)."""
     check_size(csv_text, "accounts_csv")
     lines = _CountedLines(csv_text.lstrip("\ufeff"))  # an Excel export's BOM is not a header
     reader = csv.DictReader(lines)
@@ -164,11 +169,16 @@ def scan_service_accounts(
             raise ScanInputError(
                 "accounts_csv: the header has neither an 'account' nor a 'name' column"
             )
-        parsed = [row for row in reader]
+        parsed = [(reader.line_num, row) for row in reader]
     except csv.Error as exc:
         raise _unreadable_csv("accounts_csv", lines.count, exc) from None
     candidates, scanned = [], 0
-    for row in parsed:
+    for line_num, row in parsed:
+        if None in row:   # DictReader keeps the surplus fields of a long row under the key None, as a list
+            raise ScanInputError(
+                f"accounts_csv line {line_num}: more fields than the header "
+                "(quote any value that contains a comma)"
+            )
         row = {(k or "").strip().lower(): (v or "").strip() for k, v in row.items()}
         account = row.get("account") or row.get("name") or ""
         if not account:

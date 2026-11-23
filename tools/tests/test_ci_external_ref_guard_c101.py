@@ -232,3 +232,97 @@ def test_the_old_pattern_missed_what_the_report_said(tmp_path):
     missed = [n for n in report if not hits(old, MUST_MATCH[n], tmp_path)]
     assert missed == report[1:], missed
     assert all(hits(argv, MUST_MATCH[n], tmp_path) for n in report)
+
+
+# --- C-52 LOW follow-up: the guard step's known softeners are refused (a bounded allow/deny list, not a proof) --------------------------------------------------------
+# The grep tests above read the step's script; they would stay green if the step were made non-fatal around it. This is
+# an ALLOW-LIST over the air-gapped step, the fly-image-smoke job that holds it and the workflow defaults (the C-91
+# intent: that step and its job, not every step of ci.yml). A deny-list of spellings (`|| true`, `set +e`, ...) misses
+# `if: false`, `|| echo ok`, `|| /bin/true`, `|| (exit 0)`, `set +o errexit`, `shell: bash {0}`; so instead:
+#   * the step and the job carry no `if`, no `continue-on-error`, no `defaults`; the step carries no `shell`
+#     (a custom shell template such as `bash {0}` drops `-e`); no env var that changes bash (BASH_ENV, SHELLOPTS,
+#     BASHOPTS) at step, job or workflow level; and the workflow has no `defaults`;
+#   * in the script the only `||` is exactly one `|| rc=$?` (the shipped form, on the `grep -o -E` line: it records
+#     the status that the lines after it test); and the script has no `set`, `trap` or `exit 0`. The test does not
+#     check which line carries the `|| rc=$?`: a capture moved elsewhere leaves the grep fatal, not softened.
+# Not covered (a reviewer's job): a way to ignore a status that uses none of these, e.g. `grep ...; true` after the
+# tests, or editing the checks after the grep. The allow-list narrows the surface; it is not a proof either.
+BASH_ENV_NAMES = {"BASH_ENV", "SHELLOPTS", "BASHOPTS"}
+SCRIPT_BANNED = (
+    (re.compile(r"(^|[\s;&|(])set\s", re.M), "a `set` command (set +e, set +o errexit, ...)"),
+    (re.compile(r"(^|[\s;&|(])trap\s", re.M), "a `trap`"),
+    (re.compile(r"(^|[\s;&|(])shopt\s"), "a `shopt` command (shopt -u -o errexit, ...)"),
+    (re.compile(r"(^|[\s;&|(])(ba|da)?sh\s+\+[A-Za-z]*e"), "a `bash +e` / `sh +e` wrapper"),
+    (re.compile(r"\bexit\s+0\b"), "exit 0"),
+)
+
+
+def softness(ci_text: str) -> list[str]:
+    doc = yaml.safe_load(ci_text)
+    job = doc["jobs"]["fly-image-smoke"]
+    (step,) = [st for st in job["steps"] if STEP in st.get("name", "")]
+    out = []
+    for where, node in (("step", step), ("job fly-image-smoke", job)):
+        for key in ("if", "continue-on-error", "defaults"):
+            if key in node:
+                out.append(f"{where} carries {key}")
+    if "shell" in step:
+        out.append("step carries shell")
+    if "defaults" in doc:
+        out.append("workflow carries defaults")
+    for where, node in (("step", step), ("job", job), ("workflow", doc)):
+        env = node.get("env")
+        if isinstance(env, dict) and BASH_ENV_NAMES & {str(k).upper() for k in env}:
+            out.append(f"{where} env sets a bash-changing variable")
+    script = step["run"]
+    ors = re.findall(r"\|\|[^\n]*", script)
+    if len(ors) != 1 or ors[0].strip() != "|| rc=$?":
+        out.append(f"the step script has `||` other than the single `|| rc=$?`: {ors}")
+    for pat, label in SCRIPT_BANNED:
+        if pat.search(script):
+            out.append(f"the step script contains {label}")
+    return out
+
+
+def test_the_guard_step_is_not_softened():
+    assert softness(CI.read_text(encoding="utf-8")) == []
+
+
+STEP_NAME = "      - name: The estate root serves the branded ops console, air-gapped (no external fetches)\n"
+JOB = "  fly-image-smoke:\n"
+GREP_HEAD = "          rc=0\n          grep -o -E"
+SOFT_MUTANTS = {
+    "continue-on-error on the step": (STEP_NAME, STEP_NAME + "        continue-on-error: true\n"),
+    "continue-on-error on the job": (JOB, JOB + "    continue-on-error: true\n"),
+    "if: false on the step": (STEP_NAME, STEP_NAME + "        if: false\n"),
+    "if: false on the job": (JOB, JOB + "    if: false\n"),
+    "shell: bash {0} on the step": (STEP_NAME, STEP_NAME + "        shell: bash {0}\n"),
+    "shell: bash on the step": (STEP_NAME, STEP_NAME + "        shell: bash\n"),
+    "defaults.run.shell on the job": (JOB, JOB + "    defaults:\n      run:\n        shell: bash {0}\n"),
+    "defaults.run.shell on the workflow": ("\njobs:\n", "\ndefaults:\n  run:\n    shell: bash {0}\n\njobs:\n"),
+    "BASH_ENV on the step": (STEP_NAME, STEP_NAME + "        env:\n          BASH_ENV: /dev/null\n"),
+    "SHELLOPTS on the job": (JOB, JOB + "    env:\n      SHELLOPTS: braceexpand\n"),
+    "|| true after the grep": ('root.flat" || rc=$?', 'root.flat" || rc=$? || true'),
+    "|| true replacing the status capture": ('root.flat" || rc=$?', 'root.flat" || true'),
+    "|| echo ok after the grep": ('root.flat" || rc=$?', 'root.flat" || echo ok'),
+    "|| /bin/true after the grep": ('root.flat" || rc=$?', 'root.flat" || /bin/true'),
+    "|| (exit 0) after the grep": ('root.flat" || rc=$?', 'root.flat" || (exit 0)'),
+    "|| : after the curl": ("http://localhost:8080/\n          grep -qi", "http://localhost:8080/ || :\n          grep -qi"),
+    "|| echo after a test grep": ("'x-field-operator-key' \"$RUNNER_TEMP/root.html\"\n", "'x-field-operator-key' \"$RUNNER_TEMP/root.html\" || echo missing\n"),
+    "|| exit 0": ('exit 1\n          fi\n          if [ "$rc" -ne 1 ]', 'exit 1\n          fi || exit 0\n          if [ "$rc" -ne 1 ]'),
+    "set +e": (GREP_HEAD, "          set +e\n" + GREP_HEAD),
+    "set +o errexit": (GREP_HEAD, "          set +o errexit\n" + GREP_HEAD),
+    "shopt -u -o errexit": (GREP_HEAD, "          shopt -u -o errexit\n" + GREP_HEAD),
+    "a bash +e -c wrapper": (GREP_HEAD, "          bash +e -c 'true'\n" + GREP_HEAD),
+    "trap": (GREP_HEAD, "          trap 'exit $((0))' EXIT\n" + GREP_HEAD),
+    "the status capture moved off the grep line": ('root.flat" || rc=$?', 'root.flat"'),
+    "a bare exit 0 before the grep": (GREP_HEAD, "          exit 0\n" + GREP_HEAD),
+}
+
+
+@pytest.mark.parametrize("name", sorted(SOFT_MUTANTS))
+def test_each_softening_is_detected(name):
+    old, new = SOFT_MUTANTS[name]
+    text = CI.read_text(encoding="utf-8")
+    assert text.count(old) == 1, f"mutation anchor not found exactly once: {old!r}"
+    assert softness(text.replace(old, new)) != [], "the softening went undetected"

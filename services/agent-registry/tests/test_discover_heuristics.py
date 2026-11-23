@@ -25,6 +25,24 @@ def test_ai_tokens_are_still_flagged(name):
     assert ACCOUNT_PATTERNS.search(name)
 
 
+@pytest.mark.parametrize("name", ["openai-key", "openai_worker", "bob@openai.com", "mlai_worker", "azure-openai-svc",
+                                  "anthropic-prod", "x@ai.example", "x.ai.y", "genai.runner", "xai-key"])
+def test_vendor_named_ai_accounts_are_still_flagged(name):
+    """don.reviewer B1 on #1024: the ``ai`` anchor must not lose an AI vendor account typed as a user or left blank."""
+    assert ACCOUNT_PATTERNS.search(name)
+
+
+@pytest.mark.parametrize("name", ["claude.martin", "gemini_ross", "mistral.jean", "shanghai.li", "mikhail-p"])
+def test_a_person_whose_name_is_or_holds_a_vendor_word_is_not_flagged(name):
+    assert not ACCOUNT_PATTERNS.search(name)
+
+
+def test_a_vendor_account_with_a_human_type_is_a_candidate():
+    csv_text = HEADER + "openai-key,human,o@x.test,\n"
+    cands, _ = scan_service_accounts(csv_text, [])
+    assert [c.identifier for c in cands] == ["openai-key"]
+
+
 def test_humans_with_ai_inside_the_name_are_not_candidates():
     csv_text = HEADER + "kai_nakamura,human,k@x.test,\nrai-chu,human,r@x.test,\nai-pricing-experiment,human,p@x.test,\n"
     cands, _ = scan_service_accounts(csv_text, [])

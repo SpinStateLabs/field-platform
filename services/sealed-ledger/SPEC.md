@@ -98,8 +98,10 @@ can re-verify offline.
   `FIELD_LEDGER_URL` is set, else refuse unless `--offline`.
 
 **Explicit non-goals (v0.1)**
-- No Merkle proofs and no per-event signatures (the export signs a bundle,
-  anchors sign an anchor record; events themselves are unsigned until F2).
+- No Merkle proofs. Per-event signatures are optional (F2: the ledger signs an
+  append when it holds a key; F2b: a caller's own signature); an event without a
+  key, or appended with `FIELD_LEDGER_REQUIRE_SIGNING=0` and no key, is
+  unsigned. The export signs a bundle and anchors sign an anchor record.
 - No proof that a filtered export is complete, and no proof of ledger
   contents from an unsigned bundle (internal consistency only).
 - No per-agent retention and no deletion: retention is estate-level (one

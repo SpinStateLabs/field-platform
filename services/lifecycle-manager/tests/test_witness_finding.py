@@ -154,7 +154,7 @@ def test_real_ledger_client_against_the_real_ledger_app(tmp_path):
     down = LedgerClient(client=Down(), base_url="http://127.0.0.1:9")
     report = LifecycleEngine(registry=FakeRegistry(), delegation=NoTokens(), ledger=down,
                              witness=watch).sweep(ROSTER, now=NOW)
-    assert report.witness.status == "unavailable" and "connection refused" in report.witness.detail
+    assert report.witness.status == "unavailable" and "ConnectionError" in report.witness.detail   # S7-5: the exception type only
 
 
 def test_markdown_section_only_when_present():

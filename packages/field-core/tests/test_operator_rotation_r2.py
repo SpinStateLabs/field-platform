@@ -727,3 +727,38 @@ def test_slot_witness_reports_a_duplicate_key_file_as_unavailable(armed):
     assert oh.slot_witness() is None                      # None means "does not pass", as for the loader
     view = oh._read_registry(oa.mode())[0]
     assert "duplicate JSON key" in view["last_registry_error"]
+
+
+# --- B13 sibling: a verify-hash body that repeats a key is 422, never read last-wins ---------------------------
+
+HASH0 = "0" * 64
+
+
+@pytest.mark.parametrize("body", [
+    # last-wins would answer for "other" while a reader of the request sees "don"
+    ('{"operator_id": "don", "key_sha256": "%s", "operator_id": "other"}' % H(KEY_OTHER)).encode(),
+    ('{"operator_id": "don", "key_sha256": "%s", "key_sha256": "%s"}' % (HASH0, H(KEY_DON))).encode(),
+    ('{"operator_id": "don", "operator_id": "don", "key_sha256": "%s"}' % H(KEY_DON)).encode(),   # same value
+], ids=["operator_id swapped", "key_sha256 swapped", "same value repeated"])
+def test_verify_hash_refuses_a_repeated_key(armed, body):
+    client, _ = _client()
+    r = client.post(oh.VERIFY_HASH_PATH, content=body, headers={authn.HEADER: SECRET})
+    assert r.status_code == 422 and r.json() == {"detail": oh.BAD_BODY_DETAIL}
+    assert H(KEY_OTHER) not in r.text and H(KEY_DON) not in r.text and "other" not in r.text
+
+
+def test_verify_hash_without_repeats_still_answers(armed):
+    """Control: the same request with each key once is answered (the refusal above is the repeat, not the shape)."""
+    client, _ = _client()
+    r = client.post(oh.VERIFY_HASH_PATH, headers={authn.HEADER: SECRET},
+                    content=('{"operator_id": "other", "key_sha256": "%s"}' % H(KEY_OTHER)).encode())
+    assert r.status_code == 200 and (r.json()["operator_id"], r.json()["matched"]) == ("other", "current")
+
+
+def test_verify_hash_answer_refuses_a_repeated_key_before_reading_the_registry():
+    """The function itself, with no registry configured: a repeat is the fixed 422; one key each reaches the
+    registry read (503 here, as no registry is set), so the parse is what refused."""
+    once = ('{"operator_id": "don", "key_sha256": "%s"}' % HASH0).encode()
+    twice = ('{"operator_id": "don", "key_sha256": "%s", "operator_id": "don"}' % HASH0).encode()
+    assert oh.verify_hash_answer(twice) == (422, {"detail": oh.BAD_BODY_DETAIL})
+    assert oh.verify_hash_answer(once)[0] == 503

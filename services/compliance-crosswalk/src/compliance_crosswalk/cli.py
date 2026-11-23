@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
 import typer
+import yaml
 
 for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
@@ -14,6 +16,62 @@ for _stream in (sys.stdout, sys.stderr):
 from compliance_crosswalk import __version__
 
 app = typer.Typer(name="crosswalk", help="Compliance crosswalk.", no_args_is_help=True)
+
+
+def _die(message: str) -> "typer.Exit":
+    """One line on stderr, exit 2: a fixed text naming the option, never exception text (it can quote a path's
+    contents), so a bad file is an error and not a traceback (S6-23)."""
+    typer.echo(f"error: {message}", err=True)
+    return typer.Exit(code=2)
+
+
+def _load(manifest: str) -> dict:
+    """The manifest as a dict, or a one-line exit 2. ``manifest`` is a plain string, not a click ``Path``: click stats a
+    Path while parsing, and a NUL byte there escapes as a ValueError before the command runs."""
+    from field_core.validation import load_manifest
+
+    try:
+        return load_manifest(manifest)
+    except (OSError, UnicodeDecodeError, yaml.YAMLError, ValueError, RecursionError) as exc:
+        raise _die(f"cannot read the manifest ({type(exc).__name__}); it must be a UTF-8 YAML mapping; "
+                   "nothing written") from None
+
+
+def _check_output(path: str, option: str) -> None:
+    """Refuse an output path that cannot be written BEFORE any network call or other work: a NUL byte, a directory, a
+    missing or unwritable parent."""
+    try:
+        p = Path(path)
+        # is_dir() answers False (not an error) for a path holding a NUL byte, so that case is named explicitly
+        ok = ("\x00" not in path and not p.is_dir() and p.parent.is_dir()
+              and os.access(p.parent, os.W_OK | os.X_OK))
+    except (OSError, ValueError):
+        ok = False
+    if not ok:
+        raise _die(f"cannot write {option}: not a writable file path; nothing written")
+
+
+def _write_all(outputs: list[tuple[str, str, str]]) -> None:
+    """Write every ``(path, text, option)`` to a temporary name beside it, and replace the real files only after ALL of
+    them were written, so a failing second output leaves no half-pack behind."""
+    temps: list[tuple[Path, Path]] = []
+    try:
+        for path, text, option in outputs:
+            final = Path(path)
+            tmp = final.with_name(f".{final.name}.{os.getpid()}.tmp")
+            try:
+                tmp.write_text(text, encoding="utf-8")
+            except (OSError, ValueError, UnicodeEncodeError):
+                raise _die(f"cannot write {option}; nothing written") from None
+            temps.append((tmp, final))
+        for tmp, final in temps:
+            try:
+                os.replace(tmp, final)
+            except OSError:
+                raise _die("cannot write the output files; nothing was installed") from None
+    finally:
+        for tmp, _ in temps:
+            tmp.unlink(missing_ok=True)
 
 
 @app.command()
@@ -42,21 +100,22 @@ def frameworks() -> None:
 
 @app.command()
 def run(
-    manifest: Path = typer.Argument(..., help="FIELD manifest YAML"),
+    manifest: str = typer.Argument(..., help="FIELD manifest YAML"),
     agent_id: str = typer.Option(None, "--agent-id",
                                  help="Collect live evidence for this agent"),
-    markdown: Path = typer.Option(None, "--markdown", help="Write report here"),
+    markdown: str = typer.Option(None, "--markdown", help="Write report here"),
 ) -> None:
     """Evaluate coverage: declared vs. evidenced (offline unless --agent-id)."""
     from compliance_crosswalk.api import collect_evidence
     from compliance_crosswalk.engine import evaluate, render_markdown
-    from field_core.validation import load_manifest
 
-    data = load_manifest(manifest)
+    data = _load(manifest)
+    if markdown:
+        _check_output(markdown, "--markdown")
     sources = collect_evidence(agent_id) if agent_id else None
     report = evaluate(data, agent_id=agent_id, sources=sources)
     if markdown:
-        markdown.write_text(render_markdown(report), encoding="utf-8")
+        _write_all([(markdown, render_markdown(report), "--markdown")])
         typer.echo(f"crosswalk written to {markdown}")
     else:
         typer.echo(report.model_dump_json(indent=2))
@@ -98,13 +157,11 @@ def self_manifest() -> None:
 
 @app.command()
 def suggest(
-    manifest: Path = typer.Argument(..., help="FIELD manifest YAML"),
+    manifest: str = typer.Argument(..., help="FIELD manifest YAML"),
 ) -> None:
     """Gated mapping suggestions for unmapped manifest paths (ADR 07).
     SUGGESTION ONLY — below the precision floor renders as
     'unmapped — review required', never as a mapping."""
-    from field_core.validation import load_manifest
-
     from compliance_crosswalk.suggestions import (
         resolve_suggest_floor,
         resolve_suggester,
@@ -123,12 +180,12 @@ def suggest(
         import os
 
         import httpx
-        from field_core.authn import auth_headers
+        from field_core.guarded_operator import perimeter_headers
 
         base = os.environ.get("FIELD_GOVERNOR_URL", "http://127.0.0.1:8006").rstrip("/")
         try:
             resp = httpx.get(f"{base}/status/compliance-crosswalk",
-                             timeout=5.0, headers=auth_headers())
+                             timeout=5.0, headers=perimeter_headers())
         except Exception as exc:
             typer.echo(f"governor unreachable — refusing unmetered "
                        f"suggestions: {type(exc).__name__}", err=True)
@@ -140,7 +197,7 @@ def suggest(
                        err=True)
             raise typer.Exit(code=1)
 
-    data = load_manifest(manifest)
+    data = _load(manifest)
     results = run_suggest(data, suggester, resolve_suggest_floor())
     for s in results:
         typer.echo(s.model_dump_json())
@@ -152,25 +209,26 @@ def suggest(
 
 @app.command()
 def pack(
-    manifest: Path = typer.Argument(..., help="FIELD manifest YAML"),
+    manifest: str = typer.Argument(..., help="FIELD manifest YAML"),
     signer: str = typer.Option(..., "--signer",
                                help="Named human signer — no pack without one"),
     agent_id: str = typer.Option(None, "--agent-id",
                                  help="Collect live evidence for this agent"),
-    out_md: Path = typer.Option(None, "--out-md"),
-    out_json: Path = typer.Option(None, "--out-json"),
+    out_md: str = typer.Option(None, "--out-md"),
+    out_json: str = typer.Option(None, "--out-json"),
 ) -> None:
     """Generate the evidence pack (ADR 07). Exit 3 when stale regulatory
     flags block generation — re-review them first (regwatch clear)."""
     import json
 
-    from field_core.validation import load_manifest
-
     from compliance_crosswalk.api import collect_evidence
     from compliance_crosswalk.evidence_pack import InvalidSigner, StalePackError, generate_pack
     from compliance_crosswalk.staleness import StaleStore
 
-    data = load_manifest(manifest)
+    data = _load(manifest)
+    for path, option in ((out_md, "--out-md"), (out_json, "--out-json")):
+        if path:
+            _check_output(path, option)             # before collect_evidence makes its network calls
     sources = collect_evidence(agent_id) if agent_id else None
     try:
         md, payload = generate_pack(data, signer=signer,
@@ -184,12 +242,15 @@ def pack(
         typer.echo("re-review with: crosswalk regwatch clear <framework> "
                    "--reviewed-by NAME", err=True)
         raise typer.Exit(code=3)
+    outputs = []
     if out_md:
-        out_md.write_text(md, encoding="utf-8")
+        outputs.append((out_md, md, "--out-md"))
+    if out_json:
+        outputs.append((out_json, json.dumps(payload, indent=2, default=str), "--out-json"))
+    _write_all(outputs)
+    if out_md:
         typer.echo(f"pack written to {out_md}")
     if out_json:
-        out_json.write_text(json.dumps(payload, indent=2, default=str),
-                            encoding="utf-8")
         typer.echo(f"pack json written to {out_json}")
     if not out_md and not out_json:
         typer.echo(md)
@@ -311,6 +372,26 @@ def regwatch_status() -> None:
     typer.echo(json.dumps(StaleStore().status(), indent=2, default=str))
 
 
+_MAX_REASON = 500
+_MAX_VERSION = 100
+
+
+def _plain_text_problem(option: str, value: str, limit: int) -> str | None:
+    """Why a stored, printed label is refused, or None: not blank, at most ``limit`` characters, no control, format
+    or line-break character (the Cc/Cf/Zl/Zp rule of staleness._plain_reviewer_name). Never echoes the value."""
+    import unicodedata
+
+    text = value.strip()
+    if not text:
+        return f"{option} must not be blank"
+    if len(text) > limit:
+        return f"{option} is longer than {limit} characters"
+    if any(unicodedata.category(ch) in {"Cc", "Cf", "Zl", "Zp"} for ch in text):
+        return (f"{option} must be plain text (no control characters, invisible format characters or "
+                "line breaks)")
+    return None
+
+
 @regwatch_app.command(name="set-stale")
 def regwatch_set_stale(
     framework: str = typer.Argument(...),
@@ -319,9 +400,19 @@ def regwatch_set_stale(
 ) -> None:
     """Flag a framework's corpus stale — pack generation blocks until a
     named re-review clears it."""
+    from compliance_crosswalk.mapping import FRAMEWORKS
     from compliance_crosswalk.staleness import StaleStore, affected_controls
 
-    flag = StaleStore().mark(framework, reason, new_version)
+    if framework not in FRAMEWORKS:     # S-2-16 (rebuild of PR 600): a named line, not a ValueError traceback
+        raise _die(f"unknown framework; known: {', '.join(sorted(FRAMEWORKS))}")
+    problem = _plain_text_problem("--reason", reason, _MAX_REASON) or (
+        None if new_version is None
+        else _plain_text_problem("--new-version", new_version, _MAX_VERSION))
+    if problem:
+        typer.echo(f"REFUSED (nothing written): {problem}", err=True)
+        raise typer.Exit(code=2)
+    flag = StaleStore().mark(framework, reason.strip(),
+                             None if new_version is None else new_version.strip())
     typer.echo(f"stale: {flag['framework']} since {flag['flagged_at']} — "
                f"{flag['reason']}")
     typer.echo(f"affected controls: "
@@ -336,9 +427,21 @@ def regwatch_clear(
     reviewed_by: str = typer.Option(..., "--reviewed-by",
                                     help="Named human re-reviewer"),
 ) -> None:
+    from compliance_crosswalk.mapping import FRAMEWORKS
     from compliance_crosswalk.staleness import StaleStore
 
-    record = StaleStore().clear(framework, reviewed_by)
+    if framework not in FRAMEWORKS:
+        raise _die(f"unknown framework; known: {', '.join(sorted(FRAMEWORKS))}")
+    if not reviewed_by.strip():
+        raise _die("--reviewed-by must be a non-empty name: a re-review is NAMED")
+    try:
+        record = StaleStore().clear(framework, reviewed_by)
+    except KeyError:
+        raise _die(f"no active flag for {framework}")
+    except ValueError:
+        # StaleStore.clear refuses a reviewer name that is not plain text (PR 422/618 rule); a fixed line, never the
+        # name or the exception text (R-PR600 C2: without this the refusal would be a traceback)
+        raise _die("--reviewed-by is not an acceptable reviewer name: a re-review is NAMED in plain text")
     typer.echo(f"cleared: {record['framework']} re-reviewed by "
                f"{record['reviewed_by']} at {record['cleared_at']}")
 
@@ -367,6 +470,35 @@ def serve(
     import uvicorn
 
     uvicorn.run(create_app(every=every), host=host, port=port)
+
+
+def _store_refusal_is_exit_2(fn):
+    """A stale-flags file that cannot be trusted (unreadable, not JSON, a repeated key, a wrong type) is one fixed
+    ``error:`` line and exit 2, never a traceback and never an empty store (an empty store would reopen the evidence-pack
+    gate). The line is the file's name and what is wrong, never the file's text. Nothing is written on this path."""
+    import functools
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        from compliance_crosswalk.staleness import StaleStoreError
+
+        try:
+            return fn(*args, **kwargs)
+        except StaleStoreError as exc:
+            typer.echo(f"error: {exc}", err=True)
+            raise typer.Exit(code=2) from None
+
+    return wrapper
+
+
+#: The commands that open the stale-flags store. Wrapped here, after every definition, so each one refuses a damaged
+#: store the same way.
+_STORE_COMMANDS = frozenset({"pack", "regwatch_check", "regwatch_check_file", "regwatch_status", "regwatch_set_stale",
+                             "regwatch_clear"})
+for _typer_app in (app, regwatch_app):
+    for _command in _typer_app.registered_commands:
+        if _command.callback is not None and _command.callback.__name__ in _STORE_COMMANDS:
+            _command.callback = _store_refusal_is_exit_2(_command.callback)
 
 
 if __name__ == "__main__":  # pragma: no cover

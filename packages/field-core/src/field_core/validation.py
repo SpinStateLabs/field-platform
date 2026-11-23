@@ -53,12 +53,56 @@ class ValidationResult(BaseModel):
         return self.status is not ValidationStatus.INVALID
 
 
+_MERGE_TAG = "tag:yaml.org,2002:merge"
+
+
+def _duplicate_key_path(node: yaml.Node, dotted: str, seen: set[int]) -> str | None:
+    """Dotted path of the first mapping key repeated within one mapping, or None. Walks the composed tree
+    (mappings and sequences); an alias is walked once. YAML merge keys (``<<``) are not keys."""
+    if id(node) in seen:
+        return None
+    seen.add(id(node))
+    if isinstance(node, yaml.SequenceNode):
+        for i, item in enumerate(node.value):
+            hit = _duplicate_key_path(item, f"{dotted}[{i}]", seen)
+            if hit is not None:
+                return hit
+    elif isinstance(node, yaml.MappingNode):
+        keys: set[tuple[str, str]] = set()
+        for key_node, value_node in node.value:
+            if isinstance(key_node, yaml.ScalarNode) and key_node.tag != _MERGE_TAG:
+                ident = (key_node.tag, key_node.value)
+                here = f"{dotted}.{key_node.value}" if dotted else key_node.value
+                if ident in keys:
+                    return here
+                keys.add(ident)
+            else:
+                here = dotted
+            hit = _duplicate_key_path(value_node, here, seen)
+            if hit is not None:
+                return hit
+    return None
+
+
 def load_manifest(path: str | Path) -> dict[str, Any]:
-    """Load a manifest YAML (or JSON — YAML is a superset) into a dict."""
-    text = Path(path).read_text(encoding="utf-8")
+    """Load a manifest YAML (or JSON — YAML is a superset) into a dict. A repeated mapping key is refused (see
+    ``parse_manifest_text``)."""
+    return parse_manifest_text(Path(path).read_text(encoding="utf-8"), path)
+
+
+def parse_manifest_text(text: str, source: str | Path = "<text>") -> dict[str, Any]:
+    """Parse manifest text already in memory (the resolver reads a bounded number of bytes once and parses
+    THOSE, so the digest it caches and the manifest it serves come from the same bytes; C-1086). A repeated mapping
+    key is refused (``ValueError`` naming the dotted path, never a value): ``safe_load`` keeps the last one without
+    a word."""
+    root = yaml.compose(text, Loader=yaml.SafeLoader)
+    if root is not None:
+        dup = _duplicate_key_path(root, "", set())
+        if dup is not None:
+            raise ValueError(f"manifest has a duplicate key at {dup}")
     data = yaml.safe_load(text)
     if not isinstance(data, dict):
-        raise ValueError(f"manifest at {path} did not parse to a mapping")
+        raise ValueError(f"manifest at {source} did not parse to a mapping")
     return data
 
 
@@ -114,6 +158,8 @@ def validate_manifest_data(
     now: datetime | None = None,
 ) -> ValidationResult:
     now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:   # a naive clock is read as UTC (comparing it with the aware expiry raised TypeError)
+        now = now.replace(tzinfo=timezone.utc)
     critical: list[str] = []
     warnings: list[str] = []
     # Dotted paths a targeted rule below already names; a schema violation at or under one of them is not repeated.
