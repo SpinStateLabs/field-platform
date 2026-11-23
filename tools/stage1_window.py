@@ -185,8 +185,15 @@ def main(argv: list[str] | None = None) -> int:
                   "needs; no row written")
             return 1
         span = {"window_hours": round(hours, 2),
-                "window_end": int(after["taken_at"]),               # when the window closed: Stage 2 judges how old it is
+                # when the window closed. Nothing judges its age yet (no freshness limit at Stage 2): a follow-up row
+                "window_end": int(after["taken_at"]),
                 "services": len(before["counters"])}
+        if not sc.g18_evidence_ok(span):
+            # B5 review: the writer checks its row with the controller's own rule, so it never prints "recorded" for a
+            # row the controller ignores (a ninth service label, a window_end at or before the epoch)
+            print(f"[FAIL] the window is clean but its evidence is not a gate {GATE} row the stage controller counts "
+                  "(it needs window_hours >= 24, window_end > 0 and the eight services); no row written")
+            return 1
         try:                         # the record is written BEFORE the PASS line: a failed write must not look recorded
             sc.Records(args.records).append("gate", gate=GATE, ok=True, **sha, **span)
         except OSError as exc:

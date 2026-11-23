@@ -150,3 +150,40 @@ def test_the_row_stage1_window_writes_is_one_the_controller_counts(tmp_path):
     r.append("alerts_proven", ok=True)
     r.append("gate", gate="G22", ok=True)
     assert _refusal(r) is None
+
+
+# ---- B5 review (teammate-don on 6b7d072): the writer checks its own row ----------------------------------------------
+
+def test_stage1_window_writes_a_counted_row_at_exactly_24_hours(tmp_path):
+    b, a = _write(tmp_path, "b.json", _snap(0)), _write(tmp_path, "a.json", _snap(24 * 3600))
+    rec = tmp_path / "records.jsonl"
+    assert sw.main(["evaluate", "--before", b, "--after", a, "--records", str(rec)]) == 0
+    assert sc.Records(rec).gate_ok("G18")
+
+
+def test_stage1_window_writes_no_row_just_under_24_hours(tmp_path):
+    b, a = _write(tmp_path, "b.json", _snap(0)), _write(tmp_path, "a.json", _snap(24 * 3600 - 1))
+    rec = tmp_path / "records.jsonl"
+    assert sw.main(["evaluate", "--before", b, "--after", a, "--min-hours", "1", "--records", str(rec)]) == 1
+    assert not rec.exists()
+
+
+def _with_ninth_label(snap):
+    snap["counters"]["extra-service"] = {k: 0 for k in sc.COUNTER_KEYS}
+    return snap
+
+
+@pytest.mark.parametrize("case", ["ninth_label", "negative_taken_at"])
+def test_stage1_window_never_prints_recorded_for_a_row_the_controller_ignores(tmp_path, capsys, case):
+    if case == "ninth_label":
+        before, after = _with_ninth_label(_snap(0)), _with_ninth_label(_snap(30 * 3600))
+    else:
+        before, after = _snap(-40 * 3600), _snap(-10 * 3600)     # window_end before the epoch
+    b, a = _write(tmp_path, "b.json", before), _write(tmp_path, "a.json", after)
+    rec = tmp_path / "records.jsonl"
+    code = sw.main(["evaluate", "--before", b, "--after", a, "--records", str(rec)])
+    out = capsys.readouterr().out
+    assert "recorded gate G18" not in out
+    assert not sc.Records(rec).gate_ok("G18")
+    if code == 0:                                  # only acceptable if no row was written at all
+        assert not rec.exists()
