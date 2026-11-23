@@ -232,6 +232,10 @@ def generate_pack(
     if caller_sources is not None:
         coverage, asserted = _caller_asserted_coverage(manifest, agent_id, caller_sources, sources)
         evidence_status = "caller-asserted"
+        if agent_id is not None and not _any_source(sources):
+            # B1: the outage is a fact of the LIVE collection alone; whatever the caller's body holds (even {})
+            # cannot turn "the ledger was asked and nothing answered" into a clean-looking pack
+            evidence_status = "unknown"
     else:
         coverage = evaluate(manifest, agent_id=agent_id, sources=sources)
         if _any_source(sources):

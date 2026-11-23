@@ -65,6 +65,7 @@ from lifecycle_manager.engine import (
     LifecycleEngine,
     SweepConfig,
     SweepReport,
+    SweepUpstreamError,
     parse_roster,
 )
 
@@ -476,7 +477,7 @@ def scheduled_tick(app: FastAPI) -> dict[str, Any]:
             )
         except Exception:
             log.warning("lifecycle tick: ledger unreachable for failed marker")
-        return {"ok": False, "error": f"{error}: {exc}"}
+        return {"ok": False, "error": exc.detail if isinstance(exc, SweepUpstreamError) else f"{error}: {exc}"}
 
 
 def run_every(
@@ -629,6 +630,8 @@ def create_app(
             raise HTTPException(503, exc.detail)
         except RosterInvalid as exc:
             raise HTTPException(422 if exc.from_body else 503, exc.detail)
+        except SweepUpstreamError as exc:   # a registry or delegation failure: fixed text, no upstream text (S9-10)
+            raise HTTPException(502, exc.detail) from None
 
     @app.get("/findings")
     def findings() -> dict:

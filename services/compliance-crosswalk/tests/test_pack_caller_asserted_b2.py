@@ -160,6 +160,47 @@ def test_full_outage_with_agent_id_is_unknown_not_no_gaps(client, monkeypatch):
     assert {"control_id": "FC-L-01", "kind": "not-checked", "detail": LEDGER_NOT_CHECKED_GAP} in body["pack"]["gaps"]
 
 
+#: B1 (review of c66d9711): the outage is a property of the LIVE collection alone, whatever the caller's body holds
+_OUTAGE_BODIES = [
+    pytest.param({"sources": {}}, id="empty-sources-object"),
+    pytest.param({"sources": {"ledger_verify": None}}, id="caller-object-with-no-verdict"),
+    pytest.param({"sources": {"tokens": []}}, id="caller-object-no-negative-verdict"),
+    pytest.param(None, id="duplicate-sources-key-last-is-empty"),
+]
+
+
+@pytest.mark.parametrize("extra", _OUTAGE_BODIES)
+def test_full_outage_stays_unknown_whatever_the_caller_sources_hold(client, monkeypatch, extra):
+    import json
+
+    calls = _live(monkeypatch, EvidenceSources())  # collect_evidence answers nothing
+    base = {"signer": SIGNER, "manifest": resolved_manifest(), "agent_id": "agent-1"}
+    if extra is None:
+        # a duplicate ``sources`` key: the parser keeps the last value ({}); sent as raw JSON text
+        raw = json.dumps(base)[:-1] + ', "sources": ' + json.dumps(FORGED) + ', "sources": {}}'
+        r = client.post("/pack", content=raw, headers={"content-type": "application/json"})
+    else:
+        r = client.post("/pack", json={**base, **extra})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert calls == ["agent-1"]
+    assert body["pack"]["evidence_status"] == "unknown"
+    assert "- Evidence status: unknown" in body["markdown"]
+    assert EVIDENCE_UNKNOWN_HEADLINE in body["markdown"]
+    assert "No gaps recorded" not in body["markdown"]
+    assert {"control_id": "FC-L-01", "kind": "not-checked", "detail": LEDGER_NOT_CHECKED_GAP} in body["pack"]["gaps"]
+
+
+def test_caller_asserted_gap_label_text_is_pinned():
+    from compliance_crosswalk.evidence_pack import PACK_GAP_LABELS
+
+    assert PACK_GAP_LABELS["caller-asserted"] == "caller-asserted, not verified"
+    md, _ = generate_pack(
+        resolved_manifest(), signer=SIGNER, stale_store=_NoStale(), caller_sources=EvidenceSources(**FORGED)
+    )
+    assert "- FC-L-01 — caller-asserted, not verified: " + CALLER_ASSERTED_GAP in md
+
+
 def test_full_outage_is_unknown_on_the_cli_path_too():
     # generate_pack is what ``crosswalk pack --agent-id`` calls with collect_evidence's (all-None) result
     md, payload = generate_pack(

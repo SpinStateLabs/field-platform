@@ -85,24 +85,25 @@ def _safe_env(env: dict[str, str], shim: Path, tmp_path: Path) -> dict[str, str]
     return env
 
 
-# C-726 (reviewer C-693 F-C693-1): the real shim names a default profile path in code. The decoy finds it by SHAPE
-# (a drive, the profile directory, any account, then the file), so this test file names no account itself.
-_PROFILE = r"[A-Za-z]:\\" + "Us" + r"ers\\[^\\']+\\\.field-local\\"
+# C-726 (reviewer C-693 F-C693-1): the decoy finds the shim's real defaults by SHAPE, and
+# test_windows_pins_without_powershell_c726.py checks that this shape matches the shim's code exactly once per default.
+# Since B14 the defaults are built from $HOME (`Join-Path $HOME '.field-local\<name>'`), so no account is named here.
+_PROFILE = r"Join-Path \$HOME '\.field-local\\"
 
 
 def _real_default(name: str) -> "re.Pattern[str]":
-    return re.compile(_PROFILE + re.escape(name))
+    return re.compile(_PROFILE + re.escape(name) + "'")
 
 
 def decoy_shim(tmp_path: Path, real_tokens: Path, home: Path) -> Path:
-    """A copy of the REAL shim whose only change is its path literals: the rog-command token file
-    becomes `real_tokens`, the $HOME default becomes `home`, the default secret file a tmp path.
+    """A copy of the REAL shim whose only change is its path defaults: the $HOME token default becomes
+    `home`, the $HOME secret default a tmp path. `real_tokens` is a decoy the test plants where the old
+    one-account fallback pointed (B14 removed it): no run may ever read it.
     Every line of logic is the shim's own, so a fallback in it shows up here, against files the
     test owns, instead of against the real .field-local."""
     source = SHIM.read_text(encoding="utf-8")
-    swaps = {_real_default("tokens-gb10.json"): str(real_tokens),
-             _real_default("gb10-estate-secret"): str(tmp_path / "decoy-default-secret"),
-             r"Join-Path $HOME '.field-local\tokens-gb10.json'": f"Join-Path '{home}' 'tokens-gb10.json'"}
+    swaps = {_real_default("gb10-estate-secret"): f"Join-Path '{tmp_path}' 'decoy-default-secret'",
+             _real_default("tokens-gb10.json"): f"Join-Path '{home}' 'tokens-gb10.json'"}
     for old, new in swaps.items():
         if isinstance(old, re.Pattern):
             source, hits = old.subn(lambda _m, new=new: new, source)
@@ -395,16 +396,17 @@ def test_a_tokens_file_the_environment_names_is_never_replaced_by_another_file(t
     assert capture.requests == []
 
 
-def test_without_tokens_file_in_the_environment_the_default_and_its_fallback_are_kept(tmp_path, capture):
-    """Unchanged behaviour when FIELD_TOKENS_FILE is unset: the $HOME default, else the rog-command file."""
+def test_without_tokens_file_in_the_environment_only_the_home_default_is_used(tmp_path, capture):
+    """FIELD_TOKENS_FILE unset: the $HOME default and nothing else (B14 removed the one-account fallback). A missing
+    default is no token, never the decoy planted where the fallback used to point."""
     real = tmp_path / "decoy-real-tokens.json"
     real.write_text(json.dumps({AGENT: DECOY_TOKEN}), encoding="utf-8")
     home = tmp_path / "decoy-home"
     home.mkdir()
     shim = decoy_shim(tmp_path, real_tokens=real, home=home)
     out = run_shim(tmp_path, capture.base, f"Get-FieldToken {AGENT}", secret_file=None, shim=shim,
-                   tokens_file=UNSET)
-    assert f"tokens={real} " in out and DECOY_TOKEN in out, out
+                   tokens_file=UNSET, forbidden=(DECOY_TOKEN,))
+    assert f"tokens={home / 'tokens-gb10.json'} " in out and DECOY_TOKEN not in out, out
     (home / "tokens-gb10.json").write_text(json.dumps({AGENT: "home-token"}), encoding="utf-8")
     out = run_shim(tmp_path, capture.base, f"Get-FieldToken {AGENT}", secret_file=None, shim=shim,
                    tokens_file=UNSET)

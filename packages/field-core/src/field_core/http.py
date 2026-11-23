@@ -144,3 +144,49 @@ def async_client(*, timeout, **kw):
     import httpx
 
     return httpx.AsyncClient(trust_env=False, follow_redirects=False, **_checked(timeout, kw))
+
+
+# --- pooled connections between services (Backlog B16) ---------------------------------------------------------
+#
+# Every service is served by ``uvicorn.run(app, host=..., port=...)`` with no ``timeout_keep_alive``, so the server
+# closes a keep-alive connection that has been idle for uvicorn's default of 5 s. A long-lived pooled client that
+# sends on such a connection just as the server closes it gets a transport error for a request the server never saw
+# (the likely cause of the CI flake on main 7e14f136: one sentinel -> registry read failed while the agent was
+# registered and active, and the verdict was BLOCK R.unregistered). Two measures, both here so every client takes
+# the same numbers:
+#
+# * ``pooled_limits()``: a pooled client drops an idle connection after ``CLIENT_KEEPALIVE_EXPIRY_S`` (2 s), well
+#   before the server's ``SERVER_KEEP_ALIVE_S`` (5 s), so it does not reuse one the server is about to close.
+# * ``get_retrying_once``: an idempotent GET whose connection turns out to be dead (``RemoteProtocolError``,
+#   ``ReadError``, ``WriteError``: the server closed or reset it) is sent ONE more time. Nothing else is retried: a
+#   timeout, a refused connection, any HTTP answer, and every non-GET (a POST or PATCH may already have taken effect).
+
+#: uvicorn's default ``timeout_keep_alive``, which every service's ``serve`` uses (none passes another value;
+#: pinned by packages/field-core/tests/test_pooled_keepalive_b16.py).
+SERVER_KEEP_ALIVE_S = 5.0
+#: how long a pooled client keeps an idle connection: strictly below SERVER_KEEP_ALIVE_S.
+CLIENT_KEEPALIVE_EXPIRY_S = 2.0
+
+
+def pooled_limits():
+    """``httpx.Limits`` with httpx's default pool sizes and ``keepalive_expiry=CLIENT_KEEPALIVE_EXPIRY_S``."""
+    import httpx
+
+    return httpx.Limits(max_connections=100, max_keepalive_connections=20,
+                        keepalive_expiry=CLIENT_KEEPALIVE_EXPIRY_S)
+
+
+def stale_connection_errors() -> tuple[type[BaseException], ...]:
+    """The transport errors that mean "the pooled connection was already dead", and only those."""
+    import httpx
+
+    return (httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError)
+
+
+def get_retrying_once(client, url: str, **kw):
+    """``client.get(url, **kw)``; on a stale-connection error, exactly one more ``client.get`` (the dead connection
+    has left the pool, so the retry opens or reuses another). A second failure is raised to the caller as is."""
+    try:
+        return client.get(url, **kw)
+    except stale_connection_errors():
+        return client.get(url, **kw)
