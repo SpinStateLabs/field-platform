@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # field-core demo — <60s. Requires the field-platform venv on PATH
-# (see STATE.md: C:\Users\donal\.venvs\field-platform\Scripts).
+# (see STATE.md: <home>\.venvs\field-platform\Scripts).
 set -euo pipefail
 
 # Self-locate the platform venv if `field` is not already on PATH.
