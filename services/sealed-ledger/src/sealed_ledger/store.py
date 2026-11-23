@@ -1416,6 +1416,13 @@ def _sidecar_text(side: dict[str, Any], key: str, *, ascii_only: bool = False) -
     return value
 
 
+#: B1 (independent review of 2483b96e): ``logical`` and ``file`` are DERIVED from the segment's own file name, so a renamed
+#: segment and sidecar could carry any printable text into the OK line. A real name is ``events.jsonl`` and
+#: ``events-<n>.jsonl`` (both estates, ``ledger/events.jsonl``; closed_path_for adds ``-<n>``): only these characters
+#: are accepted, with room for a longer ledger file name. A name outside the set is refused with a fixed reason.
+_SIDECAR_LOGICAL_RE = re.compile(r"[A-Za-z0-9._-]{1,128}")
+_SIDECAR_FILE_RE = re.compile(r"[A-Za-z0-9._-]{1,160}")
+
 #: A real sidecar is about a kilobyte. The sidecar is unsigned input, so it is read only when it is a regular file and
 #: no larger than this (a symlink to /dev/zero or a 64 MiB pad would otherwise be read whole).
 _SIDECAR_MAX_BYTES = 1 << 20
@@ -1469,10 +1476,10 @@ def verify_segment_file(path: str | Path, public_key_pem: str | None = None) -> 
     }
     side_raw, side_bad = _read_sidecar(sidecar_path_for(p))
     if side_bad is not None:
-        out["reason"] = f"sidecar {sidecar_path_for(p).name} {side_bad}"
+        out["reason"] = f"sidecar {sidecar_path_for(p).name!r} {side_bad}"
         return out
     if side_raw is None:
-        out["reason"] = f"no sidecar {sidecar_path_for(p).name} beside {p}"
+        out["reason"] = f"no sidecar {sidecar_path_for(p).name!r} beside {str(p)!r}"
         return out
     try:
         side = json.loads(side_raw)
@@ -1495,8 +1502,11 @@ def verify_segment_file(path: str | Path, public_key_pem: str | None = None) -> 
         logical = side["logical"]
         if not logical or Path(logical).name != logical or closed_path_for(logical, n).name != side["file"]:
             raise ValueError("logical is not the ledger file name that file was derived from")
+        # B1: even a consistent rename (file, sidecar and both fields) must not carry free text into the OK line
+        if _SIDECAR_LOGICAL_RE.fullmatch(logical) is None or _SIDECAR_FILE_RE.fullmatch(side["file"]) is None:
+            raise ValueError("logical and file must be plain file names (letters, digits, dot, dash, underscore)")
     except (ValueError, TypeError, KeyError, RecursionError) as exc:
-        out["reason"] = f"sidecar {sidecar_path_for(p).name} invalid: {exc}"
+        out["reason"] = f"sidecar {sidecar_path_for(p).name!r} invalid: {exc}"
         return out
     out.update(segment=n, logical=side["logical"], global_first=start, global_last=end)
 
@@ -1508,7 +1518,7 @@ def verify_segment_file(path: str | Path, public_key_pem: str | None = None) -> 
         return fail(f"sidecar describes {side['file']!r}, not {p.name!r}")
     data = read_shared(p)
     if data is None:
-        return fail(f"file {p} is missing (expected {end - start + 1} events)")
+        return fail(f"file {str(p)!r} is missing (expected {end - start + 1} events)")
     try:
         events = _parse_events(data)
     except ValueError as exc:

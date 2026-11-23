@@ -10,6 +10,7 @@ end_index < start_index (store.py:821), so an empty-segment claim cannot reach t
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 from typer.testing import CliRunner
@@ -309,3 +310,98 @@ def test_R2_a_bad_format_is_a_fixed_reason_and_never_echoed(tmp_path, fmt):
     _edit(side_path, format=fmt)
     out = _assert_failed_not_crashed(two)
     assert out["reason"].endswith("format is not supported") and len(out["reason"]) < 200
+
+
+# --- cycle 4 (independent reviewer FIX on 2483b96e: B1, C1) ---------------------------------------------------------------
+
+def _renamed(tmp_path, logical):
+    """The genuine segment 2 and its sidecar, renamed together to ``closed_path_for(logical, 2)``, with the sidecar's
+    ``file`` and ``logical`` edited to match: the consistent-rename route (B1)."""
+    from sealed_ledger.store import closed_path_for
+    two, side_path = _two(tmp_path)
+    new = closed_path_for(two.with_name(logical), 2)
+    new_side = sidecar_path_for(new)
+    if new != two:
+        two.rename(new)
+        side_path.rename(new_side)
+    _edit(new_side, logical=logical, file=new.name)
+    return new
+
+
+PHRASE = "(signed rotation anchor verified: it pins this segment's head and chain_length)"
+
+
+@pytest.mark.parametrize("logical", [
+    "events (signed rotation anchor verified) pins this segment's head.jsonl",
+    "events signed rotation anchor verified.jsonl",
+    "events;rm.jsonl", "evéntş.jsonl", "events,jsonl.jsonl", "ev ents.jsonl", "ev'ents.jsonl", "x" * 126 + ".jsonl",
+], ids=["parenthesised-phrase", "spaced-phrase", "semicolon", "non-ascii", "comma", "space", "quote", "132-chars"])
+def test_B1_a_segment_and_sidecar_renamed_together_cannot_carry_text_into_the_ok_line(tmp_path, logical):
+    """A name that only has to be printable could still read as part of the sentence. The sidecar and the segment are
+    renamed consistently (so the older R1 check is satisfied); the fixed name pattern refuses it."""
+    new = _renamed(tmp_path, logical)
+    out = verify_segment_file(new)
+    assert out["ok"] is False and out["logical"] is None
+    assert out["reason"].endswith("logical and file must be plain file names (letters, digits, dot, dash, underscore)"), out["reason"]
+    r = runner.invoke(cli_app, ["verify", "--path", str(new)])
+    assert r.exit_code == 1 and r.output.startswith("TAMPERED"), r.output
+    assert not any(line.startswith("OK") for line in r.output.splitlines())
+    assert PHRASE not in r.output
+
+
+@pytest.mark.parametrize("logical", ["events.jsonl", "ledger_2.events.jsonl", "Events-A.B_c.jsonl", "a" * 122 + ".jsonl"],
+                         ids=["the-real-name", "dots-and-underscore", "mixed-case", "128-chars"])
+def test_B1_a_plain_name_renamed_consistently_still_verifies(tmp_path, logical):
+    assert len(logical) <= 128
+    new = _renamed(tmp_path, logical)
+    out = verify_segment_file(new)
+    assert out["ok"] is True and out["logical"] == logical, out
+    r = runner.invoke(cli_app, ["verify", "--path", str(new)])
+    assert r.exit_code == 0 and f"OK — segment 2 of {logical} intact" in r.output
+
+
+def test_B1_a_sidecar_naming_a_file_outside_the_pattern_is_refused_even_when_logical_is_plain(tmp_path):
+    two, side_path = _two(tmp_path)
+    odd = two.with_name("events 2.jsonl")                  # a space: outside the pattern; logical stays the real name
+    two.rename(odd)
+    odd_side = sidecar_path_for(odd)
+    side_path.rename(odd_side)
+    _edit(odd_side, file=odd.name)
+    out = verify_segment_file(odd)
+    assert out["ok"] is False and "invalid" in out["reason"]
+
+
+posix_only = pytest.mark.skipif(os.name == "nt", reason="a newline cannot be part of a Windows file name")
+
+
+@posix_only
+def test_C1_a_newline_in_the_file_name_cannot_forge_a_line_in_the_no_sidecar_reason(tmp_path):
+    name = "x\nOK — segment 2 of events.jsonl intact over 1 events (global 0..0)\n.jsonl"
+    f = tmp_path / name
+    f.write_bytes(b"")
+    out = verify_segment_file(f)
+    assert out["ok"] is False and out["reason"].startswith("no sidecar ")
+    assert "\n" not in out["reason"] and "\n" in out["reason"]          # shown as an escape, on ONE line
+
+
+@posix_only
+def test_C1_a_newline_in_the_file_name_cannot_forge_a_line_in_the_invalid_sidecar_reason(tmp_path):
+    name = "x\nOK — segment 2 of events.jsonl intact over 1 events (global 0..0)\n.jsonl"
+    f = tmp_path / name
+    f.write_bytes(b"")
+    sidecar_path_for(f).write_text("{}", encoding="utf-8")             # present, but not a sidecar
+    out = verify_segment_file(f)
+    assert out["ok"] is False and "invalid" in out["reason"] and "\n" not in out["reason"]
+    r = runner.invoke(cli_app, ["verify", "--path", str(f)])
+    assert r.exit_code == 1 and r.output.startswith("TAMPERED")
+    assert len(r.output.strip().splitlines()) == 1 and not any(l.startswith("OK") for l in r.output.splitlines())
+
+
+@posix_only
+def test_C1_a_newline_in_the_sidecar_name_when_the_sidecar_cannot_be_read_is_one_escaped_line(tmp_path):
+    name = "y\nOK — forged\n.jsonl"
+    f = tmp_path / name
+    f.write_bytes(b"")
+    sidecar_path_for(f).mkdir()                                         # a directory where the sidecar should be
+    out = verify_segment_file(f)
+    assert out["ok"] is False and "\n" not in out["reason"] and "\n" in out["reason"]
