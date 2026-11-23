@@ -22,7 +22,12 @@ Known limits (a review has to catch these): `getattr(authn, "auth_headers")`, `i
 the finding), a module held in a variable (`m = authn; m.auth_headers()`), a name re-exported from another module
 (`from some_pkg import auth_headers` where some_pkg re-exports it), shell scripts and heredocs, and a new top-level
 directory (the scan roots are a fixed list; a test pins that every tracked top-level directory with Python is in it).
-A parameter or local named `auth_headers` that shadows the import is a false positive (no such site today).
+A parameter or local named `auth_headers` that shadows the import is a false positive (no such site today), and so is
+a name rebound after an alias was taken (`h = dict` after `import ... auth_headers as h`, a reassigned module alias,
+a local `def auth_headers()`): the scanner does not track scope, so a rebind never clears an alias. All of these fail
+safe. One false negative (reviewer-R1 on PR 1327): a call that sits in the source BEFORE the import that binds the
+name (`def f(): return auth_headers()` above `from field_core.authn import auth_headers`) is not seen, because
+aliases are collected in source order. Imports at the top of a file are the norm here, so a review has to catch it.
 
 Sites not yet migrated are listed in `auth_headers_allowlist.txt` as `path::function::call = count`. The list must
 equal the scan: a new site fails, and so does an entry whose site was fixed (so the list only shrinks).
@@ -180,8 +185,11 @@ def test_the_scan_is_not_blind():
 
 def test_the_home_is_exempt_and_the_exemption_is_not_vacuous():
     assert not any(p.relative_to(ROOT).as_posix().startswith(HOME) for p in python_files())
-    llm = ROOT / HOME / "src/field_core/llm.py"
-    assert sum(scan_source(llm.read_text(encoding="utf-8")).values()) >= 1, "field-core itself uses it: the home must stay exempt"
+    # Counted over all of field-core's sources, not one file: a single file moving to perimeter-only headers (as
+    # field_core/llm.py did in #578) must not make this test red while field-core still uses the pair itself.
+    home = sorted((ROOT / HOME / "src").rglob("*.py"))
+    uses = sum(sum(scan_source(p.read_text(encoding="utf-8")).values()) for p in home)
+    assert uses >= 1, "field-core itself uses it: the home must stay exempt"
 
 
 @pytest.mark.parametrize("src", [
