@@ -49,3 +49,17 @@ def test_a_non_json_value_next_to_an_override_is_still_refused_as_a_record_error
 def test_the_refuse_all_verifier_still_raises_not_implemented_on_a_canonical_record():
     with pytest.raises(NotImplementedError):
         verify_release(record(), SHA, refuse_all_verifier)
+
+
+def test_a_structure_nested_past_the_recursion_limit_is_a_release_record_error(monkeypatch):
+    """roley.reviewer C1 on 51f14a0: the RecursionError clause was unpinned. The depth at which json.dumps raises differs
+    across CI's Pythons (5000 does not raise on 3.14), so the encoder's failure is raised directly: same on 3.11 to 3.14."""
+    import deployment_agent.release as release
+
+    def too_deep(*_a, **_k):
+        raise RecursionError("maximum recursion depth exceeded")
+
+    monkeypatch.setattr(release, "canonical_payload", too_deep)
+    with pytest.raises(ReleaseRecordError, match="not canonical JSON") as exc:
+        verify_release(record(), SHA, accept_ok)
+    assert exc.value.__cause__ is None and exc.value.__suppress_context__ is True    # raised `from None`

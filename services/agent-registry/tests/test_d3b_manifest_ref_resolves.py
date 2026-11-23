@@ -9,8 +9,9 @@ retention). The refusal happens before any write: nothing persisted, no
 not a 409.
 
 NOT covered, and stated in README LIMITS: ``PATCH /agents/{id}`` can still set
-an unresolvable ref, and a ref that resolved at register can stop resolving
-later (the file removed) — lifecycle's retention finding and the readers'
+an unresolvable ref while the operator mode is OFF (it is resolved and refused 422 when
+the mode is armed: tests/test_patch_manifest_ref_by_mode.py), and a ref that resolved at register can stop
+resolving later (the file removed) — lifecycle's retention finding and the readers'
 ``missing``/``invalid`` handling are what see those.
 """
 
@@ -104,7 +105,7 @@ def test_the_same_relative_ref_is_422_when_field_manifest_dir_does_not_hold_it(
     monkeypatch.setenv("FIELD_MANIFEST_DIR", str(tmp_path / "elsewhere"))
     r = client.post("/agents", json={**BODY, "manifest_ref": "sub/good.yaml"})
     assert r.status_code == 422
-    assert r.json()["detail"]["manifest_dir"] == str(tmp_path / "elsewhere")
+    assert "manifest_dir" not in r.json()["detail"] and str(tmp_path / "elsewhere") not in r.text   # C-635 F-C528-5
     r = client.post("/agents", json={**BODY, "manifest_ref": str(manifest_dir / "sub" / "good.yaml")})
     assert r.status_code == 201, r.text
 
@@ -125,7 +126,8 @@ def test_a_duplicate_id_with_an_unresolvable_ref_is_422_not_409(registry):
 
 
 def test_limit_patch_is_not_checked(registry):
-    """README LIMITS, pinned so the claim fails the day it stops being true."""
+    """README LIMITS, pinned so the claim fails the day it stops being true. Operator mode OFF only: when it is armed
+    the same PATCH is a 422 (tests/test_patch_manifest_ref_by_mode.py)."""
     client, store, _ = registry
     assert client.post("/agents", json=BODY).status_code == 201
     r = client.patch("/agents/invoicing-agent", json={"manifest_ref": "sub/absent.yaml"})

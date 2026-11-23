@@ -44,10 +44,27 @@ class HeartbeatStore:
             self._conn.row_factory = sqlite3.Row
             self._conn.executescript(_SCHEMA)
 
-    def record(self, agent_id: str, seen_at: datetime, status: str) -> None:
+    def record(self, agent_id: str, seen_at: datetime, status: str,
+               max_unregistered: int | None = None) -> bool:
         """Upsert one check-in. ``status`` is what the registry said at
-        check-in time (``unregistered`` for a shadow agent nobody registered)."""
+        check-in time (``unregistered`` for a shadow agent nobody registered).
+
+        ``max_unregistered`` bounds the rows whose status is ``unregistered``
+        (B-RT4 F1): a NEW unregistered id is refused (returns False, nothing
+        written) once that many already exist; an id already stored, and any
+        registered agent, is always recorded. The count and the write share
+        one lock hold, so concurrent check-ins cannot overshoot the cap."""
         with self._lock, self._conn:
+            if max_unregistered is not None and status == "unregistered":
+                known = self._conn.execute(
+                    "SELECT 1 FROM heartbeats WHERE agent_id = ?", (agent_id,)
+                ).fetchone()
+                if known is None:
+                    n = self._conn.execute(
+                        "SELECT COUNT(*) FROM heartbeats WHERE status = 'unregistered'"
+                    ).fetchone()[0]
+                    if n >= max_unregistered:
+                        return False
             self._conn.execute(
                 "INSERT INTO heartbeats (agent_id, last_seen, status, checkins) "
                 "VALUES (?,?,?,1) "
@@ -56,6 +73,7 @@ class HeartbeatStore:
                 "checkins=heartbeats.checkins+1",
                 (agent_id, seen_at.astimezone(timezone.utc).isoformat(), status),
             )
+        return True
 
     def get(self, agent_id: str) -> dict | None:
         with self._lock:  # fetched inside, converted after release

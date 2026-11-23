@@ -339,7 +339,7 @@ def test_real_descriptors_status_is_pinned():
         ("demo-compose", "FIELD_DOA_ROSTER"): lint.EMPTY,
         ("gb10", "FIELD_SHARED_SECRET"): lint.EMPTY,
         ("gb10", "FIELD_DOA_ROSTER"): lint.EMPTY,
-        ("fly", "FIELD_SHARED_SECRET"): lint.EMPTY,
+        ("fly", "FIELD_SHARED_SECRET"): lint.ARMED,   # entrypoint.sh refuses a blank secret
         ("fly", "FIELD_DOA_ROSTER"): lint.EMPTY,
     }
 
@@ -349,18 +349,18 @@ def test_real_descriptors_are_all_classified():
 
 
 def test_real_descriptors_pass_only_through_the_allowlist():
-    """Clean with the committed allowlist; the four findings fail without it."""
+    """Clean with the committed allowlist; the three findings fail without it."""
     # Pinned clock: the committed entries are dated 2026-10-23 and expire by
     # design; this test checks the waiver logic, not the wall clock.
     assert lint.main(["--root", str(REPO), "--today", "2026-10-23"]) == 0
     reports = lint.analyse(REPO)
     errors, _ = lint.evaluate(reports, [], [])
-    assert len(errors) == 4 and all(e.startswith("FAIL") for e in errors)
+    assert len(errors) == 3 and all(e.startswith("FAIL") for e in errors)
 
 
 def test_committed_allowlist_records_evidence_and_verification():
     entries = lint.load_allowlist(TOOLS / "topology_lint_allowlist.yaml")
-    assert len(entries) == 4
+    assert len(entries) == 3
     for e in entries:
         assert "known gap, tracked" not in e["reason"]
         assert "values never read" in e["reason"] and "2026-10-23" in e["reason"]
@@ -892,6 +892,8 @@ def _entry_findings(tmp_path, entry):
 ])
 def test_constructs_that_hide_assignments_are_findings(tmp_path, extra):
     _, fly = _entry_findings(tmp_path, ENTRY_ARMED + extra)
+    # B-23 (reviewer C-541): existence is the point: the tripwire must FIRE for each construct. The control is
+    # test_passing_fixture (the same ENTRY_ARMED alone gives errors == []), so any finding here comes from `extra`.
     assert fly, extra
 
 
@@ -1078,7 +1080,13 @@ def _static_by_default(monkeypatch):
     lint._RUN_CACHE.clear()
 
 SV, DV = "FIELD_SHARED_SECRET", "FIELD_DOA_ROSTER"
-REAL_ENTRY = (REPO / "integration/fly/entrypoint.sh").read_bytes().decode("utf-8").replace("\r\n", "\n")
+SHIPPED_ENTRY = (REPO / "integration/fly/entrypoint.sh").read_bytes().decode("utf-8").replace("\r\n", "\n")
+# The shipped script refuses a blank FIELD_SHARED_SECRET with its own `case` block just before `export FIELD_SHARED_SECRET=`.
+# The lint tests below inject their OWN guard at that export and then check the lint notices bypasses of it, so they work
+# on the script without the product's block (otherwise that block arms the run no matter what the injected guard does).
+_SECRET_BLOCK = re.compile(r'# FIELD_SHARED_SECRET gates every non-/health route.*?\nesac\n(?:#[^\n]*\n)?: "\$\{FIELD_SHARED_SECRET:\?set\}"\n', re.S)
+REAL_ENTRY = _SECRET_BLOCK.sub("", SHIPPED_ENTRY, count=1)
+assert REAL_ENTRY != SHIPPED_ENTRY and "REFUSING TO START (shared secret)" not in REAL_ENTRY
 GUARD_S = ': "${FIELD_SHARED_SECRET:?set}"\n'
 GUARD_D = (': "${FIELD_DOA_ROSTER:?set}"\n'
            '[ -n "${FIELD_DOA_ROSTER// /}" ] || { echo "FIELD_DOA_ROSTER is blank" >&2; exit 1; }\n')
@@ -1103,9 +1111,11 @@ def _arm(text, guard_s=GUARD_S, guard_d=GUARD_D, after_s="", after_d=""):
 
 
 def test_the_real_entrypoint_is_exercised_and_reports_its_actual_state(bash):
-    r = lint.run_entrypoint(REAL_ENTRY)
+    r = lint.run_entrypoint(SHIPPED_ENTRY)
     assert r.ran and r.findings == [], (r.reason, r.findings)
-    assert r.status == {SV: lint.EMPTY, DV: lint.EMPTY}  # the shipped script does not refuse to start (allowlisted)
+    assert r.status == {SV: lint.ARMED, DV: lint.EMPTY}  # the shipped script refuses a blank FIELD_SHARED_SECRET; FIELD_DOA_ROSTER still defaults to empty (allowlisted)
+    r0 = lint.run_entrypoint(REAL_ENTRY)  # without the product's block: the lint still reports the open state
+    assert r0.ran and r0.findings == [] and r0.status == {SV: lint.EMPTY, DV: lint.EMPTY}, (r0.reason, r0.findings)
     assert r.stubs == list(lint.EXPECTED_FLY_STUBS)
 
 
@@ -1179,6 +1189,7 @@ def test_cli_fails_instead_of_skipping_in_ci_when_bash_is_missing(capsys, monkey
 ])
 def test_coarse_tripwire_rules(tmp_path, extra):
     _, fly = _entry_findings(tmp_path, ENTRY_ARMED + extra)
+    # B-23 (reviewer C-541): existence is the point (see test_constructs_that_hide_assignments_are_findings)
     assert fly, extra
 
 

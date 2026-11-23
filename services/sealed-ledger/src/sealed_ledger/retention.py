@@ -14,6 +14,7 @@ A check that could not run is ``unavailable``, never ``ok``.
 from __future__ import annotations
 
 import os
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -52,10 +53,14 @@ def estate_retention_days() -> tuple[int | None, str | None]:
     raw = os.environ.get(RETENTION_ENV)
     if raw is None or not raw.strip():
         return None, None
-    try:
-        days = int(raw.strip())
-    except ValueError:
-        return None, f"{RETENTION_ENV}={raw.strip()[:40]!r} is not an integer"
+    text = raw.strip()
+    # ASCII digits only (an optional minus keeps the ">= 1" refusal below): int() would also take "3_65", "+30" and
+    # any Unicode decimal digit, so a typo or a mis-encoded value would become a retention floor
+    # at most 9 digits (zero padding counts; 999999999 days is ~2.7 million years): an unbounded run past CPython's
+    # 4300-digit int() limit would raise ValueError out of GET /retention/check, which is always 200
+    if not re.fullmatch(r"-?[0-9]{1,9}", text):
+        return None, f"{RETENTION_ENV}={text[:40]!r} is not an integer"
+    days = int(text)
     if days < 1:
         return None, f"{RETENTION_ENV}={days} must be >= 1"
     return days, None
@@ -87,6 +92,9 @@ def retention_check(store, registry) -> RetentionCheck:
             listed = registry.list_agents()
             if not isinstance(listed, list):
                 raise TypeError(f"list_agents returned {type(listed).__name__}")
+            odd = sorted({type(a).__name__ for a in listed if not isinstance(a, dict)})
+            if odd:     # S7-26: type names only, never a value
+                raise TypeError(f"registry returned a list holding {', '.join(odd)}, not agent records")
             agents = listed
         except Exception as exc:  # noqa: BLE001 - unreachable registry => unavailable
             details.append(f"registry unavailable: {type(exc).__name__}: {str(exc)[:200]}")
@@ -97,8 +105,12 @@ def retention_check(store, registry) -> RetentionCheck:
     max_days: int | None = None
     for agent in sorted(agents or [], key=lambda a: str(a.get("agent_id"))):
         ref = agent.get("manifest_ref")
-        if not ref:
+        if ref is None or ref == "":     # no manifest declared; a falsy value of another type (0, [], {}, False) is invalid
             without += 1
+            continue
+        if not isinstance(ref, str):     # a list, dict or number, truthy or not, never reaches the resolver
+            unresolvable.append({"agent_id": agent.get("agent_id"),
+                                 "manifest_ref": f"<{type(ref).__name__}>", "reason": "invalid"})
             continue
         manifest, reason = resolve_manifest_detail(ref)
         if reason != "ok" or manifest is None:
