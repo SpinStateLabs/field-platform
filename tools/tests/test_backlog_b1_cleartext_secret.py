@@ -107,3 +107,19 @@ def test_phase_g_check_refuses_the_secret_to_a_public_http_base_even_if_the_old_
     with pytest.raises(SystemExit) as e:
         pgc._run(argparse.Namespace(base="http://estate.example.com", allow_plaintext=True), "made-up-secret-b1", None)
     assert e.value.code == 2 and "cleartext" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("base", ["ftp://127.0.0.1:18080", "ftp://localhost:18080", "ws://[::1]:18080",
+                                  "file://127.0.0.1/x", "ftp://10.0.0.5:18080"])
+def test_d16_refuses_a_non_http_scheme_even_to_a_loopback_or_private_host(tmp_path, capsys, stub, base):
+    """R1 N2 (mutant G3): only http and https are accepted; any other scheme is refused even to loopback."""
+    assert _run(tmp_path, base) == 2
+    assert "cleartext" in capsys.readouterr().out and stub == []
+
+
+def test_the_refusal_helper_accepts_only_http_and_https():
+    assert dc.cleartext_refusal("https://127.0.0.1", True) is None
+    assert dc.cleartext_refusal("http://127.0.0.1", True) is None
+    for scheme in ("ftp", "ws", "wss", "file", "gopher", "HTTPX"):
+        assert dc.cleartext_refusal(f"{scheme}://127.0.0.1", False) is not None, scheme
+

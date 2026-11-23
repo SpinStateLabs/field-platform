@@ -21,7 +21,10 @@ needs your key.
 
 Transport (Backlog B1, the G19/C-20 rule of tools/estate_probe.py and tools/renew_token.py): with ``--base`` the
 perimeter secret travels as a header, so a cleartext ``http://`` base is refused unless its host is loopback or private
-(RFC 1918); when ``FIELD_OPERATOR_KEY`` is set (estate_probe sends it on every call) only a loopback host is allowed.
+(RFC 1918). This tool sends the perimeter secret only: it builds ``estate_probe.Estate`` without an operator pair, so
+no operator key is sent. As a fail-closed precaution, when ``FIELD_OPERATOR_KEY`` is set in the environment only a
+loopback host is allowed (the rule estate_probe applies when it does send a key); that is stricter than this tool
+needs, never looser. Only the http and https schemes are accepted.
 There is no override flag. The refusal is exit 2 and no request is made.
 
 Exit status: 0 a signed authenticated row was found, 1 none was (or only claimed-name rows), 2 usage error, a
