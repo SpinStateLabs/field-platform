@@ -68,11 +68,11 @@ class _Writes:
             def list_agents(self, **kw):
                 return inner.list_agents(**kw)
 
-            def set_status(self, agent_id, status):
+            def set_status(self, agent_id, status, **kw):
                 if status in fail_on:
                     from field_core.clients import RegistryUnreachableError
                     raise RegistryUnreachableError("registry returned 401: operator credentials required")
-                return inner.set_status(agent_id, status)
+                return inner.set_status(agent_id, status, **kw)
         return W()
 
 
@@ -94,13 +94,14 @@ def test_a_domain_kill_where_every_attempt_errored_is_502_with_the_report(tmp_pa
     assert ev["payload"]["killed"] == []
 
 
-def test_a_domain_kill_with_one_success_stays_200(tmp_path):
+def test_a_domain_kill_with_one_success_and_one_error_is_502_with_the_report(tmp_path):
+    # kill-path hardening: a domain halt that left ANY agent running is not a 2xx (it used to stay 200)
     class OneFails(_Writes):
         def __call__(self, inner):
             w = super().__call__(inner)
             real = w.set_status
 
-            def set_status(agent_id, status):
+            def set_status(agent_id, status, **kw):
                 if agent_id == "a2":
                     from field_core.clients import RegistryUnreachableError
                     raise RegistryUnreachableError("simulated")
@@ -112,7 +113,7 @@ def test_a_domain_kill_with_one_success_stays_200(tmp_path):
     s.register("a1")
     s.register("a2")
     r = s.kill.post("/kill/domain/finance", json=OP)
-    assert r.status_code == 200 and r.json()["killed"] == ["a1"]
+    assert r.status_code == 502 and r.json()["detail"]["killed"] == ["a1"]
 
 
 def test_a_domain_kill_of_already_killed_agents_stays_200(tmp_path):

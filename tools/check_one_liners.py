@@ -7,16 +7,23 @@ The one-liners file is only worth reading if every word it calls Enforced is bac
 is about the word. This script reads the file and checks, with git, at the commit each citation pins:
 
 * the citation names a file and a test function (``path::test_name @ <commit>``), and the commit exists;
-* that file exists at that commit, and defines that test function (``def test_name``, at module level or in a class);
+* that file exists at that commit, and defines that test function (``def test_name``, at module level or in a class, never nested in a function; when the
+  name is defined twice in one scope the LAST definition is the one Python runs and the one checked);
 * the word's KEY (a short token the author gives with the citation) occurs, case-insensitively, in that test
   function's source at that commit (its name, docstring or body: the "assertion names the word" check). The KEY is
-  required, so a citation cannot pass by pointing at an unrelated test;
+  required and at least 3 non-space characters, so a citation cannot pass by pointing at an unrelated test or by
+  naming a letter;
 * the file has the global line first, twelve system rows numbered 1 to 12, every REQUIRED QUALIFIER verbatim, an
-  old-wording provenance line, and every keyless row carrying "not live-verified - needs ANTHROPIC_API_KEY".
+  old-wording provenance line, and every keyless row carrying "not live-verified - needs ANTHROPIC_API_KEY";
+* README cross-check (P308, carried from e_gate in PR 308): a ``README-ROW`` line names a service README row and the
+  status E1 gives it. That README (in the working tree) must have exactly one table row whose guarantee cell starts
+  with the given text, and its status cell must open with the same bold word: ``**Enforced`` for Enforced,
+  ``**Declared`` for Declared. A mismatch in either direction fails, as does a row that is missing or ambiguous.
 
 Citation grammar (one per line, anywhere in the file; ``|`` separates fields)::
 
     - ENFORCED: <word or phrase> | CITE: <path>::<test_name> @ <commit> | KEY: <token>
+    - README-ROW: services/<service>/README.md | ROW: <start of the guarantee cell> | STATUS: Enforced|Declared
 
 It proves that the test exists at the commit and mentions the word. It does NOT run the test and cannot judge whether
 the test proves the word: that is the independent adversarial review the E-gate also requires. Standard library only.
@@ -38,6 +45,8 @@ GLOBAL_LINE = ("estate status is recorded outside this repository; every Enforce
                "status is Declared")
 KEYLESS_TEXT = "not live-verified - needs ANTHROPIC_API_KEY"
 SYSTEMS = 12
+#: A KEY shorter than this matches almost any test (a letter is in nearly every function): it is a FAIL, not a pass.
+MIN_KEY_CHARS = 3
 
 #: The qualifiers the plan (tasks/todo.md, E1) says must survive verbatim. A qualifier that the code does not
 #: support is removed from this list only by a reviewed change that says why.
@@ -67,6 +76,11 @@ CITE_RE = re.compile(
     r"^\s*-\s*ENFORCED:\s*(?P<word>.+?)\s*\|\s*CITE:\s*(?P<path>[\w./-]+)::(?P<test>\w+)\s*@\s*(?P<commit>[0-9a-f]{7,40})"
     r"\s*\|\s*KEY:\s*(?P<key>[^|\n]+?)\s*$", re.M)
 ROW_RE = re.compile(r"^##\s+(\d+)\s+[-—]\s+\S", re.M)
+README_ROW_RE = re.compile(
+    r"^\s*-\s*README-ROW:\s*(?P<path>services/[\w-]+/README\.md)\s*\|\s*ROW:\s*(?P<row>[^|\n]*?\S)\s*"
+    r"\|\s*STATUS:\s*(?P<status>Enforced|Declared)\s*$", re.M)
+#: A README row's status cell opens with a bold status word: ``**Enforced in code**``, ``**Declared only**``, ...
+README_STATUS_RE = re.compile(r"^\*\*(Enforced|Declared)\b")
 
 
 class Report:
@@ -111,16 +125,44 @@ def normalise(text: str) -> str:
     return re.sub(r"\s+", " ", text)
 
 
+def _scope_functions(body: list[ast.stmt]) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
+    """The functions DEFINED in one scope, in source order: its own statements and those of if/try/with/for/while blocks
+    (still the same scope), never the inside of a function or a class (a different scope)."""
+    found: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+    for node in body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            found.append(node)
+        elif isinstance(node, (ast.If, ast.For, ast.AsyncFor, ast.While)):
+            found += _scope_functions(node.body) + _scope_functions(node.orelse)
+        elif isinstance(node, (ast.With, ast.AsyncWith)):
+            found += _scope_functions(node.body)
+        elif isinstance(node, ast.Try) or type(node).__name__ == "TryStar":
+            for part in (node.body, node.orelse, node.finalbody, *[h.body for h in node.handlers]):
+                found += _scope_functions(part)
+    return found
+
+
 def test_source(source: str, test: str) -> str | None:
-    """The source text of function ``test`` (module level or a method), or None."""
+    """The source text of function ``test`` the way Python resolves it: a module-level function (the LAST definition
+    of the name, as the later one shadows an earlier one), else a method of a module-level class (the last definition in
+    the first class that has one). A function nested inside another function is not a test."""
     try:
         tree = ast.parse(source)
     except SyntaxError:
         return None
     lines = source.splitlines()
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == test:
-            return "\n".join(lines[node.lineno - 1: node.end_lineno])
+
+    def text(node) -> str:
+        return "\n".join(lines[node.lineno - 1: node.end_lineno])
+
+    named = [f for f in _scope_functions(tree.body) if f.name == test]
+    if named:
+        return text(named[-1])
+    for cls in tree.body:
+        if isinstance(cls, ast.ClassDef):
+            named = [f for f in _scope_functions(cls.body) if f.name == test]
+            if named:
+                return text(named[-1])
     return None
 
 
@@ -135,7 +177,38 @@ def check_citation(repo: Path, rep: Report, word: str, path: str, test: str, com
     body = test_source(source, test)
     if not rep.check(body is not None, f"test function exists at the commit: {label}"):
         return
+    if not rep.check(len("".join(key.split())) >= MIN_KEY_CHARS,
+                     f"the key is at least {MIN_KEY_CHARS} non-space characters ({key.strip()!r}; word: {word}): {label}"):
+        return                      # a letter occurs in almost any test: it cannot show the test is about the word
     rep.check(key.strip().lower() in body.lower(), f"the test mentions the key {key.strip()!r} (word: {word}): {label}")
+
+
+def readme_table_rows(text: str) -> list[tuple[str, str]]:
+    """``(guarantee cell, status cell)`` for every table row whose second cell opens with a bold status word. An escaped
+    pipe (``\\|``) stays inside its cell."""
+    rows = []
+    for line in text.splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in re.split(r"(?<!\\)\|", line.strip())[1:-1]]
+        if len(cells) >= 2 and README_STATUS_RE.match(cells[1]):
+            rows.append((cells[0], cells[1]))
+    return rows
+
+
+def check_readme_row(repo: Path, rep: Report, path: str, row: str, status: str) -> None:
+    label = f"{path} row {row[:50]!r}"
+    try:
+        text = (repo / path).read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        rep.check(False, f"README exists and reads as UTF-8: {path}")
+        return
+    want = normalise(row).lower()
+    hits = [st for cell, st in readme_table_rows(text) if normalise(cell).lower().startswith(want)]
+    if not rep.check(len(hits) == 1, f"the README row is found exactly once ({len(hits)} found): {label}"):
+        return
+    found = README_STATUS_RE.match(hits[0]).group(1)
+    rep.check(found == status, f"the README row says {found}, E1 says {status}: {label}")
 
 
 def check_file(path: Path, repo: Path) -> int:
@@ -167,6 +240,13 @@ def check_file(path: Path, repo: Path) -> int:
         return 2
     for m in cites:
         check_citation(repo, rep, m["word"], m["path"], m["test"], m["commit"], m["key"])
+    # README cross-check (P308): every README-ROW line must parse, and the row must say what E1 says
+    readme_rows = list(README_ROW_RE.finditer(text))
+    readme_lines = [ln for ln in text.splitlines() if re.match(r"^\s*-\s*README-ROW:", ln)]
+    rep.check(len(readme_lines) == len(readme_rows),
+              f"every README-ROW line parses ({len(readme_rows)} of {len(readme_lines)})")
+    for m in readme_rows:
+        check_readme_row(repo, rep, m["path"], m["row"], m["status"])
     # keyless rows: a line that says KEYLESS must carry the exact text
     for ln in text.splitlines():
         if re.search(r"\bKEYLESS\b", ln):

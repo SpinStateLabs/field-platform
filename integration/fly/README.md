@@ -35,7 +35,9 @@ fly apps create force-field-sandbox
 fly volumes create ff_data --app force-field-sandbox --region yyz --size 1
 
 # 3. Shared secret — generate a strong random value; this is what gates every
-#    non-/health endpoint once set. Never commit it anywhere.
+#    non-/health endpoint. REQUIRED: entrypoint.sh refuses to start (exit 1,
+#    one stderr line naming FIELD_SHARED_SECRET) when it is unset, empty or
+#    whitespace-only. Never commit it anywhere.
 fly secrets set --app force-field-sandbox FIELD_SHARED_SECRET=<generated>
 
 #    Optional: real upstream for the FORCE gateway. Without it, /gateway/health
@@ -95,6 +97,21 @@ In the Netlify site settings for the Force-Field Portal set:
 - `ESTATE_SHARED_SECRET` = the same value given to `fly secrets set
   FIELD_SHARED_SECRET=...` above (the portal sends it as `x-field-auth`).
 
+## Kernel hardening (`FIELD_HARDEN_SYSCTLS`, off by default)
+
+The image carries no setuid/setgid files (the build fails if one is left) and
+`/usr/local/sbin/ff-harden`, which sets `fs.protected_hardlinks=1`,
+`fs.protected_symlinks=1`, `fs.protected_regular=2` and
+`user.max_user_namespaces=0`, reading each one back (field-platform issues 1067,
+1068). The entrypoint runs it only when `FIELD_HARDEN_SYSCTLS=1`
+(`fly secrets set FIELD_HARDEN_SYSCTLS=1`); a refused setting is logged and the
+estate still starts. After arming, the boot log must show four
+`ff-harden: ok` lines. Not listed in `docs/ENVIRONMENT.md`: that table holds
+variables read by Python source (its anchor lint accepts only `path.py:LINE`);
+this one is read only by `entrypoint.sh`. Before arming on a live estate, check
+`fly ssh console` and a machine stop/start on a throwaway app with it set
+(`user.max_user_namespaces=0` is machine-wide).
+
 ## The estate model
 
 - This Machine is the **shared sandbox estate for the free tier**: every
@@ -141,5 +158,6 @@ In the Netlify site settings for the Force-Field Portal set:
   logged — this is the product behavior, demonstrated on purpose.
 - **TLS terminates at the Fly edge** (`force_https`); Caddy speaks plain HTTP
   on the internal port. Nothing else in the container listens externally.
-- **The portal is the only intended caller** once `FIELD_SHARED_SECRET` is
-  set: every endpoint except `/health` requires the `x-field-auth` header.
+- **The portal is the only intended caller**: `FIELD_SHARED_SECRET` is
+  mandatory (the machine refuses to start without it), so every endpoint
+  except `/health` requires the `x-field-auth` header.

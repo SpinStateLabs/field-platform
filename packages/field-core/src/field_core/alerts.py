@@ -1,10 +1,10 @@
 """Push alerts to ntfy (alert channel K10; Don's decision P36 item 3).
 
-Who calls this: the key rotator (``rotation_failed``), the dead-man check
-(``rotation_overdue``), the break-glass observer (``breakglass_used``), the
-Phase G stage controller (``stage_transition``) and ``field alert-test``
-(``test``). Runbook: ``docs/runbooks/ntfy-alerts.md`` (configuration, the
-one-time BOOTSTRAP, what is verified against ntfy's docs and what is not).
+Callers use ``field_core.alert_senders``, not ``send``; :data:`CLASSES` has seven: the six sent through it
+(``rotation_failed``, ``rotation_overdue``, ``rotation_halted``, ``breakglass_used``, ``stage_transition``,
+``stage_aborted``) and ``test`` (``field alert-test``). Callers on main: ledger operator observer, stage controller;
+the rotation classes have none yet (see ``alert_senders``). Runbook: ``docs/runbooks/ntfy-alerts.md`` (configuration,
+the one-time BOOTSTRAP, what is verified against ntfy's docs and what is not).
 
 Configuration (read on every call, so a replaced file needs no restart):
 
@@ -81,12 +81,14 @@ ENV_TOKEN_FILE = "FIELD_NTFY_TOKEN_FILE"
 ENV_TOKEN = "FIELD_NTFY_TOKEN"
 DEFAULT_BASE_URL = "https://ntfy.sh"
 
+#: Every pattern below ends in ``\Z`` (end of string), not ``$``: ``$`` also matches before a final newline, so
+#: ``'prod\n'`` would pass as an estate and reach the alert body line by line.
 #: ntfy topic names: letters, numbers, underscores and dashes, up to 64
 #: characters (https://docs.ntfy.sh/publish/#picking-a-topic).
-TOPIC_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+TOPIC_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}\Z")
 #: without an access token the topic is the only secret: refuse short ones.
 MIN_TOPIC_LEN_WITHOUT_TOKEN = 20
-_TOKEN_RE = re.compile(r"^[A-Za-z0-9._~+/=-]{8,256}$")
+_TOKEN_RE = re.compile(r"^[A-Za-z0-9._~+/=-]{8,256}\Z")
 MAX_CONFIG_FILE_BYTES = 4096
 _LOOPBACK_NAMES = {"localhost"}
 
@@ -101,14 +103,24 @@ MAX_BODY_BYTES = 1024
 
 WITHHELD = "(withheld: failed content check)"
 _FIELD_RE = {
-    "estate": re.compile(r"^[A-Za-z0-9._@:-]{1,64}$"),
-    "subject": re.compile(r"^[A-Za-z0-9._@:-]{1,64}$"),
-    "detail": re.compile(r"^[ -~]{1,200}$"),
+    "estate": re.compile(r"^[A-Za-z0-9._@:-]{1,64}\Z"),
+    "subject": re.compile(r"^[A-Za-z0-9._@:-]{1,64}\Z"),
+    "detail": re.compile(r"^[ -~]{1,200}\Z"),
 }
 
 # content_problem patterns
 _SECRET_PREFIX_RE = re.compile(r"(?i)(fok_|tk_)")
 _HEX_RUN_RE = re.compile(r"[0-9A-Fa-f]{12,}")
+# A hash or fingerprint written WITH separators (B-RT2 F1; widened after the review of PR 860): hex groups of up to 16 digits
+# joined by 1 to 3 characters that are neither letters nor digits (so `ab:cd`, `ab12-cd34`, `0123 4567`, `ab: cd`, `ab - cd`,
+# `ab, cd`, a pipe, a tab, a newline, a no-break or zero-width space). Its hex digits are counted without the separators;
+# 12 or more is a hex run, as if contiguous. `0x` and `\x` byte prefixes are removed first (`0x01 0x23 ...`). Short or ordinary
+# text (`1.2.3`, `ab:cd:ef`, `port 8080`, a build id) stays under 12 digits. A separated run of 12 or more digits is
+# withheld even when harmless (a date and time written as digits, `20261106 123045`): the fail-safe direction, pinned by a test.
+_SEPARATED_HEX_RE = re.compile(
+    r"(?<![0-9A-Fa-f])[0-9A-Fa-f]{1,16}(?:[^0-9A-Za-z]{1,3}[0-9A-Fa-f]{1,16})+(?![0-9A-Fa-f])")
+_BYTE_PREFIX_RE = re.compile(
+    r"(?i)(?:0x|" + re.escape(chr(92)) + r"x)(?=[0-9a-f]{1,2}(?:(?![0-9a-z])|0x|" + re.escape(chr(92)) + r"x))")
 _OPAQUE_RUN_RE = re.compile(r"[A-Za-z0-9+/=_-]{32,}")
 _PEM_RE = re.compile(r"-----BEGIN")
 
@@ -375,12 +387,22 @@ def resolve_destination(env: Mapping[str, str] | None = None) -> Destination:
 
 # ----------------------------------------------------------------- content
 
+def _has_separated_hex_run(text: str) -> bool:
+    text = _BYTE_PREFIX_RE.sub("", text)
+    if _HEX_RUN_RE.search(text):                  # back-to-back byte prefixes (`0x010x23...`) become one contiguous run
+        return True
+    for m in _SEPARATED_HEX_RE.finditer(text):
+        if sum(1 for c in m.group(0) if c in "0123456789abcdefABCDEF") >= 12:
+            return True
+    return False
+
+
 def content_problem(text: str, *, secrets_: tuple[str, ...] = ()) -> str | None:
     """Why ``text`` must not go into an alert, or None. ``secrets_`` are the
     configured topic and token (compared case-insensitively)."""
     if _SECRET_PREFIX_RE.search(text):
         return "secret_prefix"
-    if _HEX_RUN_RE.search(text):
+    if _HEX_RUN_RE.search(text) or _has_separated_hex_run(text):
         return "hex_run"
     if _OPAQUE_RUN_RE.search(text):
         return "opaque_run"

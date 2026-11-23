@@ -14,7 +14,7 @@ in the REAL Windows PowerShell against:
 Every run asserts that no secret value appears in anything PowerShell printed,
 including under `Set-PSDebug -Trace 2` and against an upstream that reflects the
 header into every field it returns.
-Tests never touch C:\\Users\\donal\\.field-local: FIELD_SECRET_FILE always
+Tests never touch the real .field-local directory: FIELD_SECRET_FILE always
 points into tmp_path. Skipped where powershell.exe does not exist.
 """
 
@@ -69,7 +69,7 @@ def _code_lines(source: str) -> str:
 
 
 def _safe_env(env: dict[str, str], shim: Path, tmp_path: Path) -> dict[str, str]:
-    """Every PowerShell run must be unable to reach C:\\Users\\donal\\.field-local. The real shim
+    """Every PowerShell run must be unable to reach the real .field-local directory. The real shim
     names that directory in code, and before 1.3's fix it silently replaced a FIELD_TOKENS_FILE that
     did not exist with the real token file there (a real ssl token was once sent to a local harness
     that way). So a run of the real shim names an EXISTING token file inside tmp_path; only a copy
@@ -85,18 +85,31 @@ def _safe_env(env: dict[str, str], shim: Path, tmp_path: Path) -> dict[str, str]
     return env
 
 
+# C-726 (reviewer C-693 F-C693-1): the real shim names a default profile path in code. The decoy finds it by SHAPE
+# (a drive, the profile directory, any account, then the file), so this test file names no account itself.
+_PROFILE = r"[A-Za-z]:\\" + "Us" + r"ers\\[^\\']+\\\.field-local\\"
+
+
+def _real_default(name: str) -> "re.Pattern[str]":
+    return re.compile(_PROFILE + re.escape(name))
+
+
 def decoy_shim(tmp_path: Path, real_tokens: Path, home: Path) -> Path:
     """A copy of the REAL shim whose only change is its path literals: the rog-command token file
     becomes `real_tokens`, the $HOME default becomes `home`, the default secret file a tmp path.
     Every line of logic is the shim's own, so a fallback in it shows up here, against files the
     test owns, instead of against the real .field-local."""
     source = SHIM.read_text(encoding="utf-8")
-    swaps = {r"C:\Users\donal\.field-local\tokens-gb10.json": str(real_tokens),
-             r"C:\Users\donal\.field-local\gb10-estate-secret": str(tmp_path / "decoy-default-secret"),
+    swaps = {_real_default("tokens-gb10.json"): str(real_tokens),
+             _real_default("gb10-estate-secret"): str(tmp_path / "decoy-default-secret"),
              r"Join-Path $HOME '.field-local\tokens-gb10.json'": f"Join-Path '{home}' 'tokens-gb10.json'"}
     for old, new in swaps.items():
-        assert old in source, old
-        source = source.replace(old, new)
+        if isinstance(old, re.Pattern):
+            source, hits = old.subn(lambda _m, new=new: new, source)
+            assert hits, old.pattern
+        else:
+            assert old in source, old
+            source = source.replace(old, new)
     code = _code_lines(source).lower()
     assert ".field-local" not in code and "$home" not in code, "the decoy still names a real path"
     path = tmp_path / "decoy-field-rest.ps1"
