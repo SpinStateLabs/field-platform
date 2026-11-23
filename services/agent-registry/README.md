@@ -100,16 +100,13 @@ registry serve [--port 8001]
   expect false positives (e.g. non-AI automation accounts) — it produces a
   review queue, not a verdict. False negatives are possible if an AI node
   type contains none of the known markers.
-  The service-account name rule starts from main's rule (`discover.ACCOUNT_PATTERNS`: `svc-`/`bot-` prefixes, a `-bot`
-  suffix, `agent`, `automation`, and `ai` before a separator) applied after NFKC normalisation with the Unicode format
-  characters removed, adds listed AI vendor names as whole tokens (`huggingface_token`), and subtracts ONE narrow
-  person-shaped exclusion: a name whose only match is an `ai` fused after ASCII letters before a separator
-  (`kai_nakamura`, `rai-chu`, `tsai.wu`, `desai-p`, `jsmith@thai.example`). The exclusion never applies when the name has a
-  path or realm character (`\`, `/`, `:`: `CORP\ai-runner`, an ARN ending `role/ai-runner`), a service word token (key, svc,
-  sa, api, token, worker, bot, agent, runner, helper, sync, job, service, daemon), a vendor token, or an `ai` at the start,
-  after a separator, after a digit or after a non-ASCII letter. So names such as `mai.job` and `kai.sync` stay flagged:
-  a review queue prefers a false positive. Nothing main flags is lost except the listed person-shaped names
-  (`tests/test_discover_heuristics.py` proves it differentially over a corpus).
+  The service-account name rule is main's rule (`discover.ACCOUNT_PATTERNS`: `svc-`/`bot-` prefixes, a `-bot` suffix,
+  `agent`, `automation`, and `ai` before a separator) applied after NFKC normalisation with the Unicode format characters
+  removed (so a zero-width space inside `openai` or a full-width letter cannot hide a name), plus AI vendor names as whole
+  tokens (`huggingface_token`, `Anthropic_Admin`), and nothing else: there is NO exclusion. Person names ending in -ai
+  (`kai_nakamura`, `rai-chu`, `jsmith@thai.example`, `tsai.wu`) are therefore still flagged, exactly as on main, and so are
+  `mai.job` and `kai.sync`: a review queue prefers a false positive to a missed shadow account. Narrowing the false
+  positives is a backlog row; two exclusion designs were each blocked because they let real service accounts through.
   A **retired** agent does not make a candidate "registered": the candidate is surfaced and the note names the retired
   agent; a **killed** agent still counts as registered (it may still run; an owner decision is open); an owner who owns
   only retired agents no longer makes an API key's owner known. `registered_agents` stays the full count.

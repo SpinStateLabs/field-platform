@@ -59,21 +59,16 @@ AI_NODE_MARKERS = (
 )
 
 # Service-account naming patterns that indicate automation identity.
-# ``ACCOUNT_PATTERNS`` is MAIN'S rule, unchanged: the base. Anything it flags stays flagged unless ``_person_shaped`` removes
-# it, so a name main flags cannot be lost by a pattern that forgot a format (fail-open, PR 1024 advisory, three rounds).
-# On top of it: AI vendor names as WHOLE tokens (``huggingface_token``, ``Anthropic_Admin``) are flagged too, and the name is
-# NFKC-normalised with its format characters removed first (``looks_like_automation``).
+# ``ACCOUNT_PATTERNS`` is MAIN's rule, unchanged. ``looks_like_automation`` is that rule applied to the NFKC-normalised name
+# with its format characters removed, plus AI vendor names as WHOLE tokens (``huggingface_token``, ``Anthropic_Admin``), and
+# nothing else: no exclusion. So every name main flags is still flagged, including person names ending in -ai (kai_nakamura,
+# rai-chu, jsmith@thai.example): a review queue prefers a false positive (PR 1024: two narrowing designs were each BLOCKED
+# because they let real service accounts through; the narrowing is a backlog row).
 ACCOUNT_PATTERNS = re.compile(r"(^svc[-_.]|^bot[-_.]|[-_.]bot$|agent|automation|ai[-_.])", re.I)
 ACCOUNT_TYPE_MARKERS = ("service", "bot", "application", "automation")
 
-_OTHER_AUTOMATION = re.compile(r"(^svc[-_.]|^bot[-_.]|[-_.]bot$|agent|automation)", re.I)
-_AI_BEFORE_SEPARATOR = re.compile(r"ai(?=[-_.])", re.I)
-#: Words that make a name a service when they are a separator-delimited token (``kai.sync``, ``mai.job`` stay flagged: a
-#: review queue prefers a false positive).
-_SERVICE_WORDS = frozenset(("key", "svc", "sa", "api", "token", "worker", "bot", "agent", "runner", "helper", "sync", "job",
-                            "service", "daemon"))
-#: AI vendor and product tokens. Whole-token match flags a name; a token that CONTAINS one is never person-shaped.
-#: Words that are also personal names (claude, gemini, mistral) are deliberately not listed: claude.martin is a person.
+#: AI vendor and product tokens, matched as WHOLE tokens only. Words that are also personal names (claude, gemini, mistral)
+#: are deliberately not listed: claude.martin is a person.
 _AI_VENDOR_TOKENS = frozenset((
     "openai", "anthropic", "huggingface", "geminiai", "mistralai", "cohereai", "vertexai", "azureai", "stabilityai",
     "perplexityai", "togetherai", "fireworksai", "deepai", "jasperai", "scaleai", "llamaai", "copilotai", "xai", "genai",
@@ -86,38 +81,12 @@ def _fold(account: str) -> str:
     return "".join(ch for ch in unicodedata.normalize("NFKC", account) if unicodedata.category(ch) != "Cf")
 
 
-def _person_shaped(text: str, tokens: list[str]) -> bool:
-    r"""True when the ONLY reason main's rule flags ``text`` is an ``ai`` fused after ASCII letters before a separator, like
-    ``kai_nakamura``, ``rai-chu``, ``tsai.wu``, ``desai-p`` and ``jsmith@thai.example``. It is NOT person-shaped (so it stays
-    flagged) when the name has a path or realm prefix character (``\``, ``/``, ``:``: CORP\ai-runner, role/ai-runner,
-    serviceAccount:ai-runner), a service word or vendor token, an ``ai`` at the start or after a separator or digit or any
-    non-ASCII-letter character (ai.example, x.ai.y, prod1ai-x, c3ai-svc, and e-acute + ai-svc), or a vendor name inside the token."""
-    if any(c in text for c in "\\/:"):
-        return False
-    if any(tok in _SERVICE_WORDS or tok in _AI_VENDOR_TOKENS for tok in tokens):
-        return False
-    for m in _AI_BEFORE_SEPARATOR.finditer(text):
-        i = m.start()
-        if i == 0 or not (text[i - 1].isascii() and text[i - 1].isalpha()):
-            return False
-        start = i
-        while start > 0 and text[start - 1].isalnum():
-            start -= 1
-        if any(v in text[start:i + 2].lower() for v in _AI_VENDOR_TOKENS):
-            return False
-    return True
-
-
 def looks_like_automation(account: str) -> bool:
-    """Main's rule on the folded name, plus whole-token AI vendor names, minus the person-shaped exclusion (``_person_shaped``).
-    The candidate keeps the raw name."""
+    """Main's rule on the folded name, plus whole-token AI vendor names. The candidate keeps the raw name."""
     text = _fold(account)
-    tokens = [tok for tok in re.split(r"[\W_]+", text.lower()) if tok]
-    if _OTHER_AUTOMATION.search(text) or any(tok in _AI_VENDOR_TOKENS for tok in tokens):
+    if ACCOUNT_PATTERNS.search(text):
         return True
-    if not _AI_BEFORE_SEPARATOR.search(text):
-        return False
-    return not _person_shaped(text, tokens)
+    return any(tok in _AI_VENDOR_TOKENS for tok in re.split(r"[\W_]+", text.lower()) if tok)
 
 
 def _normalize(text: str) -> str:
