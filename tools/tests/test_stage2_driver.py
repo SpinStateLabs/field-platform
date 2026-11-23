@@ -90,7 +90,7 @@ def _records(tmp_path, *, g22=True, alerts=True):
         rec.append("alerts_proven", ok=True, sha8=SHA[:8])
     if g22:
         rec.append("gate", gate="G22", ok=True, sha8=SHA[:8])
-    rec.append("gate", gate="G18", ok=True, sha8=SHA[:8])    # G25 (rebuild of PR 838): Stage 2 also needs G18
+    rec.append("gate", gate="G18", ok=True, sha8=SHA[:8], window_hours=30.0, window_end=1_790_000_000, services=8)    # G25 (rebuild of PR 838): Stage 2 also needs G18
     return rec
 
 
