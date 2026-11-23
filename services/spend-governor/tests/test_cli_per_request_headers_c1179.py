@@ -43,8 +43,10 @@ def sent(monkeypatch):
             status = 201 if method == "POST" and path in ("/spend", "/usage") else 200
             return httpx.Response(status, json=body, request=httpx.Request(method, url))
         return fake
-    for m in ("get", "put", "post"):
-        monkeypatch.setattr(httpx, m, make(m.upper()))
+    fakes = {m: make(m.upper()) for m in ("get", "put", "post")}
+    # the CLI sends through one httpx.Client (S10-12), so the recorders sit on Client.request
+    monkeypatch.setattr(httpx.Client, "request",
+                        lambda self, method, url, **kw: fakes[method.lower()](url, **kw))
     return seen
 
 
