@@ -42,7 +42,7 @@ def test_bare_hostnames_and_ip_literals_are_usable(monkeypatch, value):
 
 @pytest.mark.parametrize("entry", [
     "canary-agent:8090", "agent.internal:443", "http://canary-agent", "https://canary-agent/", "[::1]", "[2001:db8::1]:8080",
-    "agent.internal/halt", "user@agent.internal", "*.agent.internal", "agent internal", "agent.internal;x", "127.0.0.1:80",
+    "agent.internal/halt", "operator@agent.example", "*.agent.internal", "agent internal", "agent.internal;x", "127.0.0.1:80",
 ])
 def test_an_entry_that_the_hostname_can_never_equal_is_counted(monkeypatch, entry):
     assert unusable(monkeypatch, entry)[0] == 1

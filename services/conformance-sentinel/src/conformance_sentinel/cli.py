@@ -6,6 +6,7 @@ from field_core.guarded_operator import perimeter_headers
 from conformance_sentinel import headers as _headers
 from field_core.errors import upstream_error
 
+import json
 import os
 import sys
 
@@ -49,6 +50,7 @@ def check(
                   "irreversible": irreversible},
             timeout=15.0,
             headers=perimeter_headers(),
+            follow_redirects=False,
         )
     except _HTTP_ERRORS as exc:
         typer.echo(f"error: sentinel unreachable ({type(exc).__name__})", err=True)
@@ -72,7 +74,7 @@ def check(
                    + (f"an unknown decision {shown!r}" if shown is not None else "no readable decision")
                    + "; treated as BLOCK", err=True)
         raise typer.Exit(code=1)
-    typer.echo(resp.text)
+    typer.echo(json.dumps(verdict, ensure_ascii=True))   # the parsed verdict re-serialised, never the raw body (B4)
     if decision == "BLOCK":
         raise typer.Exit(code=1)
     if decision == "ESCALATE":

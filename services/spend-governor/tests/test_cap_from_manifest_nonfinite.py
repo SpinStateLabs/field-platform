@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import math
 
+import httpx
 import pytest
 import yaml
 from fastapi.testclient import TestClient
@@ -67,6 +68,24 @@ class Router:
 
     def post(self, url, json=None, timeout=None, headers=None):
         return self.client.post(url.replace("http://127.0.0.1:8006", ""), json=json)
+
+    # the CLI sends through one httpx.Client (S10-12) and names httpx.HTTPError: stand in for both, as test_throttle
+    HTTPError = httpx.HTTPError
+
+    def Client(self, **kw):
+        router = self
+
+        class _C:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def request(self, method, url, **rkw):
+                return getattr(router, method.lower())(url, **rkw)
+
+        return _C()
 
 
 @pytest.fixture()
