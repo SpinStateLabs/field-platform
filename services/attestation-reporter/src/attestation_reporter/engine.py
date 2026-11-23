@@ -22,6 +22,8 @@ C4 — the window, the canary row and the signature fields:
 
 from __future__ import annotations
 
+import os
+import time
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal, localcontext
@@ -146,6 +148,41 @@ def _target(path: str, params: dict[str, Any] | None = None) -> str:
 _DOWN: ContextVar[set[int] | None] = ContextVar("attestation_down_upstreams", default=None)
 
 
+#: B-GL-attest-pack-gate: a 503 with a Retry-After is waited out and asked again, inside a build only. It can only
+#: matter for the ledger's /verify (the one whole-ledger read a pack sends; its filtered /events are never gated) and
+#: only runs when the ledger answers the 503 itself: with its default one-thread read lane a slow read queues the
+#: filtered /events and the first one times out ("ledger unreachable", no retry). Each wait <= RETRY_AFTER_CAP_S, 3 per call,
+#: FIELD_ATTEST_RETRY_BUDGET_S seconds in all per build (default 20; 0 = never retry, even for a Retry-After of 0;
+#: not a whole number of at most 9 digits = 20). ``_sleep`` is a module name so a test can replace it.
+RETRY_BUDGET_ENV = "FIELD_ATTEST_RETRY_BUDGET_S"
+DEFAULT_RETRY_BUDGET_S = 20
+RETRY_AFTER_CAP_S = 10
+MAX_RETRIES_PER_CALL = 3
+_sleep = time.sleep
+#: [seconds of waiting left] for the current ``build``; None outside a build (a direct ``_fetch`` never retries).
+_RETRY_LEFT: ContextVar[list[float] | None] = ContextVar("attestation_retry_left", default=None)
+
+
+def retry_budget_s() -> int:
+    raw = os.environ.get(RETRY_BUDGET_ENV, "").strip()
+    return int(raw) if raw.isdecimal() and len(raw) <= 9 else DEFAULT_RETRY_BUDGET_S
+
+
+def _retry_wait(resp: Any) -> int | None:
+    """Seconds to wait before asking again when ``resp`` is a 503 with an integer-seconds Retry-After, else None."""
+    if getattr(resp, "status_code", None) != 503:
+        return None
+    headers = getattr(resp, "headers", None)
+    try:
+        raw = headers.get("Retry-After") if headers is not None else None
+    except Exception:  # noqa: BLE001 - an odd headers object is simply no header
+        return None
+    raw = raw.strip() if isinstance(raw, str) else ""
+    if not raw.isdecimal() or len(raw) > 9:
+        return None
+    return min(int(raw), RETRY_AFTER_CAP_S)
+
+
 def _fetch_answer(client, base: str, path: str, params: dict[str, Any] | None = None):
     """Return (raw_json, query, ok, http_status): ``_fetch`` plus the HTTP
     status the service answered with — None when no answer came back (not
@@ -159,12 +196,21 @@ def _fetch_answer(client, base: str, path: str, params: dict[str, Any] | None = 
         # This upstream already failed with no answer in this build: say so at once, with the same
         # literal query, instead of waiting out the timeout again for every remaining metric.
         return None, query, False, None
-    try:
-        resp = client.get(target)
-    except Exception:
-        if down is not None:
-            down.add(id(client))
-        return None, query, False, None
+    left = _RETRY_LEFT.get()
+    retries = 0
+    while True:
+        try:
+            resp = client.get(target)
+        except Exception:
+            if down is not None:
+                down.add(id(client))
+            return None, query, False, None
+        wait = _retry_wait(resp) if left is not None and retries < MAX_RETRIES_PER_CALL else None
+        if wait is None or left[0] <= 0 or wait > left[0]:
+            break
+        left[0] -= wait
+        retries += 1
+        _sleep(wait)
     if resp.status_code != 200:
         return None, query, False, resp.status_code
     try:
@@ -202,8 +248,26 @@ def _without_canaries(data: Any) -> tuple[Any, int]:
     """Drop gate-verification records (any dict whose ``agent_id`` is a canary)."""
     if not isinstance(data, list):
         return data, 0
-    kept = [x for x in data if not (isinstance(x, dict) and x.get("agent_id") in CANARY_AGENTS)]
+    # ``isinstance(..., str)``: a list or object agent_id is unhashable, and ``in`` on a frozenset would
+    # raise TypeError out of build (S8-19). Such a row is simply not a canary.
+    kept = [x for x in data if not (isinstance(x, dict) and isinstance(x.get("agent_id"), str)
+                                    and x["agent_id"] in CANARY_AGENTS)]
     return kept, len(data) - len(kept)
+
+
+class RevokedFlagNotBoolean(ValueError):
+    """A token whose ``revoked`` is present and is not a JSON boolean (a string, a number, a list, null). The metric
+    that needed the flag is unavailable (``_metric`` names this class in its note): a signed governance figure is
+    never built on truthiness (S5-16)."""
+
+
+def _revoked(token: dict) -> bool:
+    """The token's ``revoked`` flag, read strictly: ``True`` and ``False`` only; an absent key is ``False`` (a token
+    list from before the flag existed); any other value raises."""
+    flag = token.get("revoked", False)
+    if flag is True or flag is False:
+        return flag
+    raise RevokedFlagNotBoolean(type(flag).__name__)
 
 
 def _non_records(data: list) -> str | None:
@@ -366,10 +430,10 @@ class PackEngine:
         for event_type, count_name, what, distinct_name, key_label, key in (
             ("lifecycle.reattestation_due", "Re-attestation due (sweep events)", "agent",
              "Distinct agents flagged for re-attestation", "agent_id",
-             lambda e: e.get("agent_id")),
+             lambda e: e.get("agent_id") if isinstance(e.get("agent_id"), str) else None),
             ("lifecycle.expiring_authority", "Expiring authority (sweep events)", "token",
              "Distinct tokens flagged as expiring", "payload.token_id",
-             lambda e: (e.get("payload") or {}).get("token_id")),
+             lambda e: (e.get("payload") if isinstance(e.get("payload"), dict) else {}).get("token_id")),
         ):
             data, query, ok = _fetch(self.ledger, self.ledger_base, "/events",
                                      {"event_type": event_type, **window.params()})
@@ -385,7 +449,9 @@ class PackEngine:
                                        "not records — figure not published"))
                 continue
             events, excluded = _without_canaries(data)
-            keys = [key(e) for e in events]
+            # A key that is not a str (a list or dict a caller wrote into the payload) is
+            # unhashable and not an identifier: count it as missing, never as a distinct key.
+            keys = [k if isinstance(k := key(e), str) else None for e in events]
             missing = sum(1 for k in keys if k is None)
             rows.append(Metric(
                 name=count_name, value=len(events), unit="events", source_query=query,
@@ -443,6 +509,12 @@ class PackEngine:
             return Metric(name=name, source_query=query, status="unavailable",
                           note=_verify_unanswered(answered))
         reason = v.get("reason")
+        if not isinstance(v.get("ok"), bool):
+            # Not a verification result: INTACT is only ever `ok is True`. A truthy
+            # string or number used to read as intact; a missing key read as broken.
+            return Metric(name=name, source_query=query, status="unavailable",
+                          note="the ledger's /verify answer carries no boolean ok "
+                               "— not a verification result; chain NOT verified")
         if not v.get("ok") and isinstance(reason, str) and reason.startswith("ledger busy:"):
             # "ledger busy: unreadable: ..." is a genuine permission refusal on every
             # attempt (sealed-ledger's LedgerUnreadable): retrying will not help, so
@@ -453,7 +525,7 @@ class PackEngine:
                                + ("" if unreadable else "; retry"))
         return Metric(
             name=name,
-            value="INTACT" if v.get("ok") else f"BROKEN — {reason}",
+            value="INTACT" if v["ok"] is True else f"BROKEN — {reason}",
             source_query=query,
             note=_join(f"chain length {v.get('length')}",
                        f"{POINT_IN_TIME} (the whole live chain, not the window)",
@@ -497,9 +569,11 @@ class PackEngine:
         unavailable at once (same query text and note as before), so a dropped host costs one
         timeout per build, not one per metric. See ``_build`` for the window arguments."""
         token = _DOWN.set(set())
+        retry_token = _RETRY_LEFT.set([float(retry_budget_s())])
         try:
             return self._build(period, now, since=since, until=until)
         finally:
+            _RETRY_LEFT.reset(retry_token)
             _DOWN.reset(token)
 
     def _build(self, period: str | None = None, now: datetime | None = None, *,
@@ -590,7 +664,7 @@ class PackEngine:
         revoked = self._metric(
             "Tokens revoked (all time)", self.delegation,
             self.delegation_base, "/tokens", unit="tokens",
-            transform=lambda toks: sum(1 for t in toks if t.get("revoked")),
+            transform=lambda toks: sum(1 for t in toks if _revoked(t)),
             note="computed client-side from the token list: revoked == true; "
                  f"{POINT_IN_TIME}, not windowed",
         )
@@ -601,7 +675,7 @@ class PackEngine:
             self.delegation_base, "/tokens", unit="tokens",
             transform=lambda toks: sum(
                 1 for t in toks
-                if not t.get("revoked")
+                if not _revoked(t)
                 and now <= datetime.fromisoformat(
                     t["expires_at"].replace("Z", "+00:00")
                 ) <= now + timedelta(days=30)

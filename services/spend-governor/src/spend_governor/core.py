@@ -7,17 +7,19 @@ Deterministic arithmetic only — no floats near a limit comparison, no LLM.
 from __future__ import annotations
 
 import logging
+import math
 import re
 import sqlite3
 import threading
 import uuid
 from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from enum import Enum
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from field_core.manifest import FieldManifest
 
@@ -172,6 +174,24 @@ def _encodable(value: str) -> str:
 #: ``str`` that is safe to store and to send back as UTF-8.
 Utf8Str = Annotated[str, AfterValidator(_encodable)]
 
+#: Bounds for the text a caller PUTs (S7-17); numbers as PR 585 chose for /spend and /usage.
+MAX_ID_LEN = 128
+MAX_LABEL_LEN = 200
+#: Strip, then non-blank, then bounded: the "Inbound" models below carry these. The READ
+#: models stay lax so a row stored before the bound still loads (C-316 / C-363 pattern).
+BoundedId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_ID_LEN)]
+BoundedLabel = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_LABEL_LEN)]
+
+
+def limit_to_cents(limit: float) -> int:
+    """A manifest limit in currency units as whole cents, EXACTLY. ``round(limit * 100)`` with a float tolerance refused valid
+    two-decimal limits (131692.98 * 100 is 13169298.000000002); the decimal text of the float (its shortest repr, which is what
+    the manifest author wrote) times 100 is integral for every limit with at most two decimals. Anything else is refused (S9-9)."""
+    exact = Decimal(str(limit)) * 100
+    if exact != exact.to_integral_value():
+        raise ValueError("spend_cap.limit has sub-cent precision; refuse to guess")
+    return int(exact)
+
 
 class SpendCapConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -201,9 +221,14 @@ class SpendCapConfig(BaseModel):
         cap = manifest.enforcement.spend_cap
         if cap is None:
             raise ValueError("manifest has no enforcement.spend_cap")
-        cents = round(cap.limit * 100)
-        if abs(cents - cap.limit * 100) > 1e-9:
-            raise ValueError("spend_cap.limit has sub-cent precision; refuse to guess")
+        scaled = cap.limit * 100
+        if not math.isfinite(scaled):
+            # S6-5: round(inf) is an OverflowError (not a ValueError); a limit so large that *100 overflows is the same
+            raise ValueError("spend_cap.limit must be a finite number")
+        if scaled > MAX_AMOUNT:
+            # one clear line, not a multi-line pydantic error that quotes the number back
+            raise ValueError(f"spend_cap.limit is above the maximum of {MAX_AMOUNT // 100} currency units")
+        cents = limit_to_cents(cap.limit)
         if cap.period not in SUPPORTED_CAP_PERIODS:
             # D1f: never silently widen an unknown window (per-run) to total.
             raise UnsupportedCapPeriodError(
@@ -218,6 +243,16 @@ class SpendCapConfig(BaseModel):
             period=period,
             on_breach=cap.on_breach or "halt",
         )
+
+
+class SpendCapInbound(SpendCapConfig):
+    """The ``PUT /caps`` body: SpendCapConfig with bounded text. ``on_breach`` is stored and returned
+    but no code path acts on it (BLOCK is decided by ``evaluate``; main's declared-only rule, S12-16, and its
+    README row "any text"), so it stays free text, only bounded in length (rebuild of PR 877, controller ruling)."""
+
+    agent_id: BoundedId
+    currency: str = Field(default="USD", pattern=r"^[A-Z]{3}$")
+    on_breach: Utf8Str = Field(default="halt", max_length=MAX_LABEL_LEN)
 
 
 class SpendEvent(BaseModel):
@@ -244,6 +279,10 @@ class RateLimitEntry(BaseModel):
     action: str = Field(min_length=1)
     max: int = Field(ge=1, le=MAX_AMOUNT)
     period: str = Field(min_length=1)
+
+
+class RateLimitEntryInbound(RateLimitEntry):
+    action: BoundedLabel
 
 
 class RateLimitSet(BaseModel):
@@ -273,6 +312,13 @@ class RateLimitSet(BaseModel):
             RateLimitEntry(action=r.action, max=r.max, period=r.period)
             for r in manifest.enforcement.rate_limits or []
         ])
+
+
+class RateLimitSetInbound(RateLimitSet):
+    """The ``PUT /rate-limits`` body: bounded ids and actions (the read side stays lax)."""
+
+    agent_id: BoundedId
+    rate_limits: list[RateLimitEntryInbound] = Field(default_factory=list)
 
 
 class RateLimitRow(BaseModel):
@@ -408,6 +454,18 @@ _OPEN_ESCALATION_INDEX = (
 
 
 def window_start(period: str, now: datetime) -> str:
+    """The first instant of the window ``period`` counts from.
+
+    Seen from this function alone, anything that is not ``daily`` or ``monthly`` counts from the epoch, as
+    ``total``: it fails toward counting MORE spend, never less (reviewer C-125 F-C125-1). Through the service that
+    case does not arise: ``SpendCapConfig.period`` is pinned to daily|monthly|total, ``from_manifest`` refuses an
+    unknown period, and a stored row with an unknown period fails that validation when it is read back: every route
+    that reads the cap (GET /caps, GET /status, GET /totals, GET /usage, POST /spend, POST /usage) answers 500 and
+    records nothing, so the meter stops counting rather than counting more (reviewer C-703 F-C703-1, C-848
+    F-C848-2). Whether a bad stored row should instead meter conservatively or be refused loudly is open
+    (F-C703-3). ``now`` must be UTC: the day and month start are formatted from its fields, and the API converts
+    its clock to UTC before it gets here (F-C848-4).
+    """
     if period == "daily":
         return now.strftime("%Y-%m-%dT00:00:00+00:00")
     if period == "monthly":
@@ -668,7 +726,7 @@ class GovernorStore:
     def open_escalations(self, agent_id: str | None = None) -> list[Escalation]:
         q = "SELECT * FROM escalations WHERE resolved=0"
         params: list[str] = []
-        if agent_id:
+        if agent_id is not None:  # '' is an agent id that matches nothing, not "no filter"
             q += " AND agent_id=?"
             params.append(agent_id)
         with self._lock:
@@ -929,3 +987,17 @@ def evaluate(
     if open_escalations:
         return SpendState.ESCALATE, f"{open_escalations} unresolved escalation(s)"
     return SpendState.OK, "within limits"
+
+
+def crossed_thresholds(
+    cap: SpendCapConfig, spent_cents: int, spent_tokens: int, spent_actions: int
+) -> list[str]:
+    """EVERY kind at or over the escalate threshold (evaluate() reports only
+    the first). Same integer test as evaluate(); order cents, tokens, actions."""
+    pairs = (
+        ("cents", spent_cents, cap.limit_cents),
+        ("tokens", spent_tokens, cap.token_limit),
+        ("actions", spent_actions, cap.action_limit),
+    )
+    return [kind for kind, spent, limit in pairs
+            if limit is not None and spent * 100 >= limit * cap.escalate_at_pct]

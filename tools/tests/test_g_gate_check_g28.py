@@ -205,14 +205,15 @@ def test_the_ci_line_names_the_sha_and_who_confirmed(tmp_path, capsys, value, ms
     assert rc == 1 and out.count("[FAIL]") == 1 and msg in out
 
 
-@pytest.mark.parametrize("value", ["ok", "done", "see below", "in the estate", "the record exists"])
+@pytest.mark.parametrize("value", ["ok", "done", "see below", "in the estate", "the record exists",
+                                   "n/a", "N/A", "yes/no", "a/b", "ok.ok", "/", "records/", "@ xyz1234"])  # reviewer-10 C1
 def test_a_record_line_that_does_not_say_where_the_record_is_fails(tmp_path, capsys, value):
     rc, out = _run(tmp_path, _line(_filled(), "Record G26", value), capsys)
     assert rc == 1 and out.count("[FAIL]") == 1 and "does not say where the record is" in out
 
 
 @pytest.mark.parametrize("value", ["docs/records/g26.md", "STATE.md", "C:\\records\\g26.txt", "held @ 0123abc",
-                                   "see STATE.md section 4", f"@{SHA[:8]}"])
+                                   "see STATE.md section 4", f"@{SHA[:8]}", "/data/records/g26.jsonl", "records/g26.md."])
 def test_a_record_line_with_a_path_a_file_or_a_sha_reference_passes(tmp_path, capsys, value):
     rc, out = _run(tmp_path, _line(_filled(), "Record G26", value), capsys)
     assert rc == 0, out
@@ -307,3 +308,24 @@ def test_the_printed_template_still_fails_and_names_the_new_minimums(capsys):
     gg.main(["--print-template", "--sha", SHA])
     out = capsys.readouterr().out
     assert "first 8 hex" in out and "confirmed by <who>" in out and "path, file name or @ sha" in out
+
+
+# reviewer-10 C2 on 385d615: a fence closes only on the same character, at least as long as the opener, nothing after it
+
+@pytest.mark.parametrize("inner", ["```\n", "```\nx\n```\n```\n", "```python\n", "~~~~~\n"])
+def test_a_filled_example_in_a_longer_fence_with_inner_fence_lines_is_not_the_record(tmp_path, capsys, inner):
+    quoted = f"# STATE\n\n````\n{inner}{_filled()}````\n"
+    rc, out = _run(tmp_path, quoted, capsys)
+    assert rc == 1 and "no '## PHASE G GATE" in out
+
+
+def test_a_closing_line_with_an_info_string_does_not_close_the_fence(tmp_path, capsys):
+    quoted = f"# STATE\n\n```\nx\n```python\n{_filled()}```\n"
+    rc, out = _run(tmp_path, quoted, capsys)
+    assert rc == 1 and "no '## PHASE G GATE" in out
+
+
+def test_a_longer_closing_fence_closes_and_the_real_section_after_it_counts(tmp_path, capsys):
+    text = f"# STATE\n\n```\nquoted\n`````\n\n{_filled()}"
+    rc, out = _run(tmp_path, text, capsys)
+    assert rc == 0, out

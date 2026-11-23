@@ -11,10 +11,11 @@ alert that fails must not stop the work that raised it. An argument outside the 
 content check, like any other field; the alert is still sent.
 
 **What has a caller on main.** ``breakglass_used`` is sent by the sealed-ledger operator observer, on every
-``operator.breakglass_counters_changed`` row it writes (one alert per row). The other five have no caller on main
-yet: ``rotation_failed``, ``rotation_overdue`` and ``rotation_halted`` wait for the rotator (PR 57 rework, C-496), and
-``stage_transition`` and ``stage_aborted`` wait for the Phase G stage controller, which is not in this repository.
-They are built and tested here so a caller only has to call them. ``keyrotation.*`` has no ``halted`` event
+``operator.breakglass_counters_changed`` row it writes (one alert per row). ``stage_transition`` and ``stage_aborted``
+are sent by the Phase G stage controller, ``tools/stage_controller.py`` (one ``stage_transition`` per step that
+completes, one ``stage_aborted`` after a rollback). The other three have no caller on main yet: ``rotation_failed``,
+``rotation_overdue`` and ``rotation_halted`` wait for the rotator (PR 57 rework, C-496). They are built and tested here
+so a caller only has to call them. ``keyrotation.*`` has no ``halted`` event
 (``rotation_events.EVENTS``), so ``rotation_halted`` has a sender and no ledger-event mapping: adding the event is a
 schema change that needs its own reviewed PR.
 

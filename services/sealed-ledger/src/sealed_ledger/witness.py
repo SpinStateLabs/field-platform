@@ -39,6 +39,7 @@ import os
 import re
 import socket
 import threading
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -50,6 +51,8 @@ from cryptography.hazmat.primitives import serialization
 
 from field_core.authn import HEADER as AUTH_HEADER
 from field_core.authn import auth_headers, shared_secret
+from field_core.guarded_operator import LEDGER_GUARDED, GuardedOperatorAuth
+from field_core.operator_auth import HEADER_KEY, HEADER_OPERATOR
 from field_core.ledger import GENESIS_HASH
 from field_core.signing import key_fingerprint, sign_manifest, verify_manifest
 from sealed_ledger.api import load_anchor_key
@@ -57,6 +60,22 @@ from sealed_ledger.store import NoAnchorKey, Snapshot
 
 ANCHOR_REMOTE = "anchor.remote"
 REMOTE_ESTATE = "fly"
+ESTATE_NAME_MAX = 64
+#: Fixed text: the rejected name is never echoed.
+ESTATE_NAME_REFUSAL = "--estate must be 1 to 64 characters with no whitespace, control or invisible (format) character"
+
+
+def checked_estate(name: str) -> str:
+    """``name`` if it is a plain estate name, else ``ValueError(ESTATE_NAME_REFUSAL)``.
+
+    The name goes into the signed anchor.remote payload and ``verify-witness --estate`` selects by exact equality, so a
+    name that differs invisibly (a trailing space, a zero-width or bidi character) is witnessed under a name no later
+    verify finds. Whitespace (``isspace``: Zs, Zl, Zp included), control (Cc) and format (Cf, e.g. zero-width and bidi) characters are
+    refused. Nothing is stripped or normalised: a bad name is refused as it is."""
+    if (not isinstance(name, str) or not 1 <= len(name) <= ESTATE_NAME_MAX
+            or any(ch.isspace() or unicodedata.category(ch) in ("Cc", "Cf") for ch in name)):
+        raise ValueError(ESTATE_NAME_REFUSAL)
+    return name
 FLY_SECRET_FILE_ENV = "FIELD_WITNESS_FLY_SECRET_FILE"
 DIRECTION_2_NOT_LIVE = "direction 2 not live (D5)"
 HTTP_TIMEOUT_S = 10.0
@@ -117,10 +136,21 @@ def strict_json_loads(text: str | bytes) -> Any:
 
 
 def require_https(url: str) -> str:
-    """The remote estate is only ever read over TLS."""
-    parts = urlsplit(url)
-    if parts.scheme != "https" or not parts.netloc:
-        raise ValueError(f"--fly-url must be an https:// URL (got {url!r})")
+    """The remote estate is only ever read over TLS, at a plain origin. A URL with userinfo (httpx would send it as
+    basic auth to the remote estate), a query or a fragment is refused. The refusals are fixed text: the URL itself is
+    never echoed, because it may be the credential."""
+    try:
+        parts = urlsplit(url)
+        has_userinfo = parts.username is not None or parts.password is not None or "@" in parts.netloc
+        scheme, netloc = parts.scheme, parts.netloc
+    except ValueError:
+        raise ValueError("--fly-url must be an https:// URL (it could not be parsed)") from None
+    if scheme != "https" or not netloc:
+        raise ValueError("--fly-url must be an https:// URL")
+    if has_userinfo:
+        raise ValueError("--fly-url must not carry credentials (user:password@); the value is not shown")
+    if "?" in url or "#" in url:   # an empty query or fragment (a bare ? or #) counts too
+        raise ValueError("--fly-url must be a plain origin: no query string or fragment; the value is not shown")
     return url.rstrip("/")
 
 
@@ -135,7 +165,7 @@ def parse_head(body: bytes) -> tuple[int, str]:
     length, head = data.get("event_count"), data.get("head_hash")
     if type(length) is not int or length < 0:
         raise WitnessError(f"event_count {length!r} is not a non-negative integer")
-    if not isinstance(head, str) or not _HEX64.match(head):
+    if not isinstance(head, str) or not _HEX64.fullmatch(head):
         raise WitnessError("head_hash is not 64 lowercase hex")
     return length, head
 
@@ -166,9 +196,16 @@ def build_fly_client(transport: httpx.BaseTransport | None = None) -> httpx.Clie
 
 
 def build_ledger_client(base_url: str, transport: httpx.BaseTransport | None = None) -> httpx.Client:
-    """The LOCAL served ledger, with the local perimeter header from the environment."""
-    return httpx.Client(base_url=base_url, headers=auth_headers(), timeout=HTTP_TIMEOUT_S,
-                        follow_redirects=False, transport=transport)
+    """The LOCAL served ledger, with the local perimeter header from the environment.
+
+    Both are read when the client is built (a pinned test relies on that). The operator pair is NOT a default header:
+    ``GuardedOperatorAuth`` adds it only to a guarded ledger route (``POST /events``, the witness's one write); the
+    ``GET /health`` read carries the perimeter secret alone (C-1181)."""
+    base = auth_headers()
+    pair = (base[HEADER_OPERATOR], base[HEADER_KEY]) if HEADER_OPERATOR in base and HEADER_KEY in base else None
+    perimeter = {k: v for k, v in base.items() if k not in (HEADER_OPERATOR, HEADER_KEY)}
+    return httpx.Client(base_url=base_url, headers=perimeter, auth=GuardedOperatorAuth(base_url, pair, LEDGER_GUARDED),
+                        timeout=HTTP_TIMEOUT_S, follow_redirects=False, transport=transport)
 
 
 def observer_record(started_at: str, host: str | None = None) -> dict[str, str]:
@@ -199,6 +236,7 @@ class Witness:
     _secrets: list[str] = field(default_factory=list, repr=False)
 
     def __post_init__(self) -> None:
+        self.local_estate = checked_estate(self.local_estate)
         self.fly_url = require_https(self.fly_url)
 
     # -- logging: every line goes through here, and no secret survives it ------------------
@@ -238,7 +276,7 @@ class Witness:
             resp = self.fly.get(url)
         except httpx.HTTPError as exc:
             self._log(logging.WARNING, f"direction 1: {self.remote_estate} read failed "
-                      f"({type(exc).__name__}: {exc}); nothing appended")
+                      f"({type(exc).__name__}); nothing appended")
             return "fly-unreadable", "", None
         if resp.status_code != 200:
             self._log(logging.WARNING, f"direction 1: {redact_url(url)} answered {resp.status_code} "
@@ -247,7 +285,7 @@ class Witness:
         try:
             length, head = parse_head(resp.content)
         except WitnessError as exc:
-            self._log(logging.WARNING, f"direction 1: {url} is not a ledger head ({exc}); nothing appended")
+            self._log(logging.WARNING, f"direction 1: {redact_url(url)} is not a ledger head ({exc}); nothing appended")
             return "fly-unreadable", "", None
         payload = sign_anchor({
             "estate": self.remote_estate, "length": length, "head_hash": head,
@@ -259,7 +297,7 @@ class Witness:
         try:
             appended = self.ledger.post("events", json=body)
         except httpx.HTTPError as exc:
-            self._log(logging.WARNING, f"direction 1: local ledger unreachable ({type(exc).__name__}: {exc}); "
+            self._log(logging.WARNING, f"direction 1: local ledger unreachable ({type(exc).__name__}); "
                       "nothing appended")
             return "ledger-refused", "", None
         if appended.status_code != 201:
@@ -277,7 +315,7 @@ class Witness:
             self._log(logging.INFO, f"{DIRECTION_2_NOT_LIVE}: {FLY_SECRET_FILE_ENV} is unset")
             return "not-live"
         try:
-            secret = Path(path).read_text(encoding="utf-8").strip()
+            secret = Path(path).read_text(encoding="utf-8-sig").strip()
         except (OSError, UnicodeError) as exc:
             self._log(logging.WARNING, f"direction 2 not sent: {FLY_SECRET_FILE_ENV} unreadable "
                       f"({type(exc).__name__})")
@@ -308,10 +346,10 @@ class Witness:
             resp = self.fly.post(url, json={"event_type": ANCHOR_REMOTE, "payload": payload, "agent_id": None},
                                  headers={AUTH_HEADER: secret})
         except httpx.HTTPError as exc:
-            self._log(logging.WARNING, f"direction 2: POST {url} failed ({type(exc).__name__}: {exc})")
+            self._log(logging.WARNING, f"direction 2: POST {redact_url(url)} failed ({type(exc).__name__})")
             return "refused"
         if resp.status_code != 201:
-            self._log(logging.WARNING, f"direction 2: {url} refused ({resp.status_code}: {self._body(resp)})")
+            self._log(logging.WARNING, f"direction 2: {redact_url(url)} refused ({resp.status_code}: {self._body(resp)})")
             return "refused"
         if outcome is not None:
             outcome.remote = payload
@@ -346,12 +384,16 @@ def run_loop(tick: Callable[[], Any], every: float, stop: threading.Event,
 def load_events(raw: bytes) -> list[Any]:
     """A GET /events JSON array, or JSONL (one event per line). Duplicate keys refused."""
     text = raw.decode("utf-8")
+    if text.startswith("\ufeff"):   # PowerShell Out-File and > redirects write one; anchors.parse_anchors strips it too
+        text = text[1:]
     if text.lstrip().startswith("["):
         data = strict_json_loads(text)
         if not isinstance(data, list):
             raise WitnessError("events source is not a JSON array")
         return data
-    return [strict_json_loads(line) for line in text.splitlines() if line.strip()]
+    # "\n" only, the boundary the store and the bundle reader use: str.splitlines() also breaks on U+2028, U+2029 and
+    # NEL, which JSON allows raw inside a string, and would cut a genuine event in two.
+    return [strict_json_loads(line.removeprefix("\ufeff")) for line in text.split("\n") if line.strip()]
 
 
 def fetch_events(url: str, secret: str | None, transport: httpx.BaseTransport | None = None) -> list[Any]:
@@ -380,7 +422,7 @@ def check_anchor(payload: dict[str, Any], snap: Snapshot, local_length: int,
     length, head = payload.get("length"), payload.get("head_hash")
     if type(length) is not int or length < 0:
         return f"malformed: length {length!r} is not a non-negative integer"
-    if not isinstance(head, str) or not _HEX64.match(head):
+    if not isinstance(head, str) or not _HEX64.fullmatch(head):
         return "malformed: head_hash is not 64 lowercase hex"
     if public_key_pem is not None:
         signature = payload.get("signature")

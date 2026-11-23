@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """stage_controller - the Phase G stage controller (P36; G24; Don's ruling lifts C-552).
 
-    python tools/stage_controller.py plan   --stage N [--records PATH] [--go-sentence TEXT]
-    python tools/stage_controller.py record alerts-proven | gate G21 | gate G22 [--records PATH]
+    python tools/stage_controller.py plan   --stage N [--records PATH] [--go-sentence TEXT --build-sha SHA] [--services a,b,c]
+    python tools/stage_controller.py record alerts-proven | gate G18 | gate G21 | gate G22 [--records PATH]
 
 WHAT IT IS. A state machine for the three Phase G arming stages (``docs/runbooks/v1.2-deploy-rollback.md``,
 "Stage pre-flight checklists"). It decides, in order: may this stage start (``preconditions``), what are the steps
@@ -15,7 +15,8 @@ DEFAULTS. ``Controller.run`` is a dry run unless ``live=True`` AND an ``Actions`
 action, sends no alert and writes a ``plan`` record.
 
 WHAT IT REFUSES (``Refused``; nothing runs, one ``refused`` record). A stage that is unknown. No ``alerts_proven``
-record (the test alert reached Don, P36). Stage 2 without the ``G22`` gate record, Stage 3 without ``G21``. Stage 2
+record (the test alert reached Don, P36). Stage 2 without the ``G22`` and ``G18`` gate records (G18 is the clean Stage 1 window, written by
+tools/stage1_window.py), Stage 3 without ``G21``. Stage 2
 and Stage 3 without Don's go sentence passed in as an input (``go_sentence``; never read from the environment, and only
 its length and an 8-hex prefix of its sha256 (16 hex would be withheld by the content check) are recorded). Stage 1 is the only stage that runs on the alerts record
 alone: "automatic" means Stage 1 steps and the rollbacks until Don says otherwise (G25, G26).
@@ -36,6 +37,7 @@ Exit status of the command line: 0 ok, 2 refused or a usage error.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as _dt
 import enum
 import hashlib
@@ -43,6 +45,7 @@ import json
 import os
 import re
 import sys
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence
@@ -82,17 +85,29 @@ class Stage:
     needs_go_sentence: bool = False
     #: an earlier stage that must have a recorded, still-clean ``stage_done`` before this one may start (F-816-4)
     needs_clean_stage: int | None = None
+    #: printed by ``plan``: what cannot be undone once the stage is on (runbook "Irreversibility")
+    irreversible: str | None = None
+    #: the services whose dropped-record counters the baseline must name (RT-832-R2)
+    services: tuple[str, ...] = ()
+
+
+#: The eight services that import ``operator_auth`` (the runbook's "recreate_eight").
+EIGHT_SERVICES = ("registry", "ledger", "delegation", "killswitch", "governor", "fedbroker", "console", "lifecycle")
 
 
 #: The stages and their rollback (runbook v1.2-deploy-rollback.md, step 8 and "Stage pre-flight checklists").
 STAGES: dict[int, Stage] = {
     1: Stage(1, steps=("install_operators_file", "set_env_paths", "recreate_eight"),
-             rollback=("delete_flag_lines", "recreate_eight")),
+             rollback=("delete_flag_lines", "recreate_eight"), services=EIGHT_SERVICES),
     2: Stage(2, steps=("write_override", "recreate_killswitch"),
-             rollback=("delete_override", "recreate_killswitch"), gates=("G22",), needs_go_sentence=True),
+             rollback=("delete_override", "recreate_killswitch"), gates=("G22", "G18"), needs_go_sentence=True,
+             services=("killswitch", "registry")),
     3: Stage(3, steps=("set_require_flag", "delete_override", "recreate_eight"),
              rollback=("remove_require_flag", "recreate_seven", "recreate_killswitch"),
-             gates=("G21",), needs_go_sentence=True, needs_clean_stage=2),
+             gates=("G21",), needs_go_sentence=True, needs_clean_stage=2, services=EIGHT_SERVICES,
+             irreversible=("an image rollback is unavailable once REQUIRE is on all eight: every accepted operator write "
+                           "carries its authenticated id and key fingerprint, permanently; roll back by removing "
+                           "FIELD_OPERATOR_REQUIRE first, never by image alone")),
 }
 
 
@@ -147,10 +162,16 @@ class Records:
         return row
 
     def rows(self) -> list[dict]:
+        """The rows the file holds; a file that does not exist holds none. A file that cannot be read (a directory, a
+        permission refusal) or decoded (a byte that is not UTF-8) is NOT empty: an empty reading would lose
+        ``alerts_proven``, ``stage_done`` and ack history, and would hide a rollback that was never acknowledged. It is
+        ``Refused("records_unreadable")``, a fixed token that never carries the path or the bytes."""
         try:
             text = self.path.read_text(encoding="utf-8")
         except FileNotFoundError:
             return []
+        except (OSError, UnicodeError):
+            raise Refused("records_unreadable") from None
         out = []
         for line in text.splitlines():
             try:
@@ -170,18 +191,82 @@ class Records:
                    and (sha8 is None or r.get("sha8") == sha8) for r in self.rows())
 
     def stage_clean(self, stage: int) -> bool:
-        """True when the last word the records have on ``stage`` is ``stage_done``: a later start, abort or rollback of
-        that stage makes it not clean (F-816-4)."""
+        """True when the last word the records have on ``stage`` is ``stage_done``: a later start of that stage, or an
+        abort or rollback of that stage or of any LATER one, makes it not clean (F-816-4, RT-832-R3: a Stage 3 rollback
+        leaves the estate LOG-ONLY, so the Stage 2 window it relied on is gone)."""
         clean = False
         for r in self.rows():
-            if r.get("stage") != stage:
+            at = r.get("stage")
+            if not isinstance(at, int) or isinstance(at, bool):
                 continue
             kind = r.get("kind")
-            if kind == "stage_done":
+            if at == stage and kind == "stage_done":
                 clean = True
-            elif kind in ("stage_start", "abort", "rolled_back", "rollback_failed"):
+            elif at == stage and kind == "stage_start":
+                clean = False
+            elif at >= stage and kind in ("abort", "rolled_back", "rollback_failed"):
                 clean = False
         return clean
+
+
+    def unresolved(self, stage: int) -> str | None:
+        """Why ``stage`` may not start again, or None (RT-HARD-3 F-H3-1, F-H3-2). The last word the records have on the
+        stage decides: ``stage_done``, ``rolled_back`` and ``rollback_ack`` are clear; ``rollback_failed`` is
+        ``rollback_failed_unresolved`` (the controller said "act by hand": nobody has said it was done); anything else,
+        a ``stage_start`` that never reached a terminal row, is ``stage_in_progress`` (another run, or a crash). Only
+        ``record ack-rollback --stage N`` writes the ack."""
+        last = None
+        for r in self.rows():
+            if r.get("stage") == stage and r.get("kind") in _STAGE_WORDS:
+                last = r["kind"]
+        if last in (None, "stage_done", "rolled_back", "rollback_ack"):
+            return None
+        return "rollback_failed_unresolved" if last == "rollback_failed" else "stage_in_progress"
+
+
+#: the record kinds that make up the life of one stage run, for ``Records.unresolved``
+_STAGE_WORDS = ("stage_start", "step_done", "stage_done", "abort", "rollback_step", "rolled_back", "rollback_failed",
+                "rollback_ack")
+
+
+class _RunLock:
+    """An exclusive lock on ``<records>.lock`` for the length of a live run (RT-HARD-3 F-H3-2). The operating system drops
+    it when the process dies, so a crash leaves no stale lock; a second live run is ``Refused("run_in_progress")``.
+    The file holds nothing."""
+
+    def __init__(self, records_path: Path):
+        self.path = Path(str(records_path) + ".lock")
+        self.fh = None
+
+    def __enter__(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o600)
+        fh = os.fdopen(fd, "r+b")
+        try:
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            fh.close()
+            raise Refused("run_in_progress") from None
+        self.fh = fh
+        return self
+
+    def __exit__(self, *exc):
+        fh, self.fh = self.fh, None
+        try:
+            if os.name == "nt":
+                import msvcrt
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+        finally:
+            fh.close()                       # closing drops the lock on every platform
+        return False
 
 
 def _go_fields(go_sentence: Any) -> dict:
@@ -216,6 +301,9 @@ def preconditions(stage: int, records: Records, go_sentence: Any = None, build_s
             raise Refused(f"gate_{gate}_not_recorded")
     if spec.needs_clean_stage is not None and not records.stage_clean(spec.needs_clean_stage):
         raise Refused(f"stage_{spec.needs_clean_stage}_not_clean")
+    unresolved = records.unresolved(stage)
+    if unresolved:
+        raise Refused(unresolved)            # a failed rollback or an unfinished run waits for `record ack-rollback`
     if spec.needs_go_sentence:
         if (not isinstance(go_sentence, str) or not go_sentence.strip() or len(go_sentence) > MAX_GO_SENTENCE
                 or alerts.content_problem(go_sentence)):
@@ -244,11 +332,12 @@ def _increases(baseline: Mapping[str, Mapping[str, int]], now: Mapping[str, Mapp
 
 @dataclass
 class Result:
-    status: str                  # dry-run | completed | aborted_rolled_back | rollback_failed
+    status: str                  # dry-run | completed | aborted_rolled_back | aborted_nothing_armed | rollback_failed
     stage: int
     steps_done: list[str] = field(default_factory=list)
     abort: str | None = None
     rolled_back: list[str] = field(default_factory=list)
+    nothing_armed: bool = False
 
 
 class Controller:
@@ -260,8 +349,17 @@ class Controller:
         self.actions = actions
         self.estate = estate
         self.env = env
-        #: services the counters baseline must name; an empty baseline is a health failure whatever this is
-        self.expected_services = tuple(expected_services or ())
+        #: services the counters baseline must name; None = the stage's own list (RT-832-R2). An empty override is read
+        #: as None (an empty config must not turn the check off); a name that is not one of the compose names is
+        #: refused, so a driver using another label (the Stage 0 tool says "federation", compose says "fedbroker")
+        #: fails loudly here instead of aborting every run as a health failure. An empty baseline is a health failure
+        #: whatever this is
+        names = tuple(expected_services) if expected_services is not None else ()
+        unknown = [n for n in names if n not in EIGHT_SERVICES]
+        if unknown:
+            raise ValueError(f"expected_services names must be compose names {EIGHT_SERVICES}; got {unknown}")
+        self.expected_services = names or None
+        self._pending: list[threading.Thread] = []      # per-step alerts in flight (B-RT2 F4)
 
     def _record(self, kind: str, **fields: Any) -> bool:
         """Append a record row. A write that fails is reported, never raised: a records failure must not skip a
@@ -272,6 +370,14 @@ class Controller:
             return False
         return True
 
+    def _note_refusal(self, stage: Any, reason: str) -> None:
+        """Record why a stage was refused. The record is best effort: a records file that cannot be written must not
+        replace the ``Refused`` (a named, exit-2 outcome) with an ``OSError`` traceback."""
+        try:
+            self.records.append("refused", stage=stage if isinstance(stage, int) else None, reason=reason)
+        except OSError:
+            pass
+
     # alerts: the senders never raise, but a driver bug must not skip a rollback either
     def _alert(self, sender, **kw) -> None:
         try:
@@ -279,18 +385,54 @@ class Controller:
         except Exception:
             pass
 
+    def _alert_in_background(self, sender, **kw) -> None:
+        """The per-step alert goes out on its own thread, so an unreachable ntfy (about 18 s per alert) never holds the next
+        step of a half-armed stage (B-RT2 F4). Every such alert is still delivered, or has failed, before ``run`` returns
+        and before an abort sends its own alert (``_drain_alerts``)."""
+        thread = threading.Thread(target=self._alert, args=(sender,), kwargs=kw, daemon=True)
+        self._pending.append(thread)
+        thread.start()
+
+    def _drain_alerts(self) -> None:
+        pending, self._pending = self._pending, []
+        for thread in pending:
+            thread.join()
+
     def run(self, stage: int, *, go_sentence: Any = None, live: bool = False) -> Result:
+        """A live run (``live`` and a driver) holds the records file's exclusive lock from the checks to the end, so two
+        live runs never both execute (F-H3-2); a plan takes no lock."""
+        locked = _RunLock(self.records.path) if live and self.actions is not None else contextlib.nullcontext()
+        try:
+            with locked:
+                return self._run_locked(stage, go_sentence, live)
+        except Refused as exc:
+            if exc.reason == "run_in_progress":
+                self._note_refusal(stage, exc.reason)
+            raise
+
+    def _run_locked(self, stage: int, go_sentence: Any, live: bool) -> Result:
         try:
             preconditions(stage, self.records, go_sentence, self.build_sha)
         except Refused as exc:
-            self.records.append("refused", stage=stage if isinstance(stage, int) else None, reason=exc.reason)
+            self._note_refusal(stage, exc.reason)
             raise
         spec = STAGES[stage]
+        if self.expected_services is not None and any(s not in self.expected_services for s in spec.services):
+            # reviewer-8 C1 on the rebuild of PR 855 (controller ruling): an explicit list may ADD services to the stage's
+            # own list, never leave one out, so an operator cannot narrow what a stage checks. Refused before anything.
+            self._note_refusal(stage, "services_narrower_than_stage")
+            raise Refused("services_narrower_than_stage")
         extra = _go_fields(go_sentence) if spec.needs_go_sentence else {}
         if not live or self.actions is None:
-            self.records.append("plan", stage=stage, steps=list(spec.steps), rollback=list(spec.rollback),
-                                dry_run=True, **extra)
+            try:
+                self.records.append("plan", stage=stage, steps=list(spec.steps), rollback=list(spec.rollback),
+                                    dry_run=True, **extra)
+            except OSError:
+                raise Refused("records_unwritable") from None   # a controller that cannot record does not plan
             return Result("dry-run", stage)
+        if self.build_sha is None:               # a live run on records of any sha is the F-816-5 hole (RT-832-R1)
+            self.records.append("refused", stage=stage, reason="build_sha_required")
+            raise Refused("build_sha_required")
         result = Result("completed", stage)
         interrupt: BaseException | None = None
         try:
@@ -298,8 +440,12 @@ class Controller:
         except BaseException as exc:             # KeyboardInterrupt or SystemExit mid-stage: roll back, then re-raise (F-816-2)
             condition, interrupt = Abort.CONTROLLER_ERROR, exc
         if condition is None:
+            self._drain_alerts()
             return result
-        aborted = self._abort(spec, condition, result)
+        if result.nothing_armed:
+            aborted = self._not_started(spec, condition, result)
+        else:
+            aborted = self._abort(spec, condition, result)
         if interrupt is not None:
             raise interrupt
         return aborted
@@ -309,12 +455,14 @@ class Controller:
         stage is done and recorded. A records write that fails is a controller error (F-816-1)."""
         stage = spec.number
         if not self._record("stage_start", stage=stage, **extra):
+            result.nothing_armed = True          # nothing was changed yet: no rollback on an untouched estate (RT-832-R4)
             return Abort.CONTROLLER_ERROR
         try:
             baseline = {s: dict(c) for s, c in self.actions.counters().items()}
         except Exception:
             return Abort.HEALTH
-        if not baseline or any(s not in baseline for s in self.expected_services):
+        expected = spec.services if self.expected_services is None else self.expected_services
+        if not baseline or any(s not in baseline for s in expected):
             return Abort.HEALTH                  # an empty or short baseline would judge no service (F-816-3)
         for step in spec.steps:
             condition = self._run_step(stage, step, baseline)
@@ -323,7 +471,7 @@ class Controller:
             result.steps_done.append(step)
             if not self._record("step_done", stage=stage, step=step):
                 return Abort.CONTROLLER_ERROR
-            self._alert(alert_senders.stage_transition, subject=f"stage{stage}", detail=f"{step} done")
+            self._alert_in_background(alert_senders.stage_transition, subject=f"stage{stage}", detail=f"{step} done")
         if not self._record("stage_done", stage=stage):
             return Abort.CONTROLLER_ERROR
         return None
@@ -338,6 +486,15 @@ class Controller:
         if not failed:
             return None
         return sorted(failed, key=lambda a: ABORT_CONDITIONS.index(a.value))[0]
+
+    def _not_started(self, spec: Stage, condition: Abort, result: Result) -> Result:
+        """The stage could not even be recorded as started: nothing ran, so there is nothing to roll back."""
+        result.abort = condition.value
+        result.status = "aborted_nothing_armed"
+        self._record("abort", stage=spec.number, condition=condition.value, steps_done=result.steps_done)
+        self._alert(alert_senders.stage_aborted, subject=f"stage{spec.number}",
+                    detail=f"{condition.value}, nothing armed")
+        return result
 
     def _abort(self, spec: Stage, condition: Abort, result: Result) -> Result:
         """Roll back once, in order. A failure stops it: it is never retried."""
@@ -358,6 +515,7 @@ class Controller:
                     failure = "rollback_verify"
             except Exception:
                 failure = "rollback_verify"
+        self._drain_alerts()          # the finished steps' alerts first; the rollback above never waited for them
         if failure is None:
             result.status = "aborted_rolled_back"
             self._record("rolled_back", stage=spec.number, condition=condition.value)
@@ -377,6 +535,17 @@ def _records_path(arg: str | None) -> Path:
     return Path(arg or "stage-controller-records.jsonl")
 
 
+def _write(records: Records, kind: str, **fields: Any) -> bool:
+    """One CLI record write. A records file that cannot be written (a directory, read-only, a full disk) is one
+    ``refused: records_unwritable`` line and exit 2 from the caller, never a traceback, and nothing is claimed recorded."""
+    try:
+        records.append(kind, **fields)
+    except OSError:
+        print("refused: records_unwritable")
+        return False
+    return True
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="stage_controller", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -385,17 +554,30 @@ def main(argv: list[str] | None = None) -> int:
     plan.add_argument("--records")
     plan.add_argument("--go-sentence", dest="go_sentence")
     plan.add_argument("--build-sha", dest="build_sha",
-                      help="the sha the estate runs: the alerts and gate records must carry it")
-    rec = sub.add_parser("record", help="write an alerts-proven or gate record")
-    rec.add_argument("what", choices=("alerts-proven", "gate"))
-    rec.add_argument("gate", nargs="?", choices=("G21", "G22"))
+                      help="the sha the estate runs: the alerts and gate records must carry it; required with --go-sentence")
+    plan.add_argument("--services", help="comma-separated compose service names the baseline must name "
+                                         "(default: the stage's own list; it may add to that list, never leave one of its services out); an empty "
+                                         "list, an unknown name or a narrower list is refused")
+    rec = sub.add_parser("record", help="write an alerts-proven, gate or ack-rollback record")
+    rec.add_argument("what", choices=("alerts-proven", "gate", "ack-rollback"))
+    rec.add_argument("gate", nargs="?", choices=("G18", "G21", "G22"))
     rec.add_argument("--records")
+    rec.add_argument("--stage", type=int,
+                     help="ack-rollback only: the stage whose failed rollback or unfinished run was dealt with by hand")
     rec.add_argument("--build-sha", dest="build_sha", help="bind the record to the main sha it was proven on")
     args = ap.parse_args(argv)
     records = Records(_records_path(args.records))
     if args.cmd == "record":
+        if args.what == "ack-rollback":
+            if args.stage not in STAGES:
+                print("refused: ack-rollback needs --stage with a known stage")
+                return 2
+            if not _write(records, "rollback_ack", stage=args.stage):
+                return 2
+            print(f"recorded ack-rollback stage {args.stage}")
+            return 0
         if args.what == "gate" and not args.gate:
-            print("refused: record gate needs G21 or G22")
+            print("refused: record gate needs G18, G21 or G22")
             return 2
         try:
             sha = {"sha8": sha8_of(args.build_sha)} if args.build_sha else {}
@@ -403,21 +585,39 @@ def main(argv: list[str] | None = None) -> int:
             print(f"refused: {exc.reason}")
             return 2
         if args.what == "alerts-proven":
-            records.append("alerts_proven", ok=True, **sha)
+            written = _write(records, "alerts_proven", ok=True, **sha)
         else:
-            records.append("gate", gate=args.gate, ok=True, **sha)
+            written = _write(records, "gate", gate=args.gate, ok=True, **sha)
+        if not written:
+            return 2
         print(f"recorded {args.what}{' ' + args.gate if args.gate else ''}")
         return 0
+    names: tuple[str, ...] | None = None
+    if args.services is not None:
+        names = tuple(dict.fromkeys(n.strip() for n in args.services.split(",")))
+        if not names or any(not n for n in names):
+            print("refused: services_empty")
+            return 2
+        if [n for n in names if n not in EIGHT_SERVICES]:
+            print(f"refused: services_unknown (compose names are {', '.join(EIGHT_SERVICES)})")
+            return 2
+    if args.go_sentence is not None and not args.build_sha:
+        # a go sentence is a live-run input: the run must be bound to the sha the estate runs (RT-832-R1)
+        print("refused: build_sha_required")
+        return 2
     try:
-        Controller(records, build_sha=args.build_sha).run(args.stage, go_sentence=args.go_sentence)
+        Controller(records, build_sha=args.build_sha, expected_services=names).run(args.stage, go_sentence=args.go_sentence)
     except Refused as exc:
         print(f"refused: {exc.reason}")
         return 2
     spec = STAGES[args.stage]
     print(f"stage {args.stage} may start (dry run, nothing was changed)")
     print("steps: " + ", ".join(spec.steps))
+    print("services: " + ", ".join(names if names is not None else spec.services))
     print("rollback, in order: " + ", ".join(spec.rollback))
     print("abort conditions: " + ", ".join(ABORT_CONDITIONS))
+    if spec.irreversible:
+        print("irreversibility: " + spec.irreversible)
     return 0
 
 

@@ -20,7 +20,7 @@ TBD/TODO/XXX/``...``). Required labels:
   CI                  the CI status on this SHA and who confirmed it (step 4): it must name the first 8 hex of the
                       SHA and say ``confirmed by <name>``.
   Record G16 .. G18   the three records that must exist before the gate (estate-side work, recorded by Don); each
-                      value must say where the record is: a path, a file name, or ``@ <sha>``.
+                      value must say where the record is: a record file (.md, .json, .log ...), or ``@ <sha>``.
   Record G25 .. G27   the go-sentence records and the D16 positive-path record, likewise (same rule).
   Armed               one line per switch armed, ``<switch> | disarm: <line>``; a switch without a disarm part fails.
                       Several lines are allowed (arming order is the order of the lines); at least one is required.
@@ -47,7 +47,11 @@ RECORDS = ("G16", "G17", "G18", "G25", "G26", "G27")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 HEADING_RE = re.compile(r"^##\s+PHASE G GATE\s+(\S+)\s*$")
 FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
-RECORD_REF_RE = re.compile(r"[/\\]|\b[\w-]+\.[A-Za-z0-9]{1,5}\b|@\s*[0-9a-f]{7,40}\b", re.IGNORECASE)
+#: Where a record is (reviewer-10 C1): a file with a record extension, with or without a directory, or ``@ <7-40 hex>``.
+#: "n/a", "yes/no", "a/b" and "ok.ok" hold a slash or a dot and say nothing about where a record is.
+RECORD_REF_RE = re.compile(
+    r"(?<![\w.-])(?:[A-Za-z]:)?[/\\]?(?:[\w.-]+[/\\])*[\w-][\w.-]*\.(?:md|txt|json|jsonl|log|ya?ml|csv|tsv|html|pdf)"
+    r"(?![\w-]|\.\w)|@\s*[0-9a-f]{7,40}\b", re.IGNORECASE)
 CONFIRMED_RE = re.compile(r"\bconfirmed\s+by\s+(\S+)", re.IGNORECASE)
 LINE_RE = re.compile(r"^[-*\s]*(Step\s+\d+|Record\s+G\d+|CI|Armed|Forward-only|Not-live|Don inputs)\s*:\s*(.*?)\s*$",
                      re.IGNORECASE)
@@ -86,12 +90,12 @@ Step 10: <catalogue in-estate; Fly arming, one secret per restart, C0 between ea
 Step 11: <this record>
 Step 12: <gate summary posted where>
 CI: <status on the first 8 hex of this SHA> confirmed by <who>
-Record G16: <path, file name or @ sha where the record is>
-Record G17: <path, file name or @ sha where the record is>
-Record G18: <path, file name or @ sha where the record is>
-Record G25: <path, file name or @ sha where the record is>
-Record G26: <path, file name or @ sha where the record is>
-Record G27: <path, file name or @ sha where the record is>
+Record G16: <record file (with or without a path) or @ sha>
+Record G17: <record file (with or without a path) or @ sha>
+Record G18: <record file (with or without a path) or @ sha>
+Record G25: <record file (with or without a path) or @ sha>
+Record G26: <record file (with or without a path) or @ sha>
+Record G27: <record file (with or without a path) or @ sha>
 Armed: <switch> | disarm: <the one-line disarm>
 Forward-only: <steps that ran and are no longer reversible, or none>
 Not-live: <the keyless / not-live list>
@@ -110,12 +114,16 @@ def _unfenced(text: str):
     for line in text.splitlines():
         m = FENCE_RE.match(line)
         if m:
-            marker = m.group(1)
+            marker, rest = m.group(1), line[m.end():]
             if fence is None:
-                fence = marker[0]
-            elif marker[0] == fence:
-                fence = None
-            continue
+                if not (marker[0] == "`" and "`" in rest):   # a backtick fence's info string holds no backtick
+                    fence = marker
+                    continue
+            else:
+                # reviewer-10 C2: closes only on the same character, at least as long as the opener, nothing after it
+                if marker[0] == fence[0] and len(marker) >= len(fence) and not rest.strip():
+                    fence = None
+                continue
         if fence is None:
             yield line
 
@@ -199,7 +207,9 @@ def check(text: str, sha: str) -> list[tuple[bool, str]]:
         return None
 
     def where(v: str) -> str | None:
-        return None if RECORD_REF_RE.search(v) else "does not say where the record is (a path, a file name or @ <sha>)"
+        if RECORD_REF_RE.search(v):
+            return None
+        return "does not say where the record is (a record file, with or without a path, or @ <sha>)"
 
     for n in STEPS:
         one(f"Step {n}", f"step {n} ({STEP_TITLES[n]})", step4 if n == 4 else words)

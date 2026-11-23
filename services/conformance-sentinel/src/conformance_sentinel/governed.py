@@ -21,7 +21,7 @@ ALLOW. Fail closed: sentinel unreachable ⇒ ``ActionBlocked``.
 
 from __future__ import annotations
 
-from field_core.authn import auth_headers
+from field_core.guarded_operator import perimeter_headers
 
 import functools
 import os
@@ -31,11 +31,23 @@ from typing import Any, Callable
 import httpx
 
 
+def _reasons_text(verdict: dict[str, Any]) -> str:
+    """The verdict's reasons as one line. A reply from the sentinel is data: ``reasons`` that is not a list
+    (a string, a number, null) or holds non-strings must still give the typed exception, not a TypeError from
+    ``join`` (S7-23)."""
+    reasons = verdict.get("reasons")
+    if isinstance(reasons, str):
+        return reasons
+    if not isinstance(reasons, list):
+        return ""
+    return "; ".join(r for r in reasons if isinstance(r, str))
+
+
 class ActionBlocked(RuntimeError):
     def __init__(self, verdict: dict[str, Any]):
         self.verdict = verdict
         super().__init__(
-            f"BLOCK [{verdict.get('clause_id')}] {'; '.join(verdict.get('reasons', []))}"
+            f"BLOCK [{verdict.get('clause_id')}] {_reasons_text(verdict)}"
         )
 
     @property
@@ -55,7 +67,7 @@ class ActionEscalated(RuntimeError):
     def __init__(self, verdict: dict[str, Any]):
         self.verdict = verdict
         super().__init__(
-            f"ESCALATE [{verdict.get('clause_id')}] {'; '.join(verdict.get('reasons', []))}"
+            f"ESCALATE [{verdict.get('clause_id')}] {_reasons_text(verdict)}"
         )
 
 
@@ -72,7 +84,7 @@ class Governor:
         self._base = (sentinel_url or os.environ.get(
             "FIELD_SENTINEL_URL", "http://127.0.0.1:8004"
         )).rstrip("/")
-        self._client = client or httpx.Client(timeout=10.0, headers=auth_headers())
+        self._client = client or httpx.Client(timeout=10.0, headers=perimeter_headers())
 
     def close(self) -> None:
         """Close the HTTP client (also a client that was passed in: the Governor
@@ -110,13 +122,25 @@ class Governor:
         except Exception as exc:
             raise ActionBlocked(
                 {"clause_id": "E.kill_switch",
-                 "reasons": [f"sentinel unreachable — failing closed: {exc}"],
+                 "reasons": [f"sentinel unreachable — failing closed: {type(exc).__name__}"],
                  "decision": "BLOCK"}
             ) from exc
-        if verdict["decision"] == "BLOCK":
+        # Fail closed on anything that is not exactly ALLOW, BLOCK or ESCALATE: a
+        # near-miss ("block", "DENY", "ALLOW "), a missing key or a body that is not
+        # an object used to be returned as an allow, and @governed then ran the
+        # function. The reason is fixed text: the body is not echoed.
+        decision = verdict.get("decision") if isinstance(verdict, dict) else None
+        if decision == "BLOCK":
             raise ActionBlocked(verdict)
-        if verdict["decision"] == "ESCALATE":
+        if decision == "ESCALATE":
             raise ActionEscalated(verdict)
+        if decision != "ALLOW":
+            raise ActionBlocked(
+                {"clause_id": "E.kill_switch",
+                 "reasons": ["sentinel answered with a verdict that is not ALLOW, BLOCK or ESCALATE"
+                             " — failing closed"],
+                 "decision": "BLOCK"}
+            )
         return verdict
 
 
