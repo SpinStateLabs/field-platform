@@ -307,7 +307,7 @@ def test_a_seven_hex_sha_does_not_match_a_heading_that_starts_with_it(tmp_path, 
 def test_the_printed_template_still_fails_and_names_the_new_minimums(capsys):
     gg.main(["--print-template", "--sha", SHA])
     out = capsys.readouterr().out
-    assert "first 8 hex" in out and "confirmed by <who>" in out and "path, file name or @ sha" in out
+    assert "first 8 hex" in out and "confirmed by <who>" in out and "(with or without a path) or @ sha" in out
 
 
 # reviewer-10 C2 on 385d615: a fence closes only on the same character, at least as long as the opener, nothing after it
