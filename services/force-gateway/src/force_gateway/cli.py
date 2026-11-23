@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from field_core.authn import auth_headers
+from field_core.guarded_operator import perimeter_headers
 
 import os
 import sys
@@ -80,7 +80,7 @@ def self_manifest() -> None:
 @app.command()
 def telemetry() -> None:
     try:
-        resp = httpx.get(f"{_base()}/telemetry", timeout=10.0, headers=auth_headers())
+        resp = httpx.get(f"{_base()}/telemetry", timeout=10.0, headers=perimeter_headers())
     except httpx.HTTPError as exc:
         typer.echo(f"error: gateway unreachable: {type(exc).__name__}", err=True)
         raise typer.Exit(code=1)
@@ -104,7 +104,7 @@ def serve(
     governor = None
     if os.environ.get("FIELD_GOVERNOR_URL"):
         governor = httpx.Client(
-            base_url=os.environ["FIELD_GOVERNOR_URL"], timeout=5.0, headers=auth_headers()
+            base_url=os.environ["FIELD_GOVERNOR_URL"], timeout=5.0, headers=perimeter_headers()
         )
     ledger = None
     if os.environ.get("FIELD_LEDGER_URL"):
