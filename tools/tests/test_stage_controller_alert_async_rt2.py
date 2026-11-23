@@ -29,8 +29,7 @@ class _Driver:
         self.calls, self.on_do = [], on_do
 
     def counters(self):
-        return {s: {"dropped_unauthenticated_records": 0, "dropped_refused_records": 0} for s in
-                ("killswitch", "registry", "ledger")}
+        return {s: {"dropped_unauthenticated_records": 0, "dropped_refused_records": 0} for s in sc.EIGHT_SERVICES}
 
     def do(self, stage, step):
         self.calls.append(("do", stage, step))
@@ -46,8 +45,9 @@ def _controller(tmp_path, driver):
     rec.append("alerts_proven", ok=True, sha8="a" * 8)     # bound to the run's build sha (F-816-5, RT-832-R1)
     rec.append("gate", gate="G22", ok=True, sha8="a" * 8)
     rec.append("gate", gate="G21", ok=True, sha8="a" * 8)
-    return sc.Controller(rec, driver, estate="gb10", env={}, expected_services=("killswitch", "registry", "ledger"),
-                         build_sha="a" * 40)       # RT-832-R1 (rebuild of PR 840): a live run needs a build sha
+    # Stage 1 checks all eight services: an explicit list may not narrow that (reviewer-8 C1 on the rebuild of PR 855),
+    # so the fake reports the eight and no list is passed. RT-832-R1 (rebuild of PR 840): a live run needs a build sha.
+    return sc.Controller(rec, driver, estate="gb10", env={}, build_sha="a" * 40)
 
 
 @pytest.fixture()

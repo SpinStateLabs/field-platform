@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import threading
+import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -65,12 +66,21 @@ def test_console_is_the_bare_health_path():
 
 
 def test_summary_counts_slow_and_non_200_as_failed_and_the_longest_run():
-    polls = [(0.0, 200, 9.0),  # before the window: idle only
+    polls = [(0.0, 200, 0.9),  # finished before the window: idle only
              (1.0, 200, 0.1), (2.0, 200, 5.0), (3.0, "TimeoutError", 5.0), (4.0, 503, 0.01),
              (5.0, 200, 0.2), (6.0, 200, 4.99), (99.0, 200, 7.0)]  # last one after the window
     s = hul.summarize(polls, start=1.0, end=6.0)
     # during: 0.1, 5.0, 5.0, 0.01, 0.2, 4.99 -> median of the middle two (0.2 + 4.99) / 2
-    assert s == {"idle_max": 9.0, "n": 6, "failed": 3, "max_consecutive_failed": 3, "p50": 2.595, "max": 5.0}
+    assert s == {"idle_max": 0.9, "n": 6, "failed": 3, "max_consecutive_failed": 3, "p50": 2.595, "max": 5.0}
+
+
+def test_summary_buckets_by_overlap_with_the_window_not_by_start_time():
+    # sent 0.5 s before the window and still running (a timeout) inside it: a window poll, not idle
+    s = hul.summarize([(0.0, 200, 0.1), (0.5, "TimeoutError", 5.0)], start=1.0, end=3.0)
+    assert (s["idle_max"], s["n"], s["failed"]) == (0.1, 1, 1)
+    # sent inside the window and finishing after it still counts; one sent after the window does not
+    s = hul.summarize([(2.9, 200, 0.4), (3.1, 200, 0.2)], start=1.0, end=3.0)
+    assert (s["idle_max"], s["n"]) == (None, 1)
 
 
 def test_run_against_a_local_stub_reports_every_prefix():
@@ -85,3 +95,127 @@ def test_run_against_a_local_stub_reports_every_prefix():
     assert res["status"] == 200 and set(res["health"]) == {"ledger", "console"}
     assert all(v["failed"] == 0 and v["idle_max"] is not None for v in res["health"].values())
     assert "heavy GET /ledger/events -> 200" in hul.table(res)
+
+
+# ---- B-1075-TESTS: a deterministic end-to-end stack. The heavy endpoint does not sleep for a guessed time: it
+# returns once every polled prefix has had POLLS_IN_WINDOW /health requests ARRIVE while it ran, so the number of
+# polls inside the window is fixed by construction, not by timing. Health answers are scripted per prefix.
+
+POLLS_IN_WINDOW = 2
+POLL_TIMEOUT = 0.3  # the harness's 5 s, shortened (see _fast_timeout)
+
+
+class _Fake:
+    """Loopback fake: ``plan[prefix](n_in_window)`` -> "ok" | "500" | "drop" | "hang" for each /health request."""
+
+    def __init__(self, plan, extra_hold=None):
+        self.plan = plan
+        self.in_window = False
+        self.counts = {p: 0 for p in plan}  # /health arrivals while the heavy request runs
+        self.total = {p: 0 for p in plan}   # every /health arrival
+        self.cond = threading.Condition()
+        self.hold = extra_hold or {}         # prefix -> Event the FIRST health request blocks on until set
+        fake = self
+
+        class H(BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802
+                path = self.path
+                if path == "/heavy":
+                    return fake._heavy(self)
+                prefix = "console" if path == "/health" else path.split("/")[1]
+                with fake.cond:
+                    fake.total[prefix] += 1
+                    nth = fake.total[prefix]
+                    if fake.in_window:
+                        fake.counts[prefix] += 1
+                        fake.cond.notify_all()
+                    n = fake.counts[prefix]
+                act = fake.plan[prefix](n if fake.in_window else 0)
+                if nth == 1 and prefix in fake.hold:
+                    fake.hold[prefix].wait(10)
+                    act = "hang"
+                if act == "hang":
+                    time.sleep(POLL_TIMEOUT * 3)
+                if act == "drop":
+                    self.close_connection = True
+                    self.connection.close()
+                    return
+                body = b"{}"
+                self.send_response(500 if act == "500" else 200)
+                self.send_header("content-length", "2")
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        class Quiet(ThreadingHTTPServer):
+            daemon_threads = True
+
+            def handle_error(self, request, client_address):  # a client that timed out and left is the point
+                pass
+
+        self.srv = Quiet(("127.0.0.1", 0), H)
+        self.base = f"http://127.0.0.1:{self.srv.server_address[1]}"
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+
+    def _heavy(self, h):
+        with self.cond:
+            self.in_window = True
+            self.cond.notify_all()
+            ok = self.cond.wait_for(lambda: all(c >= POLLS_IN_WINDOW for c in self.counts.values()), timeout=20)
+            self.in_window = False
+        h.send_response(200 if ok else 504)
+        h.send_header("content-length", "2")
+        h.end_headers()
+        h.wfile.write(b"{}")
+
+    def stop(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+
+
+@pytest.fixture
+def _fast_timeout(monkeypatch):
+    """The 5 s poll timeout becomes 0.3 s for /health polls (request()'s default is bound at definition time)."""
+    real = hul.request
+
+    def request(method, url, body=None, timeout=900):
+        return real(method, url, body, timeout=POLL_TIMEOUT if url.endswith("/health") else timeout)
+
+    monkeypatch.setattr(hul, "request", request)
+    monkeypatch.setattr(hul, "HEALTH_TIMEOUT", POLL_TIMEOUT)
+
+
+def test_e2e_every_poll_failure_kind_is_counted_exactly(_fast_timeout):
+    """Polls definitely occur inside the window (POLLS_IN_WINDOW per prefix) and each induced failure kind - a 500,
+    a dropped connection, a timeout - is a FAILED poll, not an idle one; the healthy prefix has none."""
+    fake = _Fake({"ledger": lambda n: "500" if n else "ok", "registry": lambda n: "drop" if n else "ok",
+                  "killswitch": lambda n: "hang" if n else "ok", "console": lambda n: "ok"})
+    try:
+        res = hul.run(fake.base, "/heavy", ["ledger", "registry", "killswitch", "console"], pre=0.3, post=0.0,
+                      container=None)
+    finally:
+        fake.stop()
+    assert res["status"] == 200, res
+    h = res["health"]
+    assert {p: (v["n"], v["failed"], v["max_consecutive_failed"]) for p, v in h.items()} == {
+        "ledger": (2, 2, 2), "registry": (2, 2, 2), "killswitch": (2, 2, 2), "console": (2, 0, 0)}, h
+    # the poll that ran before the window was healthy and is idle, never failed
+    assert all(v["idle_max"] is not None and v["idle_max"] < POLL_TIMEOUT for v in h.values()), h
+    assert h["killswitch"]["max"] >= POLL_TIMEOUT and h["ledger"]["max"] < POLL_TIMEOUT, h
+
+
+def test_e2e_a_timeout_that_starts_before_the_heavy_request_is_not_idle(_fast_timeout):
+    """B-1075-TESTS (reviewer F2): the first ledger poll starts before the heavy GET and times out inside it. It
+    belongs to the window (a failure), not to the idle maximum."""
+    release = threading.Event()
+    fake = _Fake({"ledger": lambda n: "ok"}, extra_hold={"ledger": release})
+    try:
+        res = hul.run(fake.base, "/heavy", ["ledger"], pre=0.1, post=0.0, container=None)
+    finally:
+        release.set()
+        fake.stop()
+    v = res["health"]["ledger"]
+    assert res["status"] == 200 and v["idle_max"] is None, res
+    assert (v["n"], v["failed"], v["max_consecutive_failed"]) == (3, 1, 1), v
