@@ -22,10 +22,16 @@ reproduces baselines, windows and alert state exactly.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 #: the dimensions the gateway feeds from each hygiene judgment, in order
 DIMENSIONS = ("overall", "sycophancy")
+
+#: completed-window means kept per series. The logic only ever READS the first ``baseline_windows`` entries (until
+#: the baseline is fixed) and the last two (the alert), so the list is trimmed to this once the baseline is set;
+#: it must stay >= 2. status() reports it, and the total ever completed.
+MAX_WINDOW_HISTORY = 20
 
 
 @dataclass
@@ -43,6 +49,7 @@ class DriftAlert:
 class _SeriesState:
     scores: list[float] = field(default_factory=list)  # current window
     window_means: list[float] = field(default_factory=list)
+    windows_completed: int = 0   # total ever completed; window_means is only the newest of them
     baseline_mean: float | None = None
     consecutive_out: int = 0
     alert_active: bool = False
@@ -51,9 +58,26 @@ class _SeriesState:
     rubric_version: str | None = None
 
 
+def _is_int_at_least_one(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 1
+
+
 class DriftTracker:
+    #: instance-settable (tests); not an __init__ argument
+    window_history_cap: int = MAX_WINDOW_HISTORY
+
     def __init__(self, window_size: int = 5, band: float = 0.15,
                  baseline_windows: int = 2):
+        # Refused here, not at record time: baseline_windows=0 averaged an empty list (ZeroDivisionError), window_size<1
+        # made every score its own window, and a NaN or non-positive band made every window out of band or none. The
+        # message names the argument and never the value.
+        if not _is_int_at_least_one(window_size):
+            raise ValueError("window_size must be an integer >= 1")
+        if not _is_int_at_least_one(baseline_windows):
+            raise ValueError("baseline_windows must be an integer >= 1")
+        if (isinstance(band, bool) or not isinstance(band, (int, float))
+                or not math.isfinite(band) or band <= 0):
+            raise ValueError("band must be a finite number > 0")
         self.window_size = window_size
         self.band = band
         self.baseline_windows = baseline_windows
@@ -81,12 +105,15 @@ class DriftTracker:
         mean = sum(st.scores) / len(st.scores)
         st.scores = []
         st.window_means.append(mean)
+        st.windows_completed += 1
 
         if st.baseline_mean is None:
             if len(st.window_means) >= self.baseline_windows:
                 baseline = st.window_means[: self.baseline_windows]
                 st.baseline_mean = sum(baseline) / len(baseline)
+                self._trim(st)
             return None
+        self._trim(st)
 
         out_of_band = abs(mean - st.baseline_mean) > self.band
         if not out_of_band:
@@ -107,6 +134,12 @@ class DriftTracker:
             )
         return None
 
+    def _trim(self, st: _SeriesState) -> None:
+        """Baseline fixed: only the last two means are read from here on. Keep the newest `cap` (>= 2)."""
+        keep = max(2, self.window_history_cap)
+        if len(st.window_means) > keep:
+            del st.window_means[:-keep]
+
     def status(self) -> dict[str, dict[str, dict]]:
         """``{route: {dimension: state}}``."""
         out: dict[str, dict[str, dict]] = {}
@@ -117,6 +150,8 @@ class DriftTracker:
                 "band": self.band,
                 "window_size": self.window_size,
                 "completed_windows": [round(m, 4) for m in st.window_means],
+                "completed_windows_total": st.windows_completed,
+                "window_history_cap": max(2, self.window_history_cap),
                 "scores_in_current_window": len(st.scores),
                 "consecutive_out_of_band": st.consecutive_out,
                 "alert_active": st.alert_active,

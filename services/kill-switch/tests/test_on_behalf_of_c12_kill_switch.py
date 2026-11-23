@@ -165,9 +165,9 @@ def test_a_registry_double_that_overrides_set_status_is_called_as_before(tmp_pat
     calls = []
 
     class Double(RegistryClient):
-        def set_status(self, agent_id, status):
+        def set_status(self, agent_id, status, **kw):
             calls.append((agent_id, status))
-            return super().set_status(agent_id, status)
+            return super().set_status(agent_id, status, **kw)
 
     s = Stack(tmp_path)
     s.kill.app.state.registry = Double(client=s.spy, base_url="http://t")
