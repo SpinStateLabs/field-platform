@@ -39,7 +39,9 @@ def test_plain_digits_are_the_interval(monkeypatch, caplog, raw, want):
     monkeypatch.setenv(ENV, raw)
     with caplog.at_level(logging.WARNING, logger="lifecycle_manager"):
         assert _every() == want
-    assert caplog.text == ""
+    # this service's own lines only: field_core.startup's once-per-process open-mode line (C-804, rebuild of
+    # PR 561) may land here when this is the first app the process builds
+    assert not [r for r in caplog.records if r.name.startswith("lifecycle_manager")], caplog.text
 
 
 @pytest.mark.parametrize("raw", ["²", "٣", "１２", "1e3", "1.5", "-5", "+5", "3600s", "1_000", "abc",
@@ -57,7 +59,9 @@ def test_blank_is_off_silently(monkeypatch, caplog, raw):
     monkeypatch.setenv(ENV, raw)
     with caplog.at_level(logging.WARNING, logger="lifecycle_manager"):
         assert _every() == 0
-    assert caplog.text == ""
+    # this service's own lines only: field_core.startup's once-per-process open-mode line (C-804, rebuild of
+    # PR 561) may land here when this is the first app the process builds
+    assert not [r for r in caplog.records if r.name.startswith("lifecycle_manager")], caplog.text
 
 
 def test_unset_is_off(monkeypatch):

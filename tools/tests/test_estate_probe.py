@@ -619,6 +619,18 @@ def test_b5_cleartext_to_a_public_host_is_refused_with_a_secret(monkeypatch):
     assert code == 1
 
 
+def test_rt4_f4_there_is_no_flag_that_lets_the_secret_travel_in_cleartext(monkeypatch):
+    """B-RT4 F4: renew_token refuses http to a non-private host with no override; estate_probe had
+    --allow-plaintext. The flag is gone: it is refused as an unknown argument (exit 2, before any
+    connection), and the cleartext refusal is unchanged without it."""
+    monkeypatch.setenv("FIELD_SHARED_SECRET", SECRET)
+    code, out = _run(["--base", "http://estate.example.com", "--allow-plaintext", "health"])
+    assert code == 2 and "unrecognized arguments" in out and SECRET not in out, out
+    code, out = _run(["--base", "http://estate.example.com", "health"])
+    assert code == 2 and "cleartext" in out and SECRET not in out, out
+    assert "allow_plaintext" not in Path(estate_probe.__file__).read_text(encoding="utf-8")
+
+
 # --- B6/B7: rule 7 — only the exact canary, only its own token -----------------------------
 
 

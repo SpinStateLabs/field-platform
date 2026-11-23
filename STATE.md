@@ -2,6 +2,12 @@
 
 > Update before ending any session. Assume many sessions.
 
+> **Correction 2026-11-21 (Fly VM size).** Entries below that say `shared-cpu-1x` (the 2026-08-30 build, the production
+> deploy verification) record what was true on those dates and are left as written. They are not the current
+> configured size: `integration/fly/fly.toml` `[[vm]]` now sets `cpus = 4` (`cpu_kind = "shared"`, `memory = "2gb"`),
+> pinned by `tools/tests/test_fly_vm_size.py` (PR 1080). That file is the configured size, not proof of the running
+> Machine: whether the live Machine was redeployed onto it is NOT verified here (needs `fly machine status` by Don).
+
 ## Refresh through MERGE 20 (main cddca526; C-1184; previous refresh a9dc4f3)
 Written from the coordinator's MERGE lines in `comms/STATUS.md`, one line per merge, as PR numbers. A line says
 what STATUS says was built; where STATUS names no content for a PR, this file says so rather than guessing. The 18
@@ -34,6 +40,7 @@ commits between a9dc4f3 and the first MERGE line (acaf5f24) are not itemised her
 ## ops-console 0.2.0 — operator feature pack (2026-10-04, branch claude/field-op-console-features-o54e47)
 Asked by Don for the "Field Op Console". Delivered in the estate's ops-console, which Caddy
 serves at `/`; the Netlify force-field-console has none of these surfaces and is unchanged.
+[2026-11-12 note: the GitHub repo SpinStateLabs/force-field-portal was renamed SpinStateLabs/force-field-console; the local checkout is still <home>\dev\force-field-portal and its origin already points at the new name. Older entries keep the old name as written.]
 - Fixed the Harness dropdowns that reset every 5 s (`fillSelect` keeps the value).
 - Added an agent drawer (record, heartbeat, tokens, usage, last 50 events) and a manifest viewer,
   guarded to FIELD_MANIFEST_DIR and limited to .yaml/.yml/.json files of 256 KB or less. Tests
@@ -234,8 +241,8 @@ rebuilt on the GB10 at 636e4bb); all 9 /health OK through the proxy,
 console 200, sentinel mode=enforce judge=off, ledger verify ok (285 events).
 Reach path that works from Cowork on rog-command: `ssh.exe` exits 255 even
 on `ssh -V` in that tool context, but **paramiko** with
-`C:\Users\donal\.ssh\gx10_ed25519` as user `spinner` works (helpers at
-`C:\Users\donal\.field-local\gb10_run.py`); the GB10 checkout pulls from the
+`<home>\.ssh\gx10_ed25519` as user `<user>` works (helpers at
+`<home>\.field-local\gb10_run.py`); the GB10 checkout pulls from the
 local bare repo `~/git/field-platform.git`, fed by a `git bundle` SFTP'd
 across (same commit hashes as rog-command/GitHub).
 Shipped (636e4bb): `manifests/ssl-timekeeping-agent.yaml` +
@@ -345,8 +352,42 @@ on e07cd5b. Portal wiring: Netlify ESTATE_URL set; ESTATE_SHARED_SECRET
 + the GitHub repo link are the remaining human clicks. This is the
 PRODUCT estate (sentinel enforce); GB10 remains the private burn-in
 estate (log_only).
+[2026-11-12 correction: that was true on 2026-09-14. GB10 has since been armed to enforce (Stage 3 REQUIRE, 2026-11-10), so GB10 is no longer only a burn-in estate; Fly remains the product estate.]
+PRODUCT estate (sentinel enforce).
+[CORRECTED 2026-11-08 (E3): the closing clause of this sentence called the
+GB10 "the private burn-in estate (log_only)". That stopped being true at the
+2026-09-08 GB10 cutover (the "Dogfood step 1" section above): both estates
+run the sentinel in enforce by the file headers `integration/fly/entrypoint.sh`
+lines 10-11 and `integration/fly/fly.toml` lines 1-4, and "Next action" item 2
+records that the log-only burn-in is not running, by decision.]
 
 ## Current phase
+**Status refreshed 2026-11-08 (E3).** Everything below the next rule is the
+v1.2 build record, kept as written. What this file can and cannot say now:
+- **Phases.** v1.2 ran P, A, B, C, D, F, E in that order (`tasks/todo.md`
+  § "v1.2 — 12-system closure (2026-09)"). This file holds a build block for
+  Phase A (DONE), B (DONE), C (BUILT, store/renewal hardening), F (BUILT, committed
+  locally) and D (BUILT, uncommitted at the time of writing); each block's own
+  heading carries its date. Phase E (the words, last; E3 is this refresh) is
+  open in `tasks/todo.md` (line "Phase E"). Work since is the staged enforcement
+  rollout of the estates, tracked in the dated estate-deployer reports.
+- **Estate state is not recorded here.** This is a public repository (see
+  "Not recorded here" in the top block). For where each estate stands, read the
+  estate-deployer reports in `comms/inbox/estate-deployer/` and the ones
+  addressed to the coordinator in `comms/inbox/coordinator/` on branch `comms`
+  (latest on this refresh: `20261107-0430-estate-deployer-stage3-prep.md`, with
+  `20261107-0115-estate-deployer-stage2-window-clean.md` before it). Do not
+  read a live status from this file or from memory.
+- **Test count.** One figure only, in `ROADMAP.md` (see the top block here).
+- **`run_demo.sh` exit 0, wall times, from recorded runs only** (the tail of
+  each is in the block cited): Phase A exit 0 in 33 s (below, Phase A "Verified
+  locally"); Phase B exit 0 in 32 s with `FIELD_DOA_ROSTER` unset, and again in
+  31 s after the code fixes (below, Phase B); Phase F exit 0 in 33 s (below,
+  Phase F review). Phase C: not recorded. Phase D: not recorded. (`run_demo.sh`
+  boots seven local services on fixed ports and does not start lifecycle,
+  attestation or crosswalk; the per-service `demo.sh` times in the same blocks
+  cover those.)
+
 **v1.2 — 12-system closure (started 2026-09-12; plan approved by Don the
 same day).** Plan: `tasks/todo.md` § "v1.2 — 12-system closure (2026-09)"
 (P → A → B → C → D → F → E; one phase at a time; STOP after each phase
@@ -808,7 +849,7 @@ GitHub API answers `private: false` for the repo as of this read.
     passed (API key absent, enforce ALLOW, D.scope BLOCK, governor OK); old
     token revoked; `token.renewed` ledgered 13:32:36Z; journal cleared;
     secrets.env still mode 600.
-  - **rog-command ssl:** `C:\Users\donal\.field-local\renewal\` holds
+  - **rog-command ssl:** `<home>\.field-local\renewal\` holds
     renew_token.py (pin 3a068358…) and logs. Task Scheduler
     `\FIELD\token-renewal-ssl-timekeeping-agent` (daily 14:50) and
     `\FIELD\token-renewal-ssl-invoicing-agent` (daily 15:05) are both
@@ -888,7 +929,7 @@ GitHub API answers `private: false` for the repo as of this read.
         - `/verify` ok, length 241, segments 2, link ok, anchor verifies.
         - Canary p95 40 ms, 190/190 OK. Continuity 3/3; health 51/51.
       - Both public PEMs, fingerprints, rotation anchors and records are in
-        `C:\Users\donal\.field-local\backups\anchors\`. Fingerprints were
+        `<home>\.field-local\backups\anchors\`. Fingerprints were
         re-derived off-box and match.
       - The canary load wrote about 200 labelled gate-verification events per
         estate.
@@ -910,7 +951,7 @@ GitHub API answers `private: false` for the repo as of this read.
   - **A2 `FIELD_SHARED_SECRET` (GB10), 15:20:51Z.**
     - The secret was generated on the GB10 into `~/.field-local/estate-secret`
       (0600, 64 bytes). It was copied file-to-file to
-      `C:\Users\donal\.field-local\gb10-estate-secret`; sha256 `0fc410be…` on
+      `<home>\.field-local\gb10-estate-secret`; sha256 `0fc410be…` on
       both ends. The value was never printed.
     - Every caller held it before arming:
       - vt's `secrets.env` line 7 (pinned `setenv.py`, file-to-file); vt's
@@ -988,7 +1029,7 @@ GitHub API answers `private: false` for the repo as of this read.
     - Negative control: one head_hash hex flipped ⇒ exit 1 "WITNESS FAILED —
       anchor 1 … signature invalid".
     - The export and edited copy are in
-      `C:\Users\donal\.field-local\backups\anchors\`.
+      `<home>\.field-local\backups\anchors\`.
   - **Not live (stated):** direction 2 (GB10 → Fly) until D5. Fly never
     initiates without D6. GB10 down ⇒ both directions stop. The lifecycle
     witness finding is tested in CI; its first scheduled sweep lands with the
@@ -1120,7 +1161,7 @@ GitHub API answers `private: false` for the repo as of this read.
     `attest-sign` on `field-attest-keys` (fingerprint
     `<key-fingerprint>`), both
     0600 under umask 077; public PEMs exported to `~/field-backups/*-gb10.pub.pem`
-    and copied to `C:/Users/donal/.field-local/backups/` where the fingerprints
+    and copied to `<home>/.field-local/backups/` where the fingerprints
     were recomputed from the DER and matched. Custody as the anchor keys
     (D9 — confirmed by Don 2026-09-14).
   - **CI 19701f4:** compose-smoke (enforcing roundtrip on `smoke-egress`),
@@ -1145,7 +1186,7 @@ GitHub API answers `private: false` for the repo as of this read.
     recreate; `/attest/health` `signing: on`, the D10 signer, fingerprint ==
     the recorded afdaac83…; served `GET /attest/pack` `signed: true`,
     `signed_via: estate-key`; **verified OFF-BOX on rog-command** with the local
-    public PEM copy (`attest verify … --pubkey C:/Users/donal/.field-local/
+    public PEM copy (`attest verify … --pubkey <home>/.field-local/
     backups/attest-sign-gb10.pub.pem` exit 0: "signed by Don Hagell (custodian,
     estate key — standing attestation) via estate-key"); one metric mutated in a
     copy ⇒ exit 1 "signature INVALID"; C0 health 51/51. Signed packs persist;
@@ -1190,7 +1231,7 @@ GitHub API answers `private: false` for the repo as of this read.
     `<key-fingerprint>`,
     `attest-sign` fingerprint
     `<key-fingerprint>`; both
-    0600; public PEMs fetched to `C:/Users/donal/.field-local/backups/*-fly.pub.pem`,
+    0600; public PEMs fetched to `<home>/.field-local/backups/*-fly.pub.pem`,
     fingerprints recomputed locally from the DER and matched. LIMIT: every
     process in the Fly container can read `/data/keys` (README).
   - **GB10 A7 SOAK CLEAN, 15:03:48Z** (`gb10-a7-soak.sh`): 702 events, 8 signed
@@ -1331,7 +1372,7 @@ GitHub API answers `private: false` for the repo as of this read.
     Thirteen Ed25519 caller keys generated on the host under
     `~/.field-local/caller-keys/<id>/<id>.pem` (root-owned 0600, on no volume, in
     no backup), public halves imported into `field-keys:/keys/callers` (13);
-    fingerprints (also at `C:/Users/donal/.field-local/backups/caller-keys-gb10.fingerprints`):
+    fingerprints (also at `<home>/.field-local/backups/caller-keys-gb10.fingerprints`):
     conformance-sentinel 17c6309b…, force-gateway c9a8e188…, compliance-crosswalk
     813e81af…, registry 021f6691…, delegation d79ad1a6…, killswitch feae12a1…,
     governor 51a0441b…, replay 70530b3a…, fedbroker 7ea4260d…, console 736338b1…,
@@ -1468,7 +1509,7 @@ GitHub API answers `private: false` for the repo as of this read.
   18:1x–18:3xZ, in the Claude browser pane logged in as Don:** `ESTATE_URL =
   <estate url>` (entered by the session; not a secret),
   `ESTATE_SHARED_SECRET` (secret; value pasted by Don from
-  `C:/Users/donal/.fly/ff-estate-secret.txt` via `Enter-Keys.ps1` option 3 —
+  `<home>/.fly/ff-estate-secret.txt` via `Enter-Keys.ps1` option 3 —
   verified the RIGHT value without reading it: the local file and Fly's live
   `FIELD_SHARED_SECRET` both hash to sha256 2bfb9b5c06d9c179…, len 43) and
   `SESSION_SECRET` (secret; required by the portal for its session JWTs). The
@@ -2095,13 +2136,14 @@ NOTE: services are NOT persistent daemons — run demo.sh / compose to bring a
 stack up; nothing runs between sessions.
 
 ## Capstone video (2026-08-10) — DONE
-Full 5-scene film recorded and committed: integration/video/out/capstone.mp4
+Full 5-scene film recorded (not committed; regenerable): integration/video/out/capstone.mp4
 (2:24, 1080p30). Honesty contract held: every terminal command executed,
 every output line verbatim; Scene 3 driven against the LIVE ops-console via
 Playwright (real D.scope harness verdict + real console kill on the ledger).
 Regenerate: record_scene4.py, record_scenes.py (scene1/2/3/5 + stitch),
 capture_scene3.py (needs the console stack up on :8011). Per-scene mp4s and
-browser shots are gitignored; capstone.mp4 + scene4.mp4 are committed.
+browser shots are gitignored. Neither capstone.mp4 nor scene4.mp4 is committed any more: both are
+regenerable (record_scene4.py, record_scenes.py), and integration/video/out/ is gitignored.
 The ONLY remaining backlog items are non-engineering: manual EUR-Lex
 read-through of the two EU AI Act articles, and the ISO/IEC 42001 purchase.
 
@@ -2139,7 +2181,7 @@ read-through of the two EU AI Act articles, and the ISO/IEC 42001 purchase.
   9 services healthy, governed smoke flow correct, ~4 min. Dockerfile
   defect found+fixed (federation-broker missing from pip list). Netlify
   rejected (static/serverless — cannot run containers). x86_64 run pending.
-  GB10 staging: /home/spinner/field-platform-verify/ (images left in place).
+  GB10 staging: <home>/field-platform-verify/ (images left in place).
 - OQ-2 RESOLVED (3 of 4): grounded Citation model; EU AI Act Art. 12 +
   14(4)(e) stop-button, NIST AI RMF (GOVERN 1.6/1.7/2.1/2.3/6.1/6.2,
   MANAGE 2.4, MEASURE 3.1), OSFI E-23 2027 Principles 1.1/1.2/2.1/3.1/3.6
@@ -2214,7 +2256,7 @@ delegation-authority (:8003, ledger-first fail-closed mint/revoke,
 
 ## Remote (verified 2026-08-09)
 - `gb10` → `gx10:git/field-platform.git` (bare repo on the DGX Spark,
-  spinner@<gb10-lan-address> via ssh host `gx10`; HEAD set to main). `git push gb10
+  <gb10-user>@<gb10-lan-address> via ssh host `gx10`; HEAD set to main). `git push gb10
   main` from this machine works; working clone on the GB10 at
   `~/field-platform` for compose runs (`git -C ~/field-platform pull`).
 - `origin` → https://github.com/SpinStateLabs/field-platform (private,
@@ -2227,7 +2269,7 @@ delegation-authority (:8003, ledger-first fail-closed mint/revoke,
 ## Environment facts (verified this machine)
 - Python 3.12 NOT installed; available 3.14 (default), 3.11, 3.9.
   Decision: `requires-python >=3.11`, develop on 3.14.2.
-- Venv OUTSIDE Google Drive (sync churn): `C:\Users\donal\.venvs\field-platform`.
+- Venv OUTSIDE Google Drive (sync churn): `<home>\.venvs\field-platform`.
   Git Bash: `~/.venvs/field-platform/Scripts/python.exe`. Installed editable:
   field-core, sealed-ledger, agent-registry, delegation-authority (+deps
   fastapi/uvicorn/httpx/pytest).
@@ -2251,11 +2293,15 @@ delegation-authority (:8003, ledger-first fail-closed mint/revoke,
 both verified done earlier in this file: Remote section 2026-08-09,
 Capstone video section 2026-08-10.)
 1. Deployment (private first): GB10 proxy cutover DONE 2026-09-08 (:18080).
-   Still open: Cloudflare Tunnel or Tailscale Serve in front of :18080 with
-   FIELD_SHARED_SECRET ON. Netlify gets ONLY the static tier.
-   Rebuild the estates at ≥1727de0 before any gate-key
-   manifest is registered on either estate (pre-lockstep field-core →
-   `I.manifest` BLOCK in enforce until then).
+   Still open as of that date, not re-checked in this refresh: Cloudflare
+   Tunnel or Tailscale Serve in front of :18080 with FIELD_SHARED_SECRET ON.
+   Netlify gets ONLY the static tier. [SUPERSEDED 2026-11-08 (E3): "rebuild
+   the estates at ≥1727de0" was a 2026-09 instruction; the estates have been
+   redeployed since. Where they stand is in the estate-deployer reports named
+   under "Current phase" (this file does not record it), and the open
+   conditions of the staged enforcement rollout are listed in
+   `comms/inbox/coordinator/20261107-0430-estate-deployer-stage3-prep.md`
+   (condition table with sources), not restated here.]
 2. Real-agent dogfood STARTED 2026-09-08 in ENFORCE (ssl-timekeeping-agent,
    ssl-invoicing-agent). The 2-week log-only burn-in / 30-day false-block
    window is NOT running by decision; revisit if the ADR 02 gate is needed.
@@ -2274,9 +2320,10 @@ Capstone video section 2026-08-10.)
    `attested_at` for lifecycle, gateway streaming, telemetry persistence,
    ops-console pagination/push, quarterly pack archive convention,
    verify_sync.sh into CI.
-7. Enforcement Gate follow-ups (2026-09-12): bump field-agent plugin.json
-   0.1.1 → 0.1.2 (+ source commit in the SOURCES.md stamp, `claude plugin
-   validate`); reword field-agent README/SKILL/command "design-time only";
+7. Enforcement Gate follow-ups (2026-09-12): [DONE for the bump: `plugin.json`
+   is 0.1.6 (≥ 0.1.2) and `verify_sync.sh` exits 0 on main, checked 2026-11-07
+   (GATE-D1); the SOURCES.md stamp records its own provenance, not the plugin
+   version. Not re-checked: `claude plugin validate`.] reword field-agent README/SKILL/command "design-time only";
    crosswalk controls for irreversible_actions / protected_paths /
    tool_call; one live Windows Git-Bash gate run + one PowerShell-fallback
    run after `claude auth login`; watch Force-Field Gate v1.2

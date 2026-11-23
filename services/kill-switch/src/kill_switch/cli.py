@@ -26,6 +26,8 @@ for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
         _stream.reconfigure(encoding="utf-8")
 
+import json
+
 import httpx
 
 from field_core import authn
@@ -162,6 +164,23 @@ def _fail(resp: httpx.Response) -> None:
     raise typer.Exit(code=1)
 
 
+def _domain_failure_report(resp: httpx.Response) -> None:
+    """The domain route answers 502 with the per-agent report as the `detail` when ANY agent errored. Print that report
+    (stdout, as for a 200) and the ids that were NOT halted (stderr, escaped), then exit 1. Anything else (no report in
+    the detail) returns, and the caller prints the usual error."""
+    try:
+        detail = resp.json().get("detail")
+    except Exception:
+        return
+    if not isinstance(detail, dict) or not isinstance(detail.get("results"), list):
+        return
+    typer.echo(json.dumps(detail))
+    failed = [r.get("agent_id") for r in detail["results"] if isinstance(r, dict) and r.get("outcome") == "error"]
+    ids = ", ".join(ascii(str(i))[1:-1] for i in failed)
+    typer.echo(f"error {resp.status_code}: {len(failed)} agent(s) NOT halted: {ids}", err=True)
+    raise typer.Exit(code=1)
+
+
 def _q(segment: str) -> str:
     """One path segment: `/`, `?`, `#` and `%` in an id never change the route. `.` and `..` are refused before any
     request (urllib leaves them unencoded and httpx would resolve them into another route; reviewer-2 B2)."""
@@ -203,6 +222,26 @@ def _killed(resp: httpx.Response) -> bool:
         typer.echo("error: kill-switch returned a 200 that is not a JSON object", err=True)
         raise typer.Exit(code=1)
     return bool(body.get("killed"))
+
+
+def _exit_1_unless_every_agent_halted(resp: httpx.Response) -> None:
+    """The domain route answers 200 with per-agent outcomes, `error` among them, unless EVERY attempt errored (502).
+    A break-glass command that exits 0 while named agents are still active is a false all-clear: any `error` outcome is
+    exit 1, the ids on stderr (escaped: they come from the registry). A 200 that is not a domain report is exit 1."""
+    try:
+        body = resp.json()
+        if not isinstance(body, dict):
+            raise ValueError
+    except ValueError:
+        typer.echo("error: kill-switch returned a 200 that is not a JSON object", err=True)
+        raise typer.Exit(code=1)
+    results = body.get("results")
+    results = results if isinstance(results, list) else []   # no list, no outcome to read: nothing is reported failed
+    failed = [r.get("agent_id") for r in results if isinstance(r, dict) and r.get("outcome") == "error"]
+    if failed:
+        ids = ", ".join(ascii(str(i))[1:-1] for i in failed)
+        typer.echo(f"{len(failed)} agent(s) NOT halted: {ids}", err=True)
+        raise typer.Exit(code=1)
 
 
 _OP_ID = typer.Option(None, "--operator-id", help=OPERATOR_ID_HELP)
@@ -252,8 +291,10 @@ def domain(
     resp = _request("POST", f"/kill/domain/{_q(domain_name)}", pair=pair, timeout=30.0,
                     write=True, json={"operator": operator, "reason": reason})
     if resp.status_code != 200:
+        _domain_failure_report(resp)       # a 502 that carries the per-agent report: print it, name the agents, exit 1
         _fail(resp)
     typer.echo(resp.text)
+    _exit_1_unless_every_agent_halted(resp)
 
 
 @app.command()

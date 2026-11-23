@@ -50,7 +50,8 @@ primary_region = "yyz"       # pick yours
   # itself never enters this repo.
   FIELD_LEDGER_ANCHOR_KEY = "/data/keys/ledger-anchor.pem"
   # FIELD_SHARED_SECRET is set via `fly secrets set FIELD_SHARED_SECRET=...`
-  # — NEVER here: fly.toml is committed to the repo.
+  # — NEVER here: fly.toml is committed to the repo. It is REQUIRED: the
+  # entrypoint refuses to start when it is unset, empty or whitespace-only.
   # ANTHROPIC_API_KEY (optional, enables real gateway proxying) is likewise
   # a secret, never an [env] entry.
 
@@ -64,9 +65,9 @@ primary_region = "yyz"       # pick yours
 # the machine starts, even if every service behind Caddy is dead — the public
 # estate had no checks at all until this. Each path goes THROUGH Caddy to a
 # real service, so a dead service fails its check while Caddy stays up. The
-# grace period (Fly caps it at 60 s) covers thirteen CPython services cold-starting on one shared
-# vCPU. /health stays open under FIELD_SHARED_SECRET (field_core.authn), so the
-# checks need no secret.
+# grace period (Fly caps it at 60 s) covers thirteen CPython services cold-starting on the [[vm]]
+# below (4 shared CPUs since T9, #1080). /health stays open under
+# FIELD_SHARED_SECRET (field_core.authn), so the checks need no secret.
 [[http_service.checks]]
   grace_period = "60s"
   interval = "30s"
@@ -102,4 +103,4 @@ primary_region = "yyz"       # pick yours
 [[vm]]
   memory = "2gb"
   cpu_kind = "shared"
-  cpus = 1
+  cpus = 4

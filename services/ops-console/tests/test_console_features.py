@@ -17,6 +17,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from agent_registry.api import create_app as create_registry_app
+from agent_registry.models import AgentUpdate
 from agent_registry.store import RegistryStore
 from delegation_authority.api import create_app as create_delegation_app
 from delegation_authority.store import TokenStore
@@ -63,8 +64,8 @@ def env(tmp_path):
     os.symlink(secrets / "ledger-sign.pem", mdir / "escape.yaml")
     (mdir / "huge.yaml").write_text("x: " + "a" * (300 * 1024))
 
-    registry = TestClient(
-        create_registry_app(store=RegistryStore(tmp_path / "agents.sqlite3")))
+    rstore = RegistryStore(tmp_path / "agents.sqlite3")
+    registry = TestClient(create_registry_app(store=rstore))
     lstore = LedgerStore(tmp_path / "events.jsonl")
     ledger = TestClient(create_ledger_app(store=lstore))
     delegation = TestClient(
@@ -106,14 +107,17 @@ def env(tmp_path):
         args.update(kw)
         return TestClient(create_app(**args))
 
-    return {"console": make(), "make": make, "registry": registry,
+    return {"console": make(), "make": make, "registry": registry, "rstore": rstore,
             "ledger": ledger, "lstore": lstore, "mdir": mdir, "secrets": secrets}
 
 
 def set_ref(env, agent_id, ref):
-    # PATCH can set any ref (registry LIMITS); that is exactly the threat.
-    r = env["registry"].patch(f"/agents/{agent_id}", json={"manifest_ref": ref})
-    assert r.status_code == 200, r.text
+    # The threat: a registry row whose manifest_ref points anywhere. Since C-1144 the registry's PATCH refuses a
+    # relative ref that leaves FIELD_MANIFEST_DIR (rebuild of PR 850), but refs already stored are never re-checked
+    # and an absolute ref is still accepted, so the console must refuse them itself. The ref is planted in the
+    # registry's store directly, the way a row written before C-1144 holds it.
+    env["rstore"].update(agent_id, AgentUpdate(manifest_ref=ref))
+    assert env["registry"].get(f"/agents/{agent_id}").json()["manifest_ref"] == ref
 
 
 # ---- drill to details ------------------------------------------------------

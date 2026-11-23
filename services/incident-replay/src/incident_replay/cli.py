@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from field_core.authn import auth_headers
+from field_core.guarded_operator import perimeter_headers
 
 import os
 import sys
@@ -47,7 +47,7 @@ def run(
     # a str, not a click Path: click stats a Path option while parsing, and a NUL byte there escapes as a ValueError
     # before this command runs (S6-15); the write is guarded below instead
     markdown: str = typer.Option(
-        None, "--markdown", help="Write the RACI-ready post-mortem here"
+        None, "--markdown", help="Write the RACI-structured post-mortem here"
     ),
 ) -> None:
     """Reconstruct an incident window for an agent. Exit 1 when the service is unreachable or refuses; exit 2 when the
@@ -55,7 +55,7 @@ def run(
     body = {"agent_id": agent_id, "since": since, "until": until}
     path = "/replay/markdown" if markdown else "/replay"
     try:
-        resp = httpx.post(f"{_base()}{path}", json=body, timeout=30.0, headers=auth_headers())
+        resp = httpx.post(f"{_base()}{path}", json=body, timeout=30.0, headers=perimeter_headers())
     except _HTTP_ERRORS as exc:
         typer.echo(f"error: incident-replay unreachable ({type(exc).__name__})", err=True)
         raise typer.Exit(code=1)

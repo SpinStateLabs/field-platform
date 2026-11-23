@@ -28,10 +28,10 @@ class FailFor:
             def list_agents(self, **kw):
                 return inner.list_agents(**kw)
 
-            def set_status(self, agent_id, status):
+            def set_status(self, agent_id, status, **kw):
                 if everyone or agent_id in agents:
                     raise RegistryUnreachableError("registry returned 401: operator credentials required http://10.9.8.7/secret")
-                return inner.set_status(agent_id, status)
+                return inner.set_status(agent_id, status, **kw)
         return W()
 
 
@@ -46,7 +46,7 @@ def test_a_mixed_domain_names_each_agent_in_the_right_list(tmp_path):
         s.register(a)
     assert s.registry.patch("/agents/was-killed", json={"status": "killed"}).status_code == 200
     r = s.kill.post("/kill/domain/finance", json=OP)
-    assert r.status_code == 200
+    assert r.status_code == 502          # an errored agent makes the route non-2xx (kill-path hardening)
     p = payload(s)
     assert p["killed"] == ["good"]
     assert p["already_killed"] == ["was-killed"]
