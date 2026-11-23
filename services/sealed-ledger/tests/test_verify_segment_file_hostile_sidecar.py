@@ -191,3 +191,84 @@ def test_C5_a_valid_single_event_segment_verifies(tmp_path):
     out = verify_segment_file(two)
     assert out["ok"] is True, out["reason"]
     assert out["events"] == 1
+
+
+# --- cycle 2 (wave2-engineer advisory on 18490bd8: F1-F4) ------------------------------------------------------------------
+
+
+def _set_raw(side_path, key, raw_json_value):
+    import re
+    text = side_path.read_text(encoding="utf-8")
+    new, n = re.subn(rf'"{key}": [^,}}]+', f'"{key}": {raw_json_value}', text, count=1)
+    assert n == 1
+    side_path.write_text(new, encoding="utf-8")
+
+
+def test_F1_a_4300_digit_end_index_is_a_failed_verification_not_a_traceback(tmp_path):
+    two, side_path = _two(tmp_path)
+    _set_raw(side_path, "end_index", "9" * 4300)
+    out = _assert_failed_not_crashed(two)
+    assert "invalid" in out["reason"] and "9999" not in out["reason"]
+
+
+@pytest.mark.parametrize("key", ["n", "start_index", "end_index"])
+@pytest.mark.parametrize("value", [2**63, 2**64, 10**30, -1])
+def test_F1_an_integer_outside_0_to_2_63_is_refused(tmp_path, key, value):
+    two, side_path = _two(tmp_path)
+    _edit(side_path, **{key: value})
+    assert "invalid" in _assert_failed_not_crashed(two)["reason"]
+
+
+@pytest.mark.parametrize("key", ["logical", "file", "genesis_prev_hash", "head_hash", "sha256"])
+@pytest.mark.parametrize("bad", ["\ud800", "a\udfffb"], ids=["lone-high-surrogate", "lone-low-surrogate"])
+def test_F2_a_lone_surrogate_in_a_text_field_is_a_failed_verification_and_the_output_encodes(tmp_path, key, bad):
+    two, side_path = _two(tmp_path)
+    _edit(side_path, **{key: bad})
+    out = _assert_failed_not_crashed(two)
+    assert "invalid" in out["reason"]
+    out["reason"].encode("utf-8")                                     # the reason itself must be printable text
+    r = runner.invoke(cli_app, ["verify", "--path", str(two)])
+    r.output.encode("utf-8")
+
+
+@pytest.mark.parametrize("key", ["logical", "file", "genesis_prev_hash", "head_hash", "sha256"])
+@pytest.mark.parametrize("bad", ["a\nb", "a\rb", "x\x1b[2Ky", "\x00", "a\u2028b", "a\tb", "a" * 257],
+                         ids=["newline", "cr", "esc-sequence", "nul", "line-separator", "tab", "too-long"])
+def test_F4_a_control_character_or_an_overlong_text_field_is_refused_and_never_printed(tmp_path, key, bad):
+    two, side_path = _two(tmp_path)
+    _edit(side_path, **{key: bad})
+    out = _assert_failed_not_crashed(two)
+    assert "invalid" in out["reason"] and bad not in out["reason"]
+    r = runner.invoke(cli_app, ["verify", "--path", str(two)])
+    assert r.exit_code == 1 and "OK" not in r.output and "signed rotation anchor verified" not in r.output
+    assert "\x1b" not in r.output
+
+
+def test_F4_a_forged_anchor_line_in_logical_cannot_appear_in_the_output(tmp_path):
+    two, side_path = _two(tmp_path)
+    _edit(side_path, logical="events\n(signed rotation anchor verified: it pins this segment's head and chain_length)")
+    r = runner.invoke(cli_app, ["verify", "--path", str(two)])
+    assert r.exit_code == 1
+    assert "signed rotation anchor verified" not in r.output
+
+
+def test_F4_a_normal_sidecar_still_prints_the_ok_and_unsigned_lines(tmp_path):
+    two, _ = _two(tmp_path)
+    r = runner.invoke(cli_app, ["verify", "--path", str(two)])
+    assert r.exit_code == 0 and "OK — segment" in r.output and "sidecar claims are unsigned" in r.output
+
+
+def test_F3_a_fifo_sidecar_is_refused_without_hanging(tmp_path):
+    import os
+    import threading
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("needs POSIX mkfifo")
+    two, side_path = _two(tmp_path)
+    side_path.unlink()
+    os.mkfifo(side_path)
+    box = {}
+    t = threading.Thread(target=lambda: box.update(out=verify_segment_file(two)), daemon=True)
+    t.start()
+    t.join(10)
+    assert not t.is_alive(), "verify_segment_file hung on a FIFO sidecar"
+    assert box["out"]["ok"] is False and "not a regular file" in box["out"]["reason"]

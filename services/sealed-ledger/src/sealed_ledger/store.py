@@ -1395,6 +1395,24 @@ def _sidecar_int(side: dict[str, Any], key: str) -> int:
     value = side[key]
     if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError(f"{key} is not an integer")
+    if not 0 <= value < _SIDECAR_INT_LIMIT:    # a 4300-digit count would make the failure text itself raise (F1)
+        raise ValueError(f"{key} is out of range")
+    return value
+
+
+#: A sidecar number is a count or an index: 0 <= value < 2**63. Anything larger is refused before it is used or printed.
+_SIDECAR_INT_LIMIT = 1 << 63
+#: A sidecar text field is printed by the CLI: it must be printable (no newline, ESC, NUL, lone surrogate: a newline in
+#: ``logical`` could forge a verifier output line) and at most this long. The hash fields are also ASCII.
+_SIDECAR_TEXT_MAX = 256
+
+
+def _sidecar_text(side: dict[str, Any], key: str, *, ascii_only: bool = False) -> str:
+    value = side[key]
+    if not isinstance(value, str):
+        raise ValueError(f"{key} is not a string")
+    if len(value) > _SIDECAR_TEXT_MAX or not value.isprintable() or (ascii_only and not value.isascii()):
+        raise ValueError(f"{key} is not a short printable string")
     return value
 
 
@@ -1407,7 +1425,12 @@ def _read_sidecar(path: Path) -> tuple[bytes | None, str | None]:
     """``(bytes, None)``; ``(None, None)`` when it does not exist; ``(None, reason)`` when it cannot be a sidecar (not a
     regular file, over the size cap, or unreadable). The reason never carries the content."""
     try:
-        fh = open_shared(path)
+        if os.name == "nt":
+            fh = open_shared(path)
+        else:
+            # O_NONBLOCK: opening a FIFO with no writer would block forever here, before the regular-file check below
+            # (F3); on a regular file the flag changes nothing.
+            fh = os.fdopen(os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)), "rb")
     except FileNotFoundError:
         return None, None
     except OSError as exc:  # a directory, a permission error: a failed verification, never a traceback
@@ -1461,9 +1484,10 @@ def verify_segment_file(path: str | Path, public_key_pem: str | None = None) -> 
             raise ValueError("n must be at least 1 and start_index at least 0")
         if end < start:
             raise ValueError(f"end_index {end} is before start_index {start}")
-        for k in ("logical", "file", "genesis_prev_hash", "head_hash", "sha256"):
-            if not isinstance(side[k], str):
-                raise ValueError(f"{k} is not a string")
+        for k in ("logical", "file"):
+            _sidecar_text(side, k)
+        for k in ("genesis_prev_hash", "head_hash", "sha256"):
+            _sidecar_text(side, k, ascii_only=True)
     except (ValueError, TypeError, KeyError, RecursionError) as exc:
         out["reason"] = f"sidecar {sidecar_path_for(p).name} invalid: {exc}"
         return out
