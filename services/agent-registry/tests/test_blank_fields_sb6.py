@@ -173,3 +173,35 @@ def test_the_unassigned_code_points_used_above_are_unassigned_in_every_supported
     """The Cn rows are only meaningful while these are unassigned (Unicode keeps them reserved, so this holds on 3.11 to 3.14)."""
     import unicodedata
     assert all(unicodedata.category(chr(c)) == "Cn" for c in (0x2065, 0xFFF0, 0xFFF8, 0xE0000, 0xE0080, 0xE0FFF))
+
+
+# --- PR 1362 review (wave2-engineer B1): the PATCH model carries the same validator as the POST model --------------------
+
+@pytest.mark.parametrize("field", ["name", "owner", "domain"])
+@pytest.mark.parametrize("invisible", ["\u200b", "\u200b\u200b", " \u200b ", "\u2060", "\ufeff", "\u3164"])
+def test_B1_patch_over_http_with_only_invisible_characters_is_422_and_changes_nothing(client, field, invisible):
+    before = client.get("/agents/invoicing-agent").json()
+    r = client.patch("/agents/invoicing-agent", json={field: invisible})
+    assert r.status_code == 422, r.text
+    assert client.get("/agents/invoicing-agent").json() == before
+
+
+def test_B1_patch_over_http_strips_a_padded_value_and_an_invisible_edge(client):
+    r = client.patch("/agents/invoicing-agent", json={"domain": " \u200bhr\u200b ", "owner": "\u200bAda ", "name": "  Renamed\u200f"})
+    assert r.status_code == 200, r.text
+    got = client.get("/agents/invoicing-agent").json()
+    assert (got["domain"], got["owner"], got["name"]) == ("hr", "Ada", "Renamed")
+
+
+def test_B1_the_blank_validator_is_a_method_of_both_request_models():
+    """Moving it by hand after a merge once left it inside parse_updated_at (dead code after a return): the model parsed,
+    the PATCH was unprotected. Pin that each request model really carries it."""
+    import ast
+    import inspect
+
+    from agent_registry import models
+    tree = ast.parse(inspect.getsource(models))
+    methods = {n.name: {f.name for f in n.body if isinstance(f, ast.FunctionDef)} for n in tree.body if isinstance(n, ast.ClassDef)}
+    assert "_not_blank" in methods["AgentCreate"] and "_not_blank" in methods["AgentUpdate"]
+    for fn in (n for n in tree.body if isinstance(n, ast.FunctionDef)):
+        assert not [x for x in ast.walk(fn) if isinstance(x, ast.FunctionDef) and x is not fn], fn.name

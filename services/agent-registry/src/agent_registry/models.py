@@ -162,6 +162,11 @@ class AgentUpdate(BaseModel):
             parse_updated_at(value)
         return value
 
+    @field_validator("name", "owner", "domain")
+    @classmethod
+    def _not_blank(cls, v: str | None) -> str | None:
+        return _stripped_non_blank(v)
+
 
 def parse_updated_at(value: str) -> datetime:
     """An ISO 8601 timestamp as an aware UTC datetime (``Z`` accepted, naive taken as UTC); ValueError otherwise."""
@@ -170,11 +175,6 @@ def parse_updated_at(value: str) -> datetime:
         text = text[:-1] + "+00:00"
     parsed = datetime.fromisoformat(text)
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
-
-    @field_validator("name", "owner", "domain")
-    @classmethod
-    def _not_blank(cls, v: str | None) -> str | None:
-        return _stripped_non_blank(v)
 
 
 class ShadowCandidate(BaseModel):
