@@ -44,8 +44,10 @@ from spend_governor.core import (
     Escalation,
     GovernorStore,
     RateLimitSet,
+    RateLimitSetInbound,
     RateLimitsView,
     SpendCapConfig,
+    SpendCapInbound,
     SpendEvent,
     SpendState,
     SpendStatus,
@@ -62,6 +64,7 @@ from spend_governor.core import (
 from spend_governor.usage import (
     ModelBreakdown,
     UsagePolicy,
+    UsagePolicyInbound,
     UsageRecord,
     UsageStatus,
     evaluate_rogue,
@@ -91,6 +94,13 @@ class SpendRequest(BaseModel):
     source: Literal["self", "sentinel"] = "self"
     shadowed: bool = False  # sentinel: the ALLOW was a log-only shadow
 
+    @field_validator("action")
+    @classmethod
+    def _action_not_blank(cls, v: str | None) -> str | None:
+        if v is not None and not v.strip():
+            raise ValueError("action must not be blank")     # S8-10: min_length=1 let ' ' through
+        return v
+
 
 class TotalsResponse(BaseModel):
     """Spend since an arbitrary instant (D1e: spend under a token since issue)."""
@@ -111,6 +121,13 @@ class UsageRequest(BaseModel):
     output_tokens: int = Field(default=0, ge=0, le=MAX_AMOUNT)
     cache_read_tokens: int = Field(default=0, ge=0, le=MAX_AMOUNT)
     note: Utf8Str | None = Field(default=None, max_length=MAX_NOTE_LEN)
+
+    @field_validator("model")
+    @classmethod
+    def _model_not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("model must not be blank")      # S8-10: stored and returned by GET /usage
+        return v
 
 
 class UsageResponse(BaseModel):
@@ -480,7 +497,7 @@ def create_app(
     guard_escalation = op_health.guard("escalation")
 
     @app.put("/caps/{agent_id}", response_model=SpendCapConfig)
-    def set_cap(agent_id: str, cap: SpendCapConfig, background: BackgroundTasks,
+    def set_cap(agent_id: str, cap: SpendCapInbound, background: BackgroundTasks,
                 _op: object = Depends(guard_caps)) -> SpendCapConfig:
         if cap.agent_id != agent_id:
             raise HTTPException(422, "agent_id in path and body must match")
@@ -496,7 +513,7 @@ def create_app(
         return cap
 
     @app.put("/rate-limits/{agent_id}", response_model=RateLimitsView)
-    def set_rate_limits(agent_id: str, body: RateLimitSet,
+    def set_rate_limits(agent_id: str, body: RateLimitSetInbound,
                         _op: object = Depends(guard_caps)) -> RateLimitsView:
         """Replace the agent's rate-limit set (from ``set-cap --from-manifest``).
 
@@ -649,7 +666,7 @@ def create_app(
     # ---- token-usage governance ----
 
     @app.put("/policies/{agent_id}", response_model=UsagePolicy)
-    def set_policy(agent_id: str, policy: UsagePolicy,
+    def set_policy(agent_id: str, policy: UsagePolicyInbound,
                    _op: object = Depends(guard_caps)) -> UsagePolicy:
         if policy.agent_id != agent_id:
             raise HTTPException(422, "agent_id in path and body must match")

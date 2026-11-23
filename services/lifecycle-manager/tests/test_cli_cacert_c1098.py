@@ -10,6 +10,9 @@ Measured here with a throwaway CA made in-process (cryptography, pinned in const
 loopback: a made-up secret, no network, no estate value. Mutants: V1 ``verify=verify`` dropped from the client (the
 bundle is ignored: the 200 test goes red); V2 ``_verify_from(None)`` returns False (the default-refuses test goes red);
 V3 ``trust_env=True`` (the SSL_CERT_FILE test goes red); V4 a verb forgets to pass ``cacert`` (the per-verb test goes red).
+B15 (don.reviewer 460 delta N1): V5 the bundle is ADDED to the default store (``create_default_context()`` then
+``load_verify_locations(cacert)``) — the two replace-pinning tests below go red. The older other_ca test cannot see V5:
+the system store does not trust a throwaway CA either, so it refuses with or without the mutant.
 """
 from __future__ import annotations
 
@@ -148,6 +151,37 @@ def test_the_cacert_bundle_replaces_the_trust_store_rather_than_adding_to_it(sec
     with pytest.raises(httpx.ConnectError):
         client.get("/health")
     assert estate.hits == []
+
+
+def test_the_default_store_trusts_ssl_cert_file_which_is_what_the_next_test_relies_on(monkeypatch, estate):
+    """Control for B15: OpenSSL's default verify paths read SSL_CERT_FILE, so pointing it at CA one makes the DEFAULT
+    store trust the listener. Without this the replace test below would pass for the wrong reason."""
+    monkeypatch.setenv("SSL_CERT_FILE", str(estate.ca))
+    with httpx.Client(verify=ssl.create_default_context(), trust_env=False) as client:
+        assert client.get(f"{estate.url}/health").status_code == 200
+
+
+def test_a_bundle_is_the_only_trust_even_when_the_default_store_would_trust_the_estate(secret, monkeypatch, estate):
+    """B15: the default store is made to trust the listener (SSL_CERT_FILE = CA one); a --cacert bundle holding only
+    the unrelated CA two must still refuse. A bundle that is appended to the default store (V5) connects here."""
+    monkeypatch.setenv("SSL_CERT_FILE", str(estate.ca))
+    client = _registry_client(monkeypatch, estate.url, verify=cli._verify_from(estate.other_ca))
+    with pytest.raises(httpx.ConnectError):
+        client.get("/health")
+    assert estate.hits == []
+
+
+def test_the_bundle_context_holds_exactly_the_bundle(monkeypatch, estate):
+    """B15: the context's CA list is the bundle's one certificate and nothing from the default store (V5 adds the
+    default store's certificates; SSL_CERT_FILE makes that visible on every platform)."""
+    from cryptography import x509
+
+    monkeypatch.setenv("SSL_CERT_FILE", str(estate.ca))
+    ctx = cli._verify_from(estate.other_ca)
+    subject = x509.load_pem_x509_certificate(estate.other_ca.read_bytes()).subject.rfc4514_string()
+    held = ctx.get_ca_certs()
+    assert len(held) == 1, len(held)
+    assert dict(x[0] for x in held[0]["subject"])["commonName"] in subject
 
 
 def test_verify_from_is_the_default_store_without_a_bundle_and_never_off(estate):

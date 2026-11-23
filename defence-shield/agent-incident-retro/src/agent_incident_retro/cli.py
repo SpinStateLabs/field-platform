@@ -52,6 +52,8 @@ def _load_config(path: Optional[Path], **overrides) -> RetroConfig:
             raise ValueError(f"--config cannot be read ({type(exc).__name__})") from None
         except ValueError:                      # not UTF-8, or not JSON: nothing of the file is echoed
             raise ValueError("--config is not valid UTF-8 JSON") from None
+        except RecursionError:                  # nested deeper than the JSON decoder allows (PR 533, S-B8)
+            raise ValueError("--config nests too deeply") from None
         if not isinstance(loaded, dict):
             raise ValueError("--config must hold a JSON object")
         data = loaded
@@ -100,7 +102,10 @@ def scan(
         report_path, pack_path = write_outputs(
             result, out, key.read_text(encoding="utf-8"), _now_iso(), list(logs), force=force
         )
-    except (ValueError, FileExistsError, FileNotFoundError) as exc:
+    except OSError as exc:      # FileExistsError, FileNotFoundError, a directory key...: the class only, never a path
+        typer.echo(f"error: could not read or write a file: {type(exc).__name__}", err=True)
+        raise typer.Exit(1)
+    except ValueError as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(1)
     total_lines = sum(i.lines for i in result.inputs)
