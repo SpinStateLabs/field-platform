@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """stage_controller - the Phase G stage controller (P36; G24; Don's ruling lifts C-552).
 
-    python tools/stage_controller.py plan   --stage N [--records PATH] [--go-sentence TEXT]
+    python tools/stage_controller.py plan   --stage N [--records PATH] [--go-sentence TEXT --build-sha SHA] [--services a,b,c]
     python tools/stage_controller.py record alerts-proven | gate G18 | gate G21 | gate G22 [--records PATH]
 
 WHAT IT IS. A state machine for the three Phase G arming stages (``docs/runbooks/v1.2-deploy-rollback.md``,
@@ -417,6 +417,11 @@ class Controller:
             self._note_refusal(stage, exc.reason)
             raise
         spec = STAGES[stage]
+        if self.expected_services is not None and any(s not in self.expected_services for s in spec.services):
+            # reviewer-8 C1 on the rebuild of PR 855 (controller ruling): an explicit list may ADD services to the stage's
+            # own list, never leave one out, so an operator cannot narrow what a stage checks. Refused before anything.
+            self._note_refusal(stage, "services_narrower_than_stage")
+            raise Refused("services_narrower_than_stage")
         extra = _go_fields(go_sentence) if spec.needs_go_sentence else {}
         if not live or self.actions is None:
             try:
@@ -549,7 +554,10 @@ def main(argv: list[str] | None = None) -> int:
     plan.add_argument("--records")
     plan.add_argument("--go-sentence", dest="go_sentence")
     plan.add_argument("--build-sha", dest="build_sha",
-                      help="the sha the estate runs: the alerts and gate records must carry it")
+                      help="the sha the estate runs: the alerts and gate records must carry it; required with --go-sentence")
+    plan.add_argument("--services", help="comma-separated compose service names the baseline must name "
+                                         "(default: the stage's own list; it may add to that list, never leave one of its services out); an empty "
+                                         "list, an unknown name or a narrower list is refused")
     rec = sub.add_parser("record", help="write an alerts-proven, gate or ack-rollback record")
     rec.add_argument("what", choices=("alerts-proven", "gate", "ack-rollback"))
     rec.add_argument("gate", nargs="?", choices=("G18", "G21", "G22"))
@@ -584,14 +592,28 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         print(f"recorded {args.what}{' ' + args.gate if args.gate else ''}")
         return 0
+    names: tuple[str, ...] | None = None
+    if args.services is not None:
+        names = tuple(dict.fromkeys(n.strip() for n in args.services.split(",")))
+        if not names or any(not n for n in names):
+            print("refused: services_empty")
+            return 2
+        if [n for n in names if n not in EIGHT_SERVICES]:
+            print(f"refused: services_unknown (compose names are {', '.join(EIGHT_SERVICES)})")
+            return 2
+    if args.go_sentence is not None and not args.build_sha:
+        # a go sentence is a live-run input: the run must be bound to the sha the estate runs (RT-832-R1)
+        print("refused: build_sha_required")
+        return 2
     try:
-        Controller(records, build_sha=args.build_sha).run(args.stage, go_sentence=args.go_sentence)
+        Controller(records, build_sha=args.build_sha, expected_services=names).run(args.stage, go_sentence=args.go_sentence)
     except Refused as exc:
         print(f"refused: {exc.reason}")
         return 2
     spec = STAGES[args.stage]
     print(f"stage {args.stage} may start (dry run, nothing was changed)")
     print("steps: " + ", ".join(spec.steps))
+    print("services: " + ", ".join(names if names is not None else spec.services))
     print("rollback, in order: " + ", ".join(spec.rollback))
     print("abort conditions: " + ", ".join(ABORT_CONDITIONS))
     if spec.irreversible:
