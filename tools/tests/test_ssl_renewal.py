@@ -111,8 +111,8 @@ def _wait_up(url: str, proc: subprocess.Popen, what: str) -> None:
 
 
 def _safe_env(env: dict) -> dict:
-    """field-rest.ps1 used to fall back to the real token file when
-    FIELD_TOKENS_FILE named a file that does not exist, and still does when FIELD_TOKENS_FILE is unset.
+    """field-rest.ps1 used to fall back to one account's .field-local\\tokens-gb10.json when
+    FIELD_TOKENS_FILE named a file that does not exist, and when it was unset (B14 removed that fallback).
     Every PowerShell run of the real shim here must therefore name an existing token file in tmp, a secret
     file outside .field-local and a loopback estate, so no regression or mutant of the shim can reach the
     real file. Learned the hard way: a mutant verifier that loaded the real shim, in a test that had not
@@ -561,23 +561,23 @@ def _code_lines(source: str) -> str:
     return "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("#"))
 
 
-# C-726 (reviewer C-693 F-C693-1): the real shim names a default profile path in code. The decoy finds it by SHAPE
-# (a drive, the profile directory, any account, then the file), so this test file names no account itself.
-_PROFILE = r"[A-Za-z]:\\" + "Us" + r"ers\\[^\\']+\\\.field-local\\"
+# C-726 (reviewer C-693 F-C693-1): the decoy finds the shim's real defaults by SHAPE, and
+# test_windows_pins_without_powershell_c726.py checks that this shape matches the shim's code exactly once per default.
+# Since B14 the defaults are built from $HOME (`Join-Path $HOME '.field-local\<name>'`), so no account is named here.
+_PROFILE = r"Join-Path \$HOME '\.field-local\\"
 
 
 def _real_default(name: str) -> "re.Pattern[str]":
-    return re.compile(_PROFILE + re.escape(name))
+    return re.compile(_PROFILE + re.escape(name) + "'")
 
 
 def _decoy_shim(tmp: Path, real_tokens: Path, home: Path) -> Path:
-    """A copy of the REAL shim whose only change is its path literals (the rog-command token file
-    becomes `real_tokens`, the $HOME default `home`, the default secret file a tmp path), so a run
-    whose FIELD_TOKENS_FILE is missing or unset can never reach the real .field-local directory."""
+    """A copy of the REAL shim whose only change is its path defaults (the $HOME token default becomes
+    `home`, the $HOME secret default a tmp path; `real_tokens` is a decoy no run may read), so a run
+    whose FIELD_TOKENS_FILE is missing or unset can never reach $HOME\\.field-local."""
     source = (TOOLS / "field-rest.ps1").read_text(encoding="utf-8")
-    swaps = {_real_default("tokens-gb10.json"): str(real_tokens),
-             _real_default("gb10-estate-secret"): str(tmp / "decoy-default-secret"),
-             r"Join-Path $HOME '.field-local\tokens-gb10.json'": f"Join-Path '{home}' 'tokens-gb10.json'"}
+    swaps = {_real_default("gb10-estate-secret"): f"Join-Path '{tmp}' 'decoy-default-secret'",
+             _real_default("tokens-gb10.json"): f"Join-Path '{home}' 'tokens-gb10.json'"}
     for old, new in swaps.items():
         if isinstance(old, re.Pattern):
             source, hits = old.subn(lambda _m, new=new: new, source)
@@ -617,7 +617,7 @@ def test_the_verifier_makes_no_call_unless_the_shim_reads_exactly_the_tokens_fil
     FIELD_PROXY_URL: refused before any call, even when that other file holds the same token."""
     e, token = case.e, case.e.mint(DAY)
     case.tokens_file(token)
-    real = case.tmp / "decoy-real-tokens.json"  # stands in for the rog-command file the shim falls back to
+    real = case.tmp / "decoy-real-tokens.json"  # planted where the removed fallback pointed: never read
     case.tokens_file(token, path=real)
     shim = _decoy_shim(case.tmp, real, home=case.tmp / "decoy-home")
     env = case.env()
@@ -628,7 +628,7 @@ def test_the_verifier_makes_no_call_unless_the_shim_reads_exactly_the_tokens_fil
         case.tokens_file(token, path=Path(expected))
     elif shim_reads == "its default (no FIELD_TOKENS_FILE)":
         del env["FIELD_TOKENS_FILE"]
-        expected = str(real)
+        expected = str(case.tmp / "decoy-home" / "tokens-gb10.json")   # the $HOME default only (B14)
     elif shim_reads == "the same file spelled in another case":  # the runbook promises an exact comparison
         env["FIELD_TOKENS_FILE"] = expected = str(case.store).swapcase()
         assert Path(expected).is_file()  # one file on Windows, two spellings

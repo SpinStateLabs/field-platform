@@ -260,3 +260,39 @@ def test_an_explicit_default_port_is_filtered_too_r1(caplog, scheme, port):
     assert_absent(TOKEN, text)
     for marker in ("svc-user", "basepath-Qp41", "#frag"):
         assert marker not in text, marker
+
+
+@pytest.mark.parametrize("authority,origin", [
+    ("b\u00fccher.example:8004", "http://xn--bcher-kva.example:8004"),            # an IDN host: httpx logs punycode
+    ("xn--bcher-kva.example:8004", "http://xn--bcher-kva.example:8004"),
+    ("sentinel-f1.invalid:\uff18\uff10\uff10\uff14", "http://sentinel-f1.invalid:8004"),   # a non-ASCII-digit port
+], ids=["idn", "punycode", "fullwidth-port"])
+def test_a_host_or_port_httpx_normalises_is_filtered_too_f1(caplog, authority, origin):
+    """don.reviewer N1 and teammate-don F1 on #1272: httpx logs the normalised form, so the filter must compare in it,
+    or the whole URL (userinfo, path, token) is logged on every successful check. MockTransport: nothing leaves."""
+    import httpx
+
+    def handler(request):
+        return httpx.Response(200, json={"decision": "ALLOW", "clause_id": None})
+
+    url = f"http://svc-user:{PASSWORD}@{authority}/basepath-Qp41?token={TOKEN}#frag"
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http:
+        with caplog.at_level(logging.DEBUG):
+            verdict = SentinelClient(client=http, base_url=url, timeout=5.0).check("a-1", "t-1", "egress")
+    assert verdict["decision"] == "ALLOW"
+    lines = [r.getMessage() for r in caplog.records if r.name == "httpx" and r.getMessage().startswith("HTTP Request:")]
+    assert lines == [f'HTTP Request: POST {origin} "HTTP/1.1 200 OK"']
+    text = caplog.text + " ".join(repr(r.args) for r in caplog.records)
+    assert_absent(PASSWORD, text)
+    assert_absent(TOKEN, text)
+    for marker in ("svc-user", "basepath-Qp41", "#frag"):
+        assert marker not in text, marker
+
+
+def test_the_filter_key_is_none_for_what_httpx_cannot_read():
+    from force_gateway import api as gw
+
+    for bad in ("http://[::1", "http://h:notaport", "ftp://h.example", "not a url"):
+        assert gw._httpx_origin(bad) is None, bad
+    assert gw._httpx_origin("http://u:p@H.Example:80/x?y=1") == "http://h.example"
+    assert gw._httpx_origin("https://[::1]:8443/x") == "https://[::1]:8443"

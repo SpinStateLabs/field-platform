@@ -411,8 +411,8 @@ def _is_host(host: str | None) -> bool:
 class _SentinelUrlLogFilter(logging.Filter):
     """roley.reviewer C1 on #1272: httpx logs every request at INFO as ``HTTP Request: <method> <url> ...`` and the
     url there is the whole sentinel URL, userinfo, path and query included. For a request to a sentinel origin this
-    filter puts ``public_origin`` of the url in its place, so the success path logs no more than the 503 detail and
-    ``/health`` show. Requests to any other origin are left as httpx logs them. The record is kept, not dropped."""
+    filter puts the origin (``_httpx_origin``) in its place, so the success path logs no userinfo, path or query.
+    Requests to any other origin are left as httpx logs them. The record is kept, not dropped."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -422,20 +422,28 @@ class _SentinelUrlLogFilter(logging.Filter):
         args = record.args
         if (self.origins and isinstance(args, tuple) and len(args) >= 2
                 and isinstance(record.msg, str) and record.msg.startswith("HTTP Request:")):
-            shown = _origin_key(public_origin(str(args[1])))
-            if shown in self.origins:
+            shown = _httpx_origin(args[1])
+            if shown is not None and shown in self.origins:
                 record.args = (args[0], shown, *args[2:])
         return True
 
 
-def _origin_key(origin: str | None) -> str | None:
-    """``origin`` without the scheme's default port (http :80, https :443). httpx logs ``http://h:80/...`` as
-    ``http://h/...`` while ``public_origin`` of the configured base keeps ``:80`` (reviewer-R1 on #1272): both sides
-    of the filter compare in this form."""
-    for scheme, port in (("http://", ":80"), ("https://", ":443")):
-        if origin and origin.startswith(scheme) and origin.endswith(port):
-            return origin[: -len(port)]
-    return origin
+def _httpx_origin(url: object) -> str | None:
+    """``scheme://host[:port]`` as httpx itself normalises it, for BOTH sides of the filter's comparison: the host as
+    ``raw_host`` (an IDN name in punycode), the port as a number and absent when it is the scheme's default. httpx logs
+    that form, so a base written with an IDN host, a non-ASCII-digit port or an explicit :80 / :443 still matches
+    (reviewer-R1, don.reviewer N1 and teammate-don F1 on #1272). None when httpx cannot read it."""
+    import httpx
+
+    try:
+        parsed = httpx.URL(str(url))
+        host = parsed.raw_host.decode("ascii")
+    except (httpx.InvalidURL, ValueError, TypeError):
+        return None
+    if parsed.scheme not in ("http", "https") or not host:
+        return None
+    shown = f"[{host}]" if ":" in host else host
+    return f"{parsed.scheme}://{shown}" + (f":{parsed.port}" if parsed.port is not None else "")
 
 
 _SENTINEL_URL_LOG_FILTER = _SentinelUrlLogFilter()
@@ -465,7 +473,9 @@ class SentinelClient:
         self.timeout = checked_sentinel_timeout(timeout) if timeout is not None else resolve_sentinel_timeout()
         self._client = client
         # C1: httpx's request line for this sentinel shows its origin only
-        _SENTINEL_URL_LOG_FILTER.origins.add(_origin_key(public_origin(self._base)))
+        origin = _httpx_origin(self._base)
+        if origin is not None:
+            _SENTINEL_URL_LOG_FILTER.origins.add(origin)
         if self._client is None:
             import httpx
 
