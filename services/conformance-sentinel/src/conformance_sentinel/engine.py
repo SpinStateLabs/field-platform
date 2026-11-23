@@ -35,6 +35,7 @@ from field_core.clients import (
     RegistryClient,
 )
 from field_core.conformance import ConformanceVerdict, Decision
+from field_core.http import get_retrying_once, pooled_limits
 from field_core.ledger_context import correlation_context
 
 from conformance_sentinel.judge import injection_screen
@@ -160,7 +161,8 @@ class SpendStatusClient:
         if self._client is None:
             import httpx
 
-            self._client = httpx.Client(timeout=5.0, headers=perimeter_headers())
+            # B16: idle connections expire before the governor's keep-alive closes them
+            self._client = httpx.Client(timeout=5.0, headers=perimeter_headers(), limits=pooled_limits())
 
     def status(self, agent_id: str, *, action: str | None = None) -> dict[str, Any] | None:
         """None means 'no cap configured' (404) — treated as ungoverned-spend,
@@ -168,10 +170,10 @@ class SpendStatusClient:
         ``action`` (keyword) asks the governor to include that action's rate
         windows (``?action=``); the judge gate calls without it."""
         if action is None:
-            resp = self._client.get(f"{self._base}/status/{_seg(agent_id)}")
+            resp = get_retrying_once(self._client, f"{self._base}/status/{_seg(agent_id)}")
         else:
-            resp = self._client.get(f"{self._base}/status/{_seg(agent_id)}",
-                                    params={"action": action})
+            resp = get_retrying_once(self._client, f"{self._base}/status/{_seg(agent_id)}",
+                                     params={"action": action})
         if resp.status_code == 404:
             return None
         if resp.status_code != 200:
@@ -194,8 +196,8 @@ class SpendStatusClient:
 
     def totals_since(self, agent_id: str, since: str) -> dict[str, Any] | None:
         """Spend since ``since`` (``GET /totals``); None when uncapped (404)."""
-        resp = self._client.get(f"{self._base}/totals/{_seg(agent_id)}",
-                                params={"since": since})
+        resp = get_retrying_once(self._client, f"{self._base}/totals/{_seg(agent_id)}",
+                                 params={"since": since})
         if resp.status_code == 404:
             return None
         if resp.status_code != 200:
@@ -226,7 +228,9 @@ class DelegationIntrospectClient:
         if self._client is None:
             import httpx
 
-            self._client = httpx.Client(timeout=5.0, headers=perimeter_headers())
+            # B16: idle connections expire before delegation's keep-alive closes them. POST /introspect is not
+            # retried: only idempotent GETs are (field_core.http.get_retrying_once)
+            self._client = httpx.Client(timeout=5.0, headers=perimeter_headers(), limits=pooled_limits())
 
     def introspect(self, token_id: str) -> dict[str, Any]:
         resp = self._client.post(
@@ -613,8 +617,10 @@ class SentinelEngine:
                 [f"agent '{req.agent_id}' is not in the registry"],
             )
         except RegistryUnreachableError as exc:
+            # B16: still a BLOCK (fail closed), but not "unregistered": the identity could not be established,
+            # which is a different fact from "the registry says no such agent" and is read differently by an operator.
             return self._verdict(
-                req, Decision.BLOCK, "R.unregistered",
+                req, Decision.BLOCK, "R.registry_unreachable",
                 [f"registry unreachable — cannot establish identity: {_why(exc)}"],
             )
         status = record.get("status")
