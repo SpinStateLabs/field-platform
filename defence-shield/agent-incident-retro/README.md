@@ -127,8 +127,10 @@ accepted.
   only, not a catch-all check: a longer common token such as `Mozilla`, `/5.0` or `Gecko` is accepted and still
   authorizes most browser clients, so use a specific string (or `--allow-ip`). The config's
   `session_gap_s`, `pivot_window_s` and `cadence_cv_max` must be finite numbers greater than 0 and
-  `cadence_min_requests` at least 1: `NaN`, infinity, zero and negatives would silently disable a detection, so `scan`
-  refuses them with one error line and exit 1.
+  `cadence_min_requests` at least 1, so `scan` refuses anything else with one error line and exit 1. The clauses compare
+  with `>` and `>=`, which are False for `NaN`: a `NaN` gap never splits a session and a `NaN` pivot window never closes.
+  `NaN` or infinity in `cadence_cv_max` goes the other way, `S.cadence` then fires on every eligible session (the test
+  `interarrival_cv >= cadence_cv_max` is False), while zero or a negative `cadence_cv_max` means it can never fire.
 - **Campaign linking is coarse.** Fingerprints normalise digits, so two
   unrelated payloads that differ only in a number link as one "campaign", with
   no time bound. It is a lead for a human, not proof of a coordinated actor.
