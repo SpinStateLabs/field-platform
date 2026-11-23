@@ -228,10 +228,11 @@ def test_an_injected_client_is_called_exactly_as_before(monkeypatch):
 
 @pytest.mark.parametrize("agent_id", ["..", ".", "%2e%2e", "%2E", "a%2fb", "a%25b", "x?y", "x/y"])
 def test_registry_set_status_with_a_dot_segment_id_never_carries_the_pair(wire, monkeypatch, agent_id):
-    """C-683 F-C683-2: httpx normalises ``/agents/..`` to ``/``; the pair is decided on that wire path, so an id
-    that rewrites the route (or, percent-encoded, may be rewritten by a receiver) is not a guarded PATCH and gets the
-    perimeter secret only."""
+    """C-683 F-C683-2, tightened by S12-7: an id that rewrites the route (or, percent-encoded, may be rewritten by a
+    receiver) is refused before anything is sent, so no request carries the pair or the perimeter secret.
+    (Was: a PATCH went out carrying the perimeter secret only. Expectation change awaiting approval.)"""
     _identity(monkeypatch, "svc-killswitch", secrets.token_urlsafe(24))
-    RegistryClient(base_url="http://registry.test").set_status(agent_id, "killed")
-    assert wire[-1].method == "PATCH"
-    assert _pair(wire[-1]) == (None, None)
+    before = len(wire)
+    with pytest.raises(clients.AgentNotRegisteredError):
+        RegistryClient(base_url="http://registry.test").set_status(agent_id, "killed")
+    assert len(wire) == before

@@ -404,9 +404,10 @@ class RegistryClient:
             self._client = httpx.Client(timeout=5.0, trust_env=False)
 
     def get_agent(self, agent_id: str) -> dict[str, Any]:
+        seg = _agent_segment(agent_id)
         try:
-            resp = self._client.get(f"{self._base}/agents/{agent_id}",
-                                    **_request_auth(self._own_client, "GET", f"/agents/{agent_id}", REGISTRY_GUARDED))
+            resp = self._client.get(f"{self._base}/agents/{seg}",
+                                    **_request_auth(self._own_client, "GET", f"/agents/{seg}", REGISTRY_GUARDED))
         except Exception as exc:
             raise RegistryUnreachableError(_transport_text(exc)) from exc
         if resp.status_code == 404:
@@ -460,12 +461,13 @@ class RegistryClient:
         ``updated_at`` still equals this value (the one an earlier read or write of the row returned); any other
         write in between makes the registry answer 412 and this method raise :class:`AgentRowChangedError`. ``None``
         (the default) is the unconditional write it always was."""
+        seg = _agent_segment(agent_id)
         try:
-            auth = _request_auth(self._own_client, "PATCH", f"/agents/{agent_id}", REGISTRY_GUARDED)
+            auth = _request_auth(self._own_client, "PATCH", f"/agents/{seg}", REGISTRY_GUARDED)
             if extra_headers is not None:
                 auth = {"headers": _with_extra_headers(auth.get("headers", {}), extra_headers)}
             resp = self._client.patch(
-                f"{self._base}/agents/{agent_id}",
+                f"{self._base}/agents/{seg}",
                 json={"status": status} if if_updated_at is None else {"status": status, "if_updated_at": if_updated_at},
                 **auth,
             )
@@ -624,3 +626,22 @@ def resolve_manifest_detail(
     """As :func:`resolve_manifest`, returning ``(manifest, reason)`` with
     reason in :data:`RESOLVE_REASONS`."""
     return _resolver_for(manifest_dir).resolve_detail(manifest_ref)
+
+
+#: The registry's own id grammar (agent_registry.models: ``^[a-z0-9][a-z0-9._-]*$``), checked before any request.
+_AGENT_ID = None
+
+
+def _agent_segment(agent_id: str) -> str:
+    """The id as one percent-encoded path segment, or ``AgentNotRegisteredError`` BEFORE anything is sent when it
+    is not a registry id: ``x?y``, ``x/attest`` or ``..`` would otherwise change the route or the target (S12-7).
+    The refusal never carries the value beyond what the 404 path already does."""
+    import re
+    from urllib.parse import quote
+
+    global _AGENT_ID
+    if _AGENT_ID is None:
+        _AGENT_ID = re.compile(r"[a-z0-9][a-z0-9._-]*")
+    if not isinstance(agent_id, str) or not _AGENT_ID.fullmatch(agent_id):
+        raise AgentNotRegisteredError(agent_id)
+    return quote(agent_id, safe="")
