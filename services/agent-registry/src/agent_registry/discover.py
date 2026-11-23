@@ -31,6 +31,7 @@ import csv
 import io
 import json
 import re
+import unicodedata
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -62,10 +63,27 @@ AI_NODE_MARKERS = (
 # jsmith@thai.example are people (S12-11). AI vendor names count anywhere in the name, so a shadow account such as
 # openai-key or bob@openai.com is still found (don.reviewer B1 on #1024). Words that are also personal names (claude,
 # gemini, mistral) are not vendor tokens on their own: claude.martin is a person.
+# A name that fuses a vendor or product onto ``ai`` (vertexai-sa, h2oai-key, myai-helper, teamai.sync) was flagged by the
+# unanchored ``ai[-_.]`` this rule replaced; dropping it entirely made the scanner miss them (fail-open, don.reviewer
+# re-verdict and the 1024 advisory: 21 of 50 names). So ``<alnum>ai<sep>`` counts again when it is followed by a service-type
+# word at the end of the name (key, svc, sa, api, token, worker, bot, agent, runner, helper, sync, job, service, daemon),
+# which keeps people such as kai_nakamura, rai-chu, mai.tran, lai-x and jsmith@thai.example unflagged.
+_FUSED_AI_SERVICE = (r"[a-z0-9]ai[-_.](?:key|svc|sa|api|token|worker|bot|agent|runner|helper|sync|job|service|daemon)"
+                     r"(?![a-z0-9])")
+_AI_VENDORS = ("openai|anthropic|huggingface|geminiai|mistralai|cohereai|vertexai|azureai|stabilityai|perplexityai|"
+               "togetherai|fireworksai|deepai|jasperai|scaleai|llamaai|copilotai")
 ACCOUNT_PATTERNS = re.compile(
     r"(^svc[-_.]|^bot[-_.]|[-_.]bot$|agent|automation|(?:^|[-_.@])(?:ml|gen|x)?ai[-_.]"
-    r"|openai|anthropic|huggingface|geminiai|mistralai|cohereai)", re.I)
+    rf"|{_FUSED_AI_SERVICE}|{_AI_VENDORS})", re.I)
 ACCOUNT_TYPE_MARKERS = ("service", "bot", "application", "automation")
+
+
+def looks_like_automation(account: str) -> bool:
+    """``ACCOUNT_PATTERNS`` on the name after NFKC normalisation with the format characters (Unicode category Cf: zero-width
+    space and joiner, bidi marks, soft hyphen, the Kelvin-style compatibility forms fold to their plain letters) removed, so
+    ``open<ZWSP>ai-key`` and a full-width ``ａｉ-bot`` are matched like their plain forms. The candidate keeps the raw name."""
+    folded = "".join(ch for ch in unicodedata.normalize("NFKC", account) if unicodedata.category(ch) != "Cf")
+    return bool(ACCOUNT_PATTERNS.search(folded))
 
 
 def _normalize(text: str) -> str:
@@ -185,7 +203,7 @@ def scan_service_accounts(
             continue
         scanned += 1
         acc_type = row.get("type", "")
-        looks_automated = bool(ACCOUNT_PATTERNS.search(account)) or any(
+        looks_automated = looks_like_automation(account) or any(
             marker in acc_type.lower() for marker in ACCOUNT_TYPE_MARKERS
         )
         if not looks_automated:

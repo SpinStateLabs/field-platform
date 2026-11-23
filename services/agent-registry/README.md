@@ -100,6 +100,15 @@ registry serve [--port 8001]
   expect false positives (e.g. non-AI automation accounts) — it produces a
   review queue, not a verdict. False negatives are possible if an AI node
   type contains none of the known markers.
+  The service-account name rule (`discover.ACCOUNT_PATTERNS`, applied after NFKC normalisation and with format characters
+  removed): `ai` counts as a token at the start of a name or after a separator, a fused `<alnum>ai<sep>` counts only when a
+  service word follows (key, svc, sa, api, token, worker, bot, agent, runner, helper, sync, job, service, daemon), and a
+  listed AI vendor name counts anywhere. So `kai_nakamura`, `jsmith@thai.example` and `claude.martin` are not flagged, and
+  `vertexai-sa`, `h2oai-key` and `open<ZWSP>ai-key` are. A fused name with no service word and no listed vendor (for
+  example `prod1ai-x`) is not flagged: a false negative this heuristic accepts.
+  A **retired** agent does not make a candidate "registered": the candidate is surfaced and the note names the retired
+  agent; a **killed** agent still counts as registered (it may still run; an owner decision is open); an owner who owns
+  only retired agents no longer makes an API key's owner known. `registered_agents` stays the full count.
 - Name matching between candidates and registered agents is normalized
   substring matching — a completely renamed shadow account with no overlap
   to a registered name will (correctly) surface, but a shadow account named
