@@ -21,7 +21,7 @@ class Rec:
             status_code = 200
 
             def json(self):
-                return {"ok": True}
+                return {"ok": True, "restored": True, "restored_status": "active"}
 
         return R()
 

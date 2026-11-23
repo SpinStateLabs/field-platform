@@ -280,9 +280,9 @@ def test_domain_kill_skips_agents_the_operator_may_not_kill(tmp_path, enforce):
     s.register("mine", authorized=["other"])
     s.register("theirs", authorized=["don"])
     r = s.kill.post("/kill/domain/finance", json=BODY, headers=hdr("other", KEY_OTHER))
-    assert r.status_code == 200
+    assert r.status_code == 502          # the agent the operator may not kill is an error: non-2xx, report as the detail
     assert s.status("mine") == "killed" and s.status("theirs") == "active"
-    out = {x["agent_id"]: x["outcome"] for x in r.json()["results"]}
+    out = {x["agent_id"]: x["outcome"] for x in r.json()["detail"]["results"]}
     assert out["theirs"] == "error"
 
 

@@ -85,9 +85,16 @@ def _duplicate_key_path(node: yaml.Node, dotted: str, seen: set[int]) -> str | N
 
 
 def load_manifest(path: str | Path) -> dict[str, Any]:
-    """Load a manifest YAML (or JSON — YAML is a superset) into a dict. A repeated mapping key is refused
-    (``ValueError`` naming the dotted path, never a value): ``safe_load`` keeps the last one without a word."""
-    text = Path(path).read_text(encoding="utf-8")
+    """Load a manifest YAML (or JSON — YAML is a superset) into a dict. A repeated mapping key is refused (see
+    ``parse_manifest_text``)."""
+    return parse_manifest_text(Path(path).read_text(encoding="utf-8"), path)
+
+
+def parse_manifest_text(text: str, source: str | Path = "<text>") -> dict[str, Any]:
+    """Parse manifest text already in memory (the resolver reads a bounded number of bytes once and parses
+    THOSE, so the digest it caches and the manifest it serves come from the same bytes; C-1086). A repeated mapping
+    key is refused (``ValueError`` naming the dotted path, never a value): ``safe_load`` keeps the last one without
+    a word."""
     root = yaml.compose(text, Loader=yaml.SafeLoader)
     if root is not None:
         dup = _duplicate_key_path(root, "", set())
@@ -95,7 +102,7 @@ def load_manifest(path: str | Path) -> dict[str, Any]:
             raise ValueError(f"manifest has a duplicate key at {dup}")
     data = yaml.safe_load(text)
     if not isinstance(data, dict):
-        raise ValueError(f"manifest at {path} did not parse to a mapping")
+        raise ValueError(f"manifest at {source} did not parse to a mapping")
     return data
 
 
