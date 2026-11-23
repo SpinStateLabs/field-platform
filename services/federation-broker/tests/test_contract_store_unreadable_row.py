@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 
 from federation_broker.api import create_app
 from federation_broker.engine import (
-    BrokerEngine, ContractStore, ContractUnreadable, NAME_MAX, UNREADABLE_MARK, _contract_from_row,
+    LIST_MAX, BrokerEngine, ContractStore, ContractUnreadable, NAME_MAX, UNREADABLE_MARK, _contract_from_row,
 )
 from field_core.clients import LedgerClient
 from sealed_ledger.api import create_app as create_ledger_app
@@ -200,3 +200,33 @@ def test_a_readable_store_is_unchanged(stack):
     row(store, "FED-1")
     assert [c["allowed_scopes"] for c in client.get("/contracts").json()] == [[SCOPE]]
     assert outbound(client).json()["decision"] == "ALLOW"
+
+
+# ---- PENDING DON'S RULING: the read model drops LIST_MAX -------------------------------------------------------------
+# StoredFederationContract (B12) lifts the list-length caps on read as well as the name-length caps, so a legacy row
+# stored before LIST_MAX existed with more than LIST_MAX scopes (or data classes) lists AND its crossings are decided as
+# before (ALLOW when in scope). Writes keep the cap. Don is deciding whether reads should keep that; this test pins the
+# CURRENT behaviour so the ruling is one visible flip: if reads must refuse it, invert the two ALLOW/list assertions
+# (expect the degraded inactive entry and a BLOCK F.peer) and restore max_length=LIST_MAX on the read model.
+
+def test_PENDING_RULING_a_stored_row_with_more_than_LIST_MAX_scopes_lists_and_allows(stack):
+    client, store, _ = stack
+    assert LIST_MAX == 100
+    scopes = [SCOPE] + [f"extra-scope-{i}" for i in range(LIST_MAX)]          # LIST_MAX + 1 entries
+    classes = [DATA_CLASS] + [f"extra-class-{i}" for i in range(LIST_MAX)]
+    row(store, "FED-WIDE", scopes=json.dumps(scopes), classes=json.dumps(classes))
+    r = client.get("/contracts")
+    assert r.status_code == 200, r.text
+    (c,) = r.json()
+    assert c["active"] is True and len(c["allowed_scopes"]) == LIST_MAX + 1 and len(c["allowed_data_classes"]) == LIST_MAX + 1
+    assert outbound(client).json()["decision"] == "ALLOW"
+
+
+def test_a_write_with_more_than_LIST_MAX_scopes_is_still_refused(stack):
+    client, _, _ = stack
+    body = {"contract_id": "FED-WIDE", "counterparty_org": COUNTERPARTY,
+            "allowed_scopes": [SCOPE] + [f"extra-scope-{i}" for i in range(LIST_MAX)],
+            "allowed_data_classes": [DATA_CLASS], "active": True}
+    assert client.put("/contracts/FED-WIDE", json=body).status_code == 422
+    assert client.get("/contracts").json() == []
+

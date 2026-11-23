@@ -36,7 +36,8 @@ def contract_body(**over):
 
 def legacy_row(client, **over):
     """Store a row the write model would refuse: ``model_construct`` skips validation, as a pre-cap write did."""
-    client.app.state.engine.store.save(FederationContract.model_construct(**contract_body(contract_ref=None, **over)))
+    # contract_ref defaults to None, and a test may override it (the contract_ref case passed it twice: TypeError)
+    client.app.state.engine.store.save(FederationContract.model_construct(**contract_body(**{"contract_ref": None, **over})))
 
 
 @pytest.mark.parametrize("field, value", [
