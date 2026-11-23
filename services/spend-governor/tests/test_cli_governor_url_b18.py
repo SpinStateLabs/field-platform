@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+import typer
 from typer.testing import CliRunner
 
 from spend_governor import cli
@@ -43,6 +44,9 @@ BAD = [
     f"{MARK}.invalid:8006",                     # no scheme
     "http://",                                   # no host
     f"//{MARK}.invalid",                         # no scheme
+    f"http://{MARK}.invalid..:8006",             # two trailing dots
+    "http://.:8006",                             # only a dot
+    f"http://user:{MARK}@xn--bcher-kva.example",  # userinfo on a punycode host
 ]
 
 
@@ -69,6 +73,10 @@ def test_every_command_path_goes_through_the_same_check(monkeypatch, calls, args
     ("http://gov.invalid/", "http://gov.invalid"),
     ("https://gov.invalid:8443/prefix", "https://gov.invalid:8443/prefix"),
     ("http://[::1]:8006", "http://[::1]:8006"),
+    ("http://xn--bcher-kva.example:8006", "http://xn--bcher-kva.example:8006"),   # an IDN host in punycode
+    ("http://b\u00fccher.example:8006", "http://b\u00fccher.example:8006"),       # the same host, decoded
+    ("http://gov.invalid.:8006", "http://gov.invalid.:8006"),                     # a fully qualified name
+    ("http://xn--bcher-kva.example.:8006", "http://xn--bcher-kva.example.:8006"),
     ("  http://gov.invalid  ", "http://gov.invalid"),
     ("", cli.DEFAULT_GOVERNOR_URL),
     ("   ", cli.DEFAULT_GOVERNOR_URL),
@@ -78,6 +86,16 @@ def test_a_usable_or_blank_value_is_used(monkeypatch, calls, value, base):
     r = runner.invoke(cli.app, ["rate-limits", "agent-1"])
     assert r.exit_code == 0, r.output
     assert calls == [f"{base}/rate-limits/agent-1"]
+
+
+def test_a_nul_in_the_value_is_refused(monkeypatch, capsys):
+    """os.environ cannot hold a NUL, so the environment is replaced for this one call."""
+    monkeypatch.setattr(cli, "os", SimpleNamespace(environ={"FIELD_GOVERNOR_URL": f"http://{MARK}\x00.invalid"}))
+    with pytest.raises(typer.Exit) as exc:
+        cli._base()
+    assert exc.value.exit_code == 2
+    err = capsys.readouterr().err
+    assert cli.BAD_GOVERNOR_URL in err and MARK not in err
 
 
 def test_unset_is_the_default(monkeypatch, calls):

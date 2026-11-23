@@ -36,10 +36,19 @@ def _clean(monkeypatch):
         monkeypatch.delenv(name, raising=False)
 
 
+def auth_only(headers):
+    """C-642b C1 (PR 1265): every request also carries exactly ``Accept-Encoding: identity`` (the transport never accepts
+    a compressed reply). Assert that here, once, and return the remaining headers so the merge pins stay exact."""
+    headers = dict(headers)
+    assert [k for k in headers if k.lower() == "accept-encoding"] == ["Accept-Encoding"], headers
+    assert headers.pop("Accept-Encoding") == "identity"
+    return headers
+
+
 def sent(client_call):
     rec = Recorder()
     client_call(AuthedClient(rec))
-    return rec.calls[-1][2]["headers"]
+    return auth_only(rec.calls[-1][2]["headers"])
 
 
 def names(headers):
@@ -98,13 +107,13 @@ def test_a_secret_set_after_construction_is_honoured_on_the_next_call(monkeypatc
     rec = Recorder()
     client = AuthedClient(rec)
     client.get("http://t/x")
-    assert rec.calls[-1][2]["headers"] == {}
+    assert auth_only(rec.calls[-1][2]["headers"]) == {}
     monkeypatch.setenv("FIELD_SHARED_SECRET", SECRET)
     client.get("http://t/x")
-    assert rec.calls[-1][2]["headers"] == {"x-field-auth": SECRET}
+    assert auth_only(rec.calls[-1][2]["headers"]) == {"x-field-auth": SECRET}
     monkeypatch.delenv("FIELD_SHARED_SECRET")
     client.get("http://t/x")
-    assert rec.calls[-1][2]["headers"] == {}
+    assert auth_only(rec.calls[-1][2]["headers"]) == {}
 
 
 def test_the_url_and_other_keyword_arguments_pass_through(monkeypatch):
@@ -113,3 +122,14 @@ def test_the_url_and_other_keyword_arguments_pass_through(monkeypatch):
     AuthedClient(rec).post("http://t/x", json={"a": 1}, timeout=3)
     verb, url, kw = rec.calls[-1]
     assert (verb, url, kw["json"], kw["timeout"]) == ("post", "http://t/x", {"a": 1}, 3)
+
+
+@pytest.mark.parametrize("given", [None, {}, {"accept-encoding": "gzip"}, {"ACCEPT-ENCODING": "br", "X-Other": "1"}],
+                         ids=["none", "empty", "lower-gzip", "upper-br"])
+def test_every_call_asks_for_identity_and_a_caller_accept_encoding_is_replaced(monkeypatch, given):
+    """C-642b C1: one Accept-Encoding, always identity, whatever spelling or value the caller passed."""
+    monkeypatch.setenv("FIELD_SHARED_SECRET", SECRET)
+    rec = Recorder()
+    AuthedClient(rec).get("http://t/x", **({} if given is None else {"headers": given}))
+    headers = rec.calls[-1][2]["headers"]
+    assert [(k, v) for k, v in headers.items() if k.lower() == "accept-encoding"] == [("Accept-Encoding", "identity")]

@@ -51,11 +51,14 @@ _HOSTNAME = re.compile(r"[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?")
 
 
 def _is_host(host: str) -> bool:
-    """A hostname (letters, digits, dot, hyphen, underscore) or an IP literal: httpx builds a URL whose host holds a
-    space, and that fails only at connect time."""
-    if not host:
+    """``host`` is httpx's ``raw_host`` as ASCII, so an IDN name is checked in its punycode form (``url.host`` would
+    decode it back to non-ASCII). A hostname (letters, digits, dot, hyphen, underscore), with at most one trailing dot
+    (a fully qualified name), or an IP literal. httpx builds a URL whose host holds a space, and that fails only at
+    connect time; in ``raw_host`` the space is ``%20``, which is refused here."""
+    name = host[:-1] if host.endswith(".") else host
+    if not name:
         return False
-    if _HOSTNAME.fullmatch(host):
+    if _HOSTNAME.fullmatch(name):
         return True
     try:
         ipaddress.ip_address(host)
@@ -73,7 +76,7 @@ def _base() -> str:
     raw = (os.environ.get("FIELD_GOVERNOR_URL") or "").strip().rstrip("/") or DEFAULT_GOVERNOR_URL
     try:
         url = _URL(raw + "/x")          # a path as the commands add one, so the composed URL is what is checked
-        usable = (url.scheme in ("http", "https") and _is_host(url.host)
+        usable = (url.scheme in ("http", "https") and _is_host(url.raw_host.decode("ascii"))
                   and (url.port is None or 0 < url.port <= 65535)    # httpx builds :99999 and fails only on connect
                   and not url.userinfo)                              # credentials in a URL end up in logs (builder-b)
     except (_InvalidURL, ValueError, TypeError):   # names bound at import, so a fake cli.httpx cannot break them
