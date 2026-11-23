@@ -828,10 +828,36 @@ def _md(value: Any, cell: bool = False) -> str:
       raw HTML, no autolink: an HTML-passing renderer would otherwise show a forged ``<h2>`` section), a backtick is
       escaped (it cannot open a code span) and ``](`` is escaped (no inline link or image). Emphasis characters are
       left as they are (they cannot add a block, a link or HTML).
+    - Line start (B8, R-PR1163 C2/C3): the text may land at the start of a line's content (``> {text}`` in the
+      integrity banner, ``- {text}`` in the event counts), where a leading ``#``, ``-``, ``+``, ``*``, ``_``, ``>``,
+      ``=``, ``~~~``, ``N.`` / ``N)`` or ``[label]:`` would open a heading, list, quote, rule, fence or link
+      reference definition. That first marker is
+      backslash-escaped at every site (a backslash before ASCII punctuation renders as the character alone).
+    - Not escaped, by policy: ``~~strike~~`` (GFM strikethrough is emphasis: no block, link or HTML) and a bare URL
+      (a GFM renderer may autolink it, but the text shown IS the target; ``[text](url)``, which hides the target, is
+      escaped above).
     - ``cell=True`` also escapes table pipes."""
     text = _one_md_line(value)
     text = text.replace("\\", "\\\\").replace("<", "&lt;").replace("`", "\\`").replace("](", "\\](")
+    text = _escape_line_start(text)
     return text.replace("|", "\\|") if cell else text
+
+
+#: A line-content start CommonMark reads as a block: ATX heading, bullet, quote, rule / setext underline. A tilde
+#: fence needs three tildes, so ``~~strike~~`` is left alone; a backtick fence cannot start (backticks are escaped).
+_BLOCK_MARKER = frozenset("#-+*_>=")
+_ORDERED_MARKER = re.compile(r"^(\d{1,9})([.)])")
+#: A link reference definition, ``[label]: destination`` (triage-t12 on #1305): at a line start it consumes the line
+#: (the text vanishes) and turns a bare ``[label]`` elsewhere in the document into a link with a hidden target. Only
+#: this shape is escaped: a leading ``[`` that is not followed by ``]:`` (``[D.scope] (log-only)``) stays as written.
+_LINK_DEFINITION = re.compile(r"^\[(?:[^\]\\]|\\.)*\]:")
+
+
+def _escape_line_start(text: str) -> str:
+    """Backslash-escape the block marker a line-start ``text`` would open (B8); text that opens none is unchanged."""
+    if text[:1] in _BLOCK_MARKER or text.startswith("~~~") or _LINK_DEFINITION.match(text):
+        return "\\" + text
+    return _ORDERED_MARKER.sub(lambda m: m.group(1) + "\\" + m.group(2), text, count=1)
 
 
 def _code(value: Any, cell: bool = False) -> str:
