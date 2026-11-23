@@ -5,6 +5,7 @@ side by side, and pins the docs so an edit cannot make them drift again."""
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -63,6 +64,20 @@ def test_armed_an_unresolvable_ref_is_refused_422_and_not_stored(tmp_path, monke
     r = c.patch("/agents/a1", json={"manifest_ref": "sub/absent.yaml"}, headers=h)
     assert r.status_code == 422, r.text
     assert c.get("/agents/a1").json()["manifest_ref"] in (None, "")
+
+
+@pytest.mark.parametrize("mode", ["log-only", "enforce"])
+def test_armed_the_422_body_is_exactly_error_reason_hint_and_no_log_holds_the_ref(tmp_path, monkeypatch, caplog, mode):
+    """RT-HARD-4 F2 at the armed PATCH check, the production path (don.reviewer N1 and N2 on #1359)."""
+    c, h = rig(tmp_path, monkeypatch, mode)
+    key = "a1b2c3d4" * 8                                  # made up, key-shaped
+    with caplog.at_level(logging.DEBUG):
+        r = c.patch("/agents/a1", json={"manifest_ref": f"sub/{key}.yaml"}, headers=h)
+    assert r.status_code == 422, r.text
+    detail = r.json()["detail"]
+    assert set(detail) == {"error", "reason", "hint"} and detail["reason"] == "missing"
+    assert key not in r.text and "a1b2c3d4" not in r.text
+    assert "a1b2c3d4" not in caplog.text
 
 
 def test_off_an_unresolvable_ref_is_not_checked(tmp_path, monkeypatch):
