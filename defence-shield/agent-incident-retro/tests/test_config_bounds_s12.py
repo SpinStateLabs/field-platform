@@ -1,8 +1,8 @@
 """S12-31: RetroConfig refuses values that silently disable a detection or authorize nearly every client.
 
-clauses.py compares with `>` and `>=`, both False for NaN: a NaN `session_gap_s` never splits a session, a NaN
-`pivot_window_s` never closes the window, a NaN `cadence_cv_max` makes S.cadence fire on every session with enough
-requests; json.loads accepts NaN. Zero and negatives are as meaningless. And `if sub and sub.lower() in ua` accepted
+clauses.py compares with `>`, `>=` and `<=`, all False for NaN: a NaN `session_gap_s` never splits a session, a NaN
+`pivot_window_s` matches nothing (S.pivot and S.escalate-on-block never fire), a NaN `cadence_cv_max` makes S.cadence fire
+on every session with enough requests; json.loads accepts NaN. Zero and negatives are as meaningless. And `if sub and sub.lower() in ua` accepted
 `allow_ua_substrings: [" "]` (a space sits inside nearly every browser UA) so a one-character entry AUTHORIZED the lot.
 The messages never echo the offending value."""
 from __future__ import annotations

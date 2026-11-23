@@ -153,9 +153,10 @@ class RetroConfig(BaseModel):
     @field_validator("session_gap_s", "pivot_window_s", "cadence_cv_max")
     @classmethod
     def _timing_is_finite_and_positive(cls, value: float, info) -> float:
-        """The clauses compare with `>` and `>=`, both False for NaN: a NaN gap never splits a session, a NaN window
-        never closes, a NaN CV makes S.cadence fire on every session. json.loads accepts NaN. Zero and negatives are as
-        meaningless. The value is never echoed."""
+        """The clauses compare with `>`, `>=` and `<=`, all False for NaN. A NaN or infinite gap never splits a session. A
+        NaN pivot window matches nothing, so S.pivot and S.escalate-on-block never fire (an infinite one never closes). NaN
+        or infinity in cadence_cv_max makes S.cadence fire on every eligible session; zero or a negative value means it can
+        never fire. json.loads accepts NaN. The value is never echoed."""
         if not math.isfinite(value) or value <= 0:
             raise ValueError(f"{info.field_name} must be a finite number greater than 0")
         return value
