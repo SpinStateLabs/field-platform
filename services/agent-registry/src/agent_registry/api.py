@@ -127,7 +127,10 @@ def unresolvable_manifest_ref(manifest_ref: str | None) -> dict | None:
     refusal body. Resolution is field-core's shared resolver — the SAME one
     the sentinel, delegation, kill-switch and ledger retention use — against
     ``FIELD_MANIFEST_DIR`` in THIS process, so a ref refused here is a ref
-    every reader on the estate would fail to resolve too."""
+    every reader on the estate would fail to resolve too.
+
+    The body is FIXED (RT-HARD-4 F2): it neither repeats the caller's ``manifest_ref`` (unbounded, may be key-shaped)
+    nor names the server's manifest directory. The operator terminal (``registry add``) prints the directory itself."""
     if manifest_ref and not _ref_is_inside_manifest_dir(manifest_ref):
         # A RELATIVE ref that leaves FIELD_MANIFEST_DIR ("../x.yaml", a path through a symlink out) is refused even
         # when the file is a valid manifest, and as "missing": the answer must not tell a caller whether a file
@@ -135,7 +138,7 @@ def unresolvable_manifest_ref(manifest_ref: str | None) -> dict | None:
         # points: that is the estate's own form (/data/manifests/<id>.yaml) and every service suite registers its
         # manifests that way; confining absolute refs failed 400 tests across six services (GX10, PR 371) and is a
         # decision, not made here. Refs already stored are not re-checked.
-        return _unresolvable(manifest_ref, "missing")
+        return _unresolvable("missing")
     manifest, reason = resolve_manifest_detail(manifest_ref)
     if manifest is not None or reason == "no_ref":
         return None
@@ -143,7 +146,7 @@ def unresolvable_manifest_ref(manifest_ref: str | None) -> dict | None:
         # Don's ruling on PR 371 (option b, C-1144): an ABSOLUTE ref that fails for any reason gets one answer, so the
         # missing/invalid split is not an existence oracle for absolute paths (C-883 F-C883-1, Q-59 F-Q59-2).
         reason = "missing"
-    return _unresolvable(manifest_ref, reason)
+    return _unresolvable(reason)
 
 
 def _is_absolute(manifest_ref: str) -> bool:
@@ -167,10 +170,9 @@ def _ref_is_inside_manifest_dir(manifest_ref: str) -> bool:
     return True
 
 
-def _unresolvable(manifest_ref: str | None, reason: str) -> dict:
+def _unresolvable(reason: str) -> dict:
     return {
         "error": "manifest_ref does not resolve",
-        "manifest_ref": manifest_ref,
         "reason": reason,  # missing | invalid (field_core RESOLVE_REASONS)
         # no manifest_dir: the server's directory layout is not the caller's business (reviewer C-528 F-C528-5)
         "hint": "install the manifest first (a relative ref resolves under the "
