@@ -104,7 +104,7 @@ def test_a_registry_outage_names_the_class_only(stack, monkeypatch):
             raise RegistryUnreachableError(str(inner)) from inner
     monkeypatch.setattr(_engine(stack).registry, "get_agent", boom)
     v = stack.check("draft invoices", token_id="whatever")
-    assert v["decision"] == "BLOCK" and v["clause_id"] == "R.unregistered"
+    assert v["decision"] == "BLOCK" and v["clause_id"] == "R.registry_unreachable"   # B16: its own clause
     assert "RegistryUnreachableError" in v["reasons"][0]
     _no_leak(" ".join(v["reasons"]))
 

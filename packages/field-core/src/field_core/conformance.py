@@ -41,6 +41,7 @@ CLAUSES: dict[str, str] = {
     "D.semantic": "delegation: semantic scope judgment requires human review",
     "D.grantor": "delegation: grantor is not on the delegation-of-authority roster, is inactive, or the grant exceeds that grantor's allowed scope or max TTL",
     "R.unregistered": "registry: agent not registered",
+    "R.registry_unreachable": "registry: unreachable or answered unusably; identity cannot be established (fail closed)",
 }
 
 

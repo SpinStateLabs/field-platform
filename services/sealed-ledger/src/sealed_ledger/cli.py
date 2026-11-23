@@ -1026,6 +1026,11 @@ def witness_run(
     if not ledger_url:
         typer.echo("error: set FIELD_LEDGER_URL (the witness appends through the served route)", err=True)
         raise typer.Exit(code=2)
+    if _url_has_userinfo(ledger_url):
+        # Backlog B6: the same refusal as _served_base_url and --events-url. Fixed text, the URL is never echoed;
+        # httpx would send user:pass@ as an Authorization header to the ledger. Nothing is built, nothing is sent.
+        typer.echo("error: FIELD_LEDGER_URL must not carry credentials (user:pass@); nothing was sent", err=True)
+        raise typer.Exit(code=2)
     try:
         w.require_https(fly_url)
     except ValueError as exc:
