@@ -10,7 +10,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from federation_broker.api import create_app
-from federation_broker.engine import BrokerEngine, ContractStore, CrossingRequest, FederationContract
+from federation_broker.engine import (MANIFEST_MAX_DEPTH, MANIFEST_MAX_NODES, BrokerEngine, ContractStore,
+                                      CrossingRequest, FederationContract, _check_manifest_text)
 from test_federation_broker import COUNTERPARTY
 
 H = {"content-type": "application/json"}
@@ -187,3 +188,70 @@ def test_the_contract_model_still_refuses_a_lone_surrogate_in_a_list_entry():
     with pytest.raises(ValueError):
         FederationContract(contract_id="x", counterparty_org="O", allowed_scopes=["a\ud800"],
                            allowed_data_classes=["d"])
+
+
+# ---- R2: the exact limits (behaviour unchanged; Don's ruling on 422 vs a ledgered BLOCK is pending) -----------------
+
+def _containers(n: int):
+    """``n`` nested containers: a dict at depth 1 holding lists down to depth ``n`` (the innermost holds one string)."""
+    inner: object = ["leaf"]
+    for _ in range(n - 2):
+        inner = [inner]
+    return {"k": inner} if n >= 2 else {"k": "leaf"}
+
+
+def _depth_of(value) -> int:
+    depth, item = 0, value
+    while isinstance(item, (dict, list)):
+        depth += 1
+        item = next(iter(item.values())) if isinstance(item, dict) else item[0]
+    return depth
+
+
+def test_the_limits_are_64_levels_and_50000_items():
+    assert (MANIFEST_MAX_DEPTH, MANIFEST_MAX_NODES) == (64, 50_000)
+
+
+def test_depth_64_containers_pass_and_65_are_refused():
+    ok, over = _containers(MANIFEST_MAX_DEPTH), _containers(MANIFEST_MAX_DEPTH + 1)
+    assert (_depth_of(ok), _depth_of(over)) == (64, 65)
+    assert _check_manifest_text(ok, "m") is ok
+    with pytest.raises(ValueError, match="deeper than 64 levels"):
+        _check_manifest_text(over, "m")
+
+
+def test_a_string_at_depth_65_is_not_a_container_and_passes():
+    """Only containers are depth-checked: the innermost string of a 64-deep structure sits at depth 65 and is fine."""
+    assert _check_manifest_text(_containers(MANIFEST_MAX_DEPTH), "m")
+
+
+def test_50000_items_pass_and_50001_are_refused():
+    """A list of n scalars is n + 1 items (the list itself counts)."""
+    ok = list(range(MANIFEST_MAX_NODES - 1))           # 49,999 values + the list = 50,000
+    over = list(range(MANIFEST_MAX_NODES))             # 50,000 values + the list = 50,001
+    assert _check_manifest_text(ok, "m") is ok
+    with pytest.raises(ValueError, match="more than 50000 values"):
+        _check_manifest_text(over, "m")
+
+
+def test_dict_keys_count_toward_the_50000():
+    """Keys count: a dict of 24,999 entries is 1 + 2 x 24,999 = 49,999 items (passes); 25,000 entries is 50,001 items
+    (refused) although it holds only 25,000 values, half the limit."""
+    ok = {f"k{i}": i for i in range(24_999)}
+    over = {f"k{i}": i for i in range(25_000)}
+    assert _check_manifest_text(ok, "m") is ok
+    with pytest.raises(ValueError, match="more than 50000 values"):
+        _check_manifest_text(over, "m")
+
+
+def test_over_http_the_depth_boundary_is_64_including_the_manifest_dict_itself(rig):
+    """The crossing's manifest dict is depth 1, so 63 nested lists inside it reach depth 64 (decided, 200) and 64 nested
+    lists reach depth 65 (422, nothing ledgered)."""
+    client, _, ledger = rig
+    at = client.post("/crossing", content=crossing_json(counterparty_manifest="{\"k\":" + nested(63) + "}"), headers=H)
+    assert at.status_code == 200, at.status_code
+    appended = len(ledger.calls)
+    over = client.post("/crossing", content=crossing_json(counterparty_manifest="{\"k\":" + nested(64) + "}"),
+                       headers=H)
+    assert over.status_code == 422 and len(ledger.calls) == appended
+

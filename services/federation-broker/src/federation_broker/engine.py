@@ -151,7 +151,12 @@ def _not_blank(value: Any) -> Any:
 
 
 #: Bounds on a free-form manifest dict (S6-11). A real FIELD manifest is a few levels deep and a few hundred values.
+#: Container nesting allowed in a free-form manifest: the top-level dict is depth 1, so 64 nested containers pass and a
+#: 65th is refused. Only containers (dict, list, tuple) are depth-checked; a string or number at depth 65 is fine.
 MANIFEST_MAX_DEPTH = 64
+#: Every item the walk visits counts toward this: the top-level container, every nested container, every dict KEY
+#: and every value. So {"k": "v"} is 3, and a dict of 25,000 scalar entries is 50,001 (refused) although it holds
+#: only 25,000 values. Pinned by tests/test_lone_surrogate.py (the 50,000 / 50,001 and 64 / 65 boundary tests).
 MANIFEST_MAX_NODES = 50_000
 
 
