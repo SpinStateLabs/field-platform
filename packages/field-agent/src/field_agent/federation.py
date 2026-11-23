@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from field_agent._transport import AuthedClient
 from field_agent.errors import FieldAgentError
+from field_core.errors import upstream_error
 
 import json
 import os
@@ -34,6 +35,12 @@ UNREACHABLE_REASON = "federation-broker unreachable — failing closed"
 DEFAULT_FEDERATION_URL = "http://127.0.0.1:8010"
 
 Direction = Literal["inbound", "outbound"]
+
+
+def _bounded(text: str, limit: int = 300) -> str:
+    """One line, escaped, at most ``limit`` characters of the broker's own words."""
+    shown = ascii(text)[1:-1]
+    return shown if len(shown) <= limit else shown[:limit] + "..."
 
 
 class CrossingBlocked(FieldAgentError):
@@ -154,25 +161,31 @@ class FederationClient:
             direction=direction, counterparty_agent_id=counterparty_agent_id,
             manifest_signature=manifest_signature, request_summary=request_summary,
         )
+        unreachable = None
         try:
             resp = self._client.post(f"{self._base}/crossing", json=body)
         except Exception as exc:
-            raise CrossingBlocked(
-                f"{UNREACHABLE_REASON} ({type(exc).__name__}: {exc})"
-            ) from exc
+            # the exception TYPE only: its text can carry the URL, a proxy or an address (as liveness.py does, S9-6)
+            unreachable = type(exc).__name__
+        if unreachable is not None:
+            # raised OUTSIDE the except block (R-PR904 C1, C-729): inside it the original error, and its text, would
+            # stay on __context__ even with `from None`
+            raise CrossingBlocked(f"{UNREACHABLE_REASON} ({unreachable})")
         if resp.status_code != 200:
             raise CrossingBlocked(
-                f"federation-broker answered HTTP {resp.status_code} — no "
-                f"crossing decision, failing closed: {resp.text[:300]}"
+                f"{upstream_error(resp, 'federation-broker')} — no crossing decision, failing closed"
             )
+        bad = None
         try:
             verdict = resp.json()
             decision = verdict["decision"]
         except Exception as exc:
+            bad = type(exc).__name__    # raised below, outside the block: `from exc` or `from None` would leave the
+                                        # library error (and the body on its .doc) on __cause__ / __context__ (C-729)
+        if bad is not None:
             raise CrossingBlocked(
-                "federation-broker returned no verdict — failing closed "
-                f"({type(exc).__name__})"
-            ) from exc
+                f"federation-broker returned no verdict — failing closed ({bad})"
+            )
         if decision != "ALLOW":
             # reasons is data from the broker or a proxy: a string is one reason, a list keeps its string
             # items, anything else is none, and the joined text is bounded (S8-5)
@@ -180,7 +193,7 @@ class FederationClient:
             items = [raw] if isinstance(raw, str) else [r for r in raw if isinstance(r, str)] if isinstance(raw, list) else []
             reasons = "; ".join(items)[:500]
             raise CrossingBlocked(
-                f"crossing {decision} by {verdict.get('clause_id')}: {reasons}",
+                _bounded(f"crossing {decision} by {verdict.get('clause_id')}: {reasons}"),
                 verdict=verdict,
             )
         return verdict

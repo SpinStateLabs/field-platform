@@ -34,25 +34,17 @@ from datetime import datetime, timezone
 from typing import Any
 
 from compliance_crosswalk.engine import (
-    LEDGER_VERIFY_NOT_CHECKED,
+    GAP_LABELS,
+    LEDGER_NOT_CHECKED_GAP,  # moved to engine (B7); still importable from here, and used for the B2 outage gap
     REFUSED_CATEGORIES,
     EvidenceSources,
+    coverage_gaps,
     evaluate,
     one_line,
 )
 
-#: gap kind -> its label in the Markdown "Gaps" list (the JSON carries the kind itself)
-GAP_LABELS = {
-    "not-declared": "not declared",
-    "not-evidenced": "not evidenced",
-    "not-checked": "not checked",
-    "caller-asserted": "caller-asserted, not verified",
-}
-#: the FC-L-01 "not-checked" gap detail: fixed text, so Markdown and JSON say the same
-LEDGER_NOT_CHECKED_GAP = (
-    "the ledger did not answer /verify (busy or unreachable), so the chain was not verified on this run; "
-    "this is not a pass: re-run the pack"
-)
+#: B2: the pack's gap labels: the shared ones (engine.GAP_LABELS, B7) plus the caller-asserted kind only a pack has
+PACK_GAP_LABELS = {**GAP_LABELS, "caller-asserted": "caller-asserted, not verified"}
 #: B2: prefix of a control's evidence detail when its positive verdict rests only on caller-supplied sources
 CALLER_ASSERTED_PREFIX = "caller-asserted, not verified against the live ledger and services: "
 #: B2: the "caller-asserted" gap detail: fixed text, so Markdown and JSON say the same
@@ -251,46 +243,11 @@ def generate_pack(
     now = now or datetime.now(timezone.utc)
     generated_at = now.isoformat()
 
-    gaps: list[dict[str, Any]] = []
-    for control in coverage.controls:
-        if not control.declared:
-            gaps.append(
-                {
-                    "control_id": control.control_id,
-                    "kind": "not-declared",
-                    "detail": control.declared_detail,
-                }
-            )
-        if control.evidenced is False:
-            gaps.append(
-                {
-                    "control_id": control.control_id,
-                    "kind": "not-evidenced",
-                    "detail": control.evidence_detail,
-                }
-            )
-        elif (
-            control.evidenced is None
-            and control.control_id == "FC-L-01"
-            and control.evidence_detail == LEDGER_VERIFY_NOT_CHECKED
-        ):
-            # don.reviewer C1 (rebuild of PR 1093): not checked is not failed, but it is never silent; a provoked
-            # 503 on /verify must not let the pack say "No gaps recorded" as it would for a verified chain
-            gaps.append(
-                {
-                    "control_id": control.control_id,
-                    "kind": "not-checked",
-                    "detail": LEDGER_NOT_CHECKED_GAP,
-                }
-            )
-        elif control.control_id in asserted:
-            gaps.append(
-                {
-                    "control_id": control.control_id,
-                    "kind": "caller-asserted",
-                    "detail": CALLER_ASSERTED_GAP,
-                }
-            )
+    # B7: the same list `crosswalk run` prints (engine.coverage_gaps), so the run and the pack never disagree
+    gaps: list[dict[str, Any]] = coverage_gaps(coverage)
+    # B2: what only a pack can say: a caller's claim this run did not confirm, and a full outage
+    gaps += [{"control_id": cid, "kind": "caller-asserted", "detail": CALLER_ASSERTED_GAP}
+             for cid in (c.control_id for c in coverage.controls) if cid in asserted]
     if evidence_status == "unknown":
         # a full outage: FC-L-01 reads "evidence not collected", but the ledger was asked and did not answer
         gaps.append({"control_id": "FC-L-01", "kind": "not-checked", "detail": LEDGER_NOT_CHECKED_GAP})
@@ -364,7 +321,7 @@ def generate_pack(
         )
         add("")
         for gap in gaps:
-            label = GAP_LABELS[gap["kind"]]
+            label = PACK_GAP_LABELS[gap["kind"]]
             add(f"- {gap['control_id']} — {label}: {gap['detail']}")
     else:
         add(

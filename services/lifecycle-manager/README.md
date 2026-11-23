@@ -131,7 +131,7 @@ own `PUT /caps` or `POST /tokens`.
 
 | Verb | Exit codes | Meaning |
 |---|---|---|
-| `sweep` | 0, 2, 3 | 0 = clean; 3 = findings (alert on it); 2 = no verdict: an operator-identity refusal (flags and environment disagree, an unusable operator key file, an id or key that is not a single token), or a roster with no owners (the engine's `LifecycleError`) |
+| `sweep` | 0, 2, 3 | 0 = clean; 3 = findings (alert on it); 2 = no verdict: an operator-identity refusal (flags and environment disagree, an unusable operator key file, an id or key that is not a single token), a roster with no owners (the engine's `LifecycleError`), or a roster the csv module cannot read (`UnreadableRoster`: a field over the csv limit, a bare CR in an unquoted field; the message names the line, never the content) |
 | `provision` | 0, 1, 2 | 0 = every step done; 1 = an invalid manifest (zero side effects), a step that failed (earlier steps are NOT rolled back) or an engine error; 2 = refused before anything was sent: an operator-identity refusal, or neither `--grantor` nor an operator identity to mint as |
 | `decommission` | 0, 1, 2 | 0 = done (an already-retired agent is a recorded no-op); 1 = an unknown agent, or a run that did not complete cleanly (see `steps`); 2 = refused before anything was sent: an operator-identity refusal, or the local `decommission` operator gate |
 | `serve` | 0 | the long-running server returns only when stopped; a bad option (for example a non-integer `--every`) is a usage error, exit 2, and the service does not start |

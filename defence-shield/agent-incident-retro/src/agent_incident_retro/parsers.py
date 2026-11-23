@@ -210,7 +210,9 @@ def _to_utc(value: Any) -> datetime | None:
     return None
 
 
-_SCHEME_URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
+#: An ABSOLUTE URL: a scheme and "://" before any "/", "?" or "#". Group 1 is everything after the host. A uri that only
+#: holds "://" inside its query (``/login?next=http://evil.example/x``) is relative and must keep its query.
+_ABSOLUTE_URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^/?#]*(.*)", re.DOTALL)
 
 
 def make_jsonl_parser(field_map: dict[str, list[str]]) -> LineParser:
@@ -244,9 +246,11 @@ def make_jsonl_parser(field_map: dict[str, list[str]]) -> LineParser:
         ua = _pick(record, field_map.get("ua", [])) or ""
         ref = _pick(record, field_map.get("referer", [])) or ""
         target = str(uri)
-        if _SCHEME_URL.match(target):  # a FULL URL (it STARTS with a scheme): keep path + query. A relative target that
-            # merely holds "://" later (/login?next=https://evil.example/a) keeps its own path and query (S6-17)
-            target = "/" + target.split("://", 1)[1].partition("/")[2]
+        absolute = _ABSOLUTE_URL.match(target)
+        if absolute:  # a full URL: keep path + query (a bare host is "/"; a host then ?query keeps the query, S12-25);
+            # a relative uri that merely holds "://" later is left exactly as logged (S6-17)
+            rest = absolute.group(1)
+            target = rest if rest.startswith("/") else "/" + rest
         # JSON strings may hold lone surrogates (\udXXX); drop them so a later
         # utf-8 encode (hashing, canonical pack) cannot raise on one bad line.
         clean = lambda s: str(s).encode("utf-8", "replace").decode("utf-8")

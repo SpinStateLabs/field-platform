@@ -287,6 +287,18 @@ class CallerRefused(RuntimeError):
     is never refused for any of these: ``CallerPolicy.check``.)"""
 
 
+#: How much of a caller id a refusal text shows (the id is untrusted input; S12-19).
+_CALLER_ID_SHOWN = 64
+
+
+def _shown_caller_id(caller_id: Any) -> str:
+    """``repr`` of at most the first 64 characters of a caller id, with its length when cut, so a refusal text (a 403
+    detail, a log line) stays bounded however long the claimed id is."""
+    if isinstance(caller_id, str) and len(caller_id) > _CALLER_ID_SHOWN:
+        return f"{caller_id[:_CALLER_ID_SHOWN]!r} ({len(caller_id)} characters)"
+    return repr(caller_id)
+
+
 class CallerKeyring:
     """``<caller_id>.pub.pem`` files in one directory (GB10: ``/data/keys/callers``
     on the read-only field-keys volume). Files are read on lookup (a key
@@ -310,12 +322,12 @@ class CallerKeyring:
         message names the id and the failure class, never file contents."""
         path = self.path_for(caller_id)
         if path is None:
-            raise CallerRefused(f"unknown caller {caller_id!r}: not a valid caller id")
+            raise CallerRefused(f"unknown caller {_shown_caller_id(caller_id)}: not a valid caller id")
         try:
             st = os.stat(path)
         except OSError as exc:
             raise CallerRefused(
-                f"unknown caller {caller_id!r}: no {path.name} in the keyring ({type(exc).__name__})"
+                f"unknown caller {_shown_caller_id(caller_id)}: no {path.name} in the keyring ({type(exc).__name__})"
             ) from None
         cached = self._cache.get(caller_id)
         if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
@@ -325,11 +337,11 @@ class CallerKeyring:
             load_ed25519_public_key(pem)
         except (OSError, UnicodeError) as exc:  # unreadable, or not ASCII text
             raise CallerRefused(
-                f"unknown caller {caller_id!r}: {path.name} unreadable ({type(exc).__name__})"
+                f"unknown caller {_shown_caller_id(caller_id)}: {path.name} unreadable ({type(exc).__name__})"
             ) from None
         except ValueError as exc:  # load_ed25519_public_key: names the failure class only
             raise CallerRefused(
-                f"unknown caller {caller_id!r}: {path.name} is not an Ed25519 public key ({exc})"
+                f"unknown caller {_shown_caller_id(caller_id)}: {path.name} is not an Ed25519 public key ({exc})"
             ) from None
         self._cache[caller_id] = (st.st_mtime_ns, st.st_size, pem)
         return pem
@@ -451,18 +463,18 @@ class CallerPolicy:
         if self.keyring is None:
             raise CallerRefused(
                 f"caller keyring not configured ({CALLER_KEYRING_ENV} unset): the claim of caller "
-                f"{caller_id!r} cannot be verified here, and an unverifiable claim is never stored"
+                f"{_shown_caller_id(caller_id)} cannot be verified here, and an unverifiable claim is never stored"
             )
         pem = self.keyring.public_pem(caller_id)  # raises: unknown caller
         problem = _caller_ts_problem(caller_ts, now or datetime.now(timezone.utc))
         if problem is not None:
-            raise CallerRefused(f"caller {caller_id!r} refused: {problem}")
+            raise CallerRefused(f"caller {_shown_caller_id(caller_id)} refused: {problem}")
         if not verify_caller_signature(
             {"event_type": event_type, "agent_id": agent_id, "payload": payload or {},
              "caller_id": caller_id, "caller_ts": caller_ts, "caller_signature": signature}, pem
         ):
             raise CallerRefused(
-                f"invalid caller signature: the claim of caller {caller_id!r} does not verify under "
+                f"invalid caller signature: the claim of caller {_shown_caller_id(caller_id)} does not verify under "
                 f"{caller_id}.pub.pem over event_type, agent_id, payload, caller_id and caller_ts"
             )
         return {"caller_id": caller_id, "caller_ts": caller_ts, "caller_signature": signature}
@@ -1485,10 +1497,21 @@ def read_concurrency() -> int:
     store (default 1; 0 = unlimited). At 100k events one parse peaks at
     ~0.3-0.4 GB and 8 ungated readers at ~2 GB (measured on the GB10): the
     default keeps the ledger inside a 2 GB machine."""
+    return _read_concurrency_setting()[0]
+
+
+def _read_concurrency_setting() -> tuple[int, bool]:
+    """(width, invalid). A blank value is unset (1). A non-integer or negative
+    value falls back to 1 and is reported invalid (a negative once meant 0, i.e.
+    no gate); only an explicit 0 is unlimited."""
+    raw = os.environ.get(READ_CONCURRENCY_ENV, "").strip()
+    if not raw:
+        return 1, False
     try:
-        return max(0, int(os.environ.get(READ_CONCURRENCY_ENV, "1")))
+        n = int(raw)
     except ValueError:
-        return 1
+        return 1, True
+    return (1, True) if n < 0 else (n, False)
 
 
 #: T7: the most raw segment bytes one store keeps parsed between reads (the parsed events cost about 4x the
@@ -1526,7 +1549,9 @@ class LedgerStore:
         # G: at most N full-chain parses per store at once. Never taken by an
         # append, a rotation or /health. FIELD_LEDGER_READ_CONCURRENCY=0 disables.
         self._gate_sem = _read_gate()
-        self.read_concurrency = read_concurrency()  # the served app queues heavy reads to match
+        self.read_concurrency, self.read_concurrency_invalid = _read_concurrency_setting()  # the served app queues heavy reads to match
+        if self.read_concurrency_invalid:
+            log.warning("%s is not a non-negative integer; using the default of 1", READ_CONCURRENCY_ENV)
         self._journal_cache: tuple[bytes | None, JournalState] | None = None
         self._health_oob: tuple | None = None
         # the disk key this store's own in-flight append will produce: /health

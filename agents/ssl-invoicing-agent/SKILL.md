@@ -18,7 +18,7 @@ This skill IS the FIELD-governed agent **`ssl-invoicing-agent`**. Manifest: `fie
 `FIELD_PROXY_URL` must be set (the estate base URL, no default): `field-rest.ps1` throws at load when it is unset, and so does `tools/ssl-verify-token.ps1`, which dot-sources it.
 
 ```powershell
-. "C:\Users\donal\My Drive\Spin State Labs\Projects\FORCE-FIELD\field-platform\tools\field-rest.ps1"
+. "<repo>\tools\field-rest.ps1"
 Get-FieldHeartbeat -Agent ssl-invoicing-agent                                  # hook 3a — FIRST: the halt gate
 Send-FieldCheckin  -Agent ssl-invoicing-agent                                  # hook 3b — records last_seen
 Invoke-FieldCheck  -Agent ssl-invoicing-agent -Action "read timesheets"        # hook 1 — before EACH governed action
@@ -99,7 +99,7 @@ Always re-read `Customers\CLAUDE.md` at the start of a session if available — 
 
 ```
 Interac e-Transfer to don@spinstatelabs.ca.
-<bank transfer details: provided on the invoice>
+<bank transfer details on the invoice>
 ```
 
 Never include a personal gmail address on an invoice's payment line — only the spinstatelabs.ca address.

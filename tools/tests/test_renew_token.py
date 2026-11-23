@@ -2319,6 +2319,35 @@ def test_a_failed_revoke_of_the_old_token_keeps_the_journal_and_the_next_run_fin
     assert len(e.events("token.renewed")) == renewed + 1
 
 
+def test_the_harness_keeps_an_idle_pooled_connection_open_past_uvicorns_default_keep_alive(estate):
+    """The flake on main 7e14f136 (the test above: verify got BLOCK R.unregistered, and the very next /check in the
+    same probe run passed the registry step): the canary was registered and visible throughout, so the cause was one
+    failed sentinel -> registry hop, not registration. The services in the harness talk to each other over pooled
+    keep-alive connections; with uvicorn's default 5 s keep-alive the server closes an idle one and a request that
+    races the close fails. This pins the condition the fix provides: a connection idle for longer than 5 s is still
+    usable. With the default it is closed by then and the second request raises."""
+    import http.client
+
+    conn = http.client.HTTPConnection("127.0.0.1", estate.port, timeout=30)
+    try:
+        for attempt in range(2):
+            conn.request("GET", f"/registry/agents/{CANARY}", headers={"x-field-auth": SECRET})
+            resp = conn.getresponse()
+            body = json.loads(resp.read())
+            assert resp.status == 200 and body["status"] == "active", (attempt, resp.status)
+            assert (resp.getheader("connection") or "").lower() != "close"
+            if attempt == 0:
+                time.sleep(6.5)  # past uvicorn's default timeout_keep_alive of 5 s, on the same socket
+    finally:
+        conn.close()
+
+
+def test_the_harness_sets_a_keep_alive_far_longer_than_any_idle_gap():
+    src = HARNESS.read_text(encoding="utf-8")
+    assert "timeout_keep_alive=KEEP_ALIVE_S" in src
+    assert int(re.search(r"(?m)^KEEP_ALIVE_S = (\d+)$", src).group(1)) >= 600
+
+
 def test_exit_one_from_another_cause_is_not_taken_for_a_revoke_failure(case):
     # C-501: a failed verify also exits 1; the revoke-failure assertion must not accept it
     case.env_store(case.e.mint(DAY))
