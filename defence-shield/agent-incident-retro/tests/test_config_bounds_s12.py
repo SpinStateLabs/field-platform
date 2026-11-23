@@ -155,3 +155,18 @@ def test_scan_with_a_good_config_still_runs(tmp_path):
     res, out = _scan(tmp_path, "--config", _cfg(tmp_path, json.dumps({"session_gap_s": 60, "allow_ua_substrings": ["curl"]})))
     assert res.exit_code == 0, res.output
     assert (out / "report.md").exists()
+
+
+@pytest.mark.parametrize("body", [
+    '{"session_gap_s": null}',
+    '{"session_gap_s": "abc-SECRET"}',
+    '{"cadence_min_requests": "abc-SECRET"}',
+    '{"pivot_window_s": [1, "abc-SECRET"]}',
+])
+def test_scan_with_a_type_error_in_the_config_is_one_error_exit_1_and_never_echoes_the_value(tmp_path, body):
+    """roley.reviewer C2: a pydantic TYPE error (not a value error) takes the fallback of _first_line; the refused value
+    and pydantic's input_value tail must not reach the console."""
+    res, out = _scan(tmp_path, "--config", _cfg(tmp_path, body))
+    assert res.exit_code == 1, res.output
+    assert "SECRET" not in res.output and "input_value" not in res.output and "Traceback" not in res.output
+    assert len([ln for ln in res.output.splitlines() if ln.strip()]) == 1 and not out.exists()

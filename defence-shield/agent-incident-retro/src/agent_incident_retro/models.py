@@ -18,7 +18,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 MIN_ALLOW_PREFIX_V4 = 8
 MIN_ALLOW_PREFIX_V6 = 32
 #: The shortest `allow_ua_substrings` entry (after trimming): `" "` or `"a"` sits inside nearly every browser UA, so a short
-#: entry would mark nearly every client AUTHORIZED (S12-31). An empty entry is still accepted: it matches nothing.
+#: entry would mark nearly every client AUTHORIZED (S12-31). This is a length floor ONLY, not a catch-all check: a longer
+#: common browser token (`Mozilla`, `/5.0`, `Gecko`, `http`) is still accepted and still authorizes most browser clients, so
+#: the operator must choose a specific string. An empty entry is still accepted: it matches nothing.
 MIN_ALLOW_UA_CHARS = 4
 
 TOOL_NAME = "agent-incident-retro"
@@ -169,7 +171,8 @@ class RetroConfig(BaseModel):
     @classmethod
     def _no_catch_all_ua_substring(cls, entries: list[str]) -> list[str]:
         """An entry other than the empty string (which matches nothing) must be at least MIN_ALLOW_UA_CHARS long after
-        trimming: `" "` or `"a"` would AUTHORIZE nearly every client. The entry is not echoed."""
+        trimming: `" "` or `"a"` would AUTHORIZE nearly every client. A length floor only (a common long token such as
+        `Mozilla` still passes). The entry is not echoed."""
         for entry in entries:
             if entry != "" and len(entry.strip()) < MIN_ALLOW_UA_CHARS:
                 raise ValueError(
