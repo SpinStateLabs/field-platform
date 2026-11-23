@@ -1478,7 +1478,7 @@ def verify_segment_file(path: str | Path, public_key_pem: str | None = None) -> 
         side = json.loads(side_raw)
         missing = [k for k in _SIDECAR_KEYS if k not in side]
         if missing or side["format"] != SIDECAR_FORMAT:
-            raise ValueError(f"missing {missing}" if missing else f"format {side['format']!r}")
+            raise ValueError(f"missing {missing}" if missing else "format is not supported")   # never print the value (R2)
         n, start, end = (_sidecar_int(side, k) for k in ("n", "start_index", "end_index"))
         if n < 1 or start < 0:
             raise ValueError("n must be at least 1 and start_index at least 0")
@@ -1488,6 +1488,13 @@ def verify_segment_file(path: str | Path, public_key_pem: str | None = None) -> 
             _sidecar_text(side, k)
         for k in ("genesis_prev_hash", "head_hash", "sha256"):
             _sidecar_text(side, k, ascii_only=True)
+        # R1: ``logical`` is printed in the OK line, so it must be exactly what the writer put there: the ledger file's
+        # own name, from which ``file`` was derived (closed_path_for(logical, n)). A free-text value with spaces could
+        # otherwise read as part of the sentence ("... segment 1 of x (signed rotation anchor verified ...)") on an
+        # unsigned file.
+        logical = side["logical"]
+        if not logical or Path(logical).name != logical or closed_path_for(logical, n).name != side["file"]:
+            raise ValueError("logical is not the ledger file name that file was derived from")
     except (ValueError, TypeError, KeyError, RecursionError) as exc:
         out["reason"] = f"sidecar {sidecar_path_for(p).name} invalid: {exc}"
         return out

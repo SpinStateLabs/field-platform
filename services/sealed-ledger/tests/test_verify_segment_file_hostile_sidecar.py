@@ -272,3 +272,40 @@ def test_F3_a_fifo_sidecar_is_refused_without_hanging(tmp_path):
     t.join(10)
     assert not t.is_alive(), "verify_segment_file hung on a FIFO sidecar"
     assert box["out"]["ok"] is False and "not a regular file" in box["out"]["reason"]
+
+
+# --- cycle 3 (wave2-engineer advisory delta on 4ad43162: R1, R2) -----------------------------------------------------------
+
+FORGED_LOGICAL = "events.jsonl (signed rotation anchor verified: it pins this segment's head and chain_length) -"
+
+
+def test_R1_a_logical_with_spaces_cannot_put_a_signature_claim_on_the_ok_line(tmp_path):
+    two, side_path = _two(tmp_path)
+    _edit(side_path, logical=FORGED_LOGICAL)
+    out = _assert_failed_not_crashed(two)
+    assert "invalid" in out["reason"] and "signed rotation anchor" not in out["reason"]
+    r = runner.invoke(cli_app, ["verify", "--path", str(two)])
+    assert r.exit_code == 1 and "OK" not in r.output and "signed rotation anchor verified" not in r.output
+
+
+@pytest.mark.parametrize("logical", ["", "other.jsonl", "events", "events.jsonl ", " events.jsonl", "sub/events.jsonl", "events-2.jsonl"],
+                         ids=["empty", "different-name", "no-suffix", "trailing-space", "leading-space", "path", "the-segment-name"])
+def test_R1_logical_must_be_exactly_the_name_file_was_derived_from(tmp_path, logical):
+    two, side_path = _two(tmp_path)
+    _edit(side_path, logical=logical)
+    assert "invalid" in _assert_failed_not_crashed(two)["reason"]
+
+
+def test_R1_the_real_logical_still_verifies_and_prints_the_ok_line(tmp_path):
+    two, side_path = _two(tmp_path)
+    assert json.loads(side_path.read_text(encoding="utf-8"))["logical"] == "events.jsonl"
+    r = runner.invoke(cli_app, ["verify", "--path", str(two)])
+    assert r.exit_code == 0 and "OK — segment 2 of events.jsonl intact" in r.output
+
+
+@pytest.mark.parametrize("fmt", ["x" * 900_000, "line\nbreak", "\x1b[2K", 5, None, ["x"]], ids=["900k", "newline", "esc", "int", "null", "list"])
+def test_R2_a_bad_format_is_a_fixed_reason_and_never_echoed(tmp_path, fmt):
+    two, side_path = _two(tmp_path)
+    _edit(side_path, format=fmt)
+    out = _assert_failed_not_crashed(two)
+    assert out["reason"].endswith("format is not supported") and len(out["reason"]) < 200
