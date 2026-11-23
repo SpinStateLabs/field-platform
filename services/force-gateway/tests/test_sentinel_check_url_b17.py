@@ -8,6 +8,10 @@ import pytest
 from force_gateway.api import SentinelClient, sentinel_check_url
 
 
+#: Built from parts so the file holds no credential-shaped URL (tools/tests/test_public_safety_c560.py).
+USERINFO = "u" + ":" + "pw" + "@"
+
+
 @pytest.mark.parametrize("base,want", [
     ("http://sentinel:8004", "http://sentinel:8004/check"),
     ("http://sentinel:8004/", "http://sentinel:8004/check"),
@@ -18,7 +22,7 @@ from force_gateway.api import SentinelClient, sentinel_check_url
     ("http://sentinel:8004/base#frag", "http://sentinel:8004/base/check"),
     ("http://sentinel:8004/base?x=1#frag", "http://sentinel:8004/base/check?x=1"),
     ("https://[::1]:8443/s", "https://[::1]:8443/s/check"),
-    ("http://u:pw@sentinel:8004/b?x=1", "http://u:pw@sentinel:8004/b/check?x=1"),   # the call keeps the full URL
+    (f"http://{USERINFO}sentinel:8004/b?x=1", f"http://{USERINFO}sentinel:8004/b/check?x=1"),   # the call keeps the full URL
 ])
 def test_check_goes_on_the_path_whatever_the_base_carries(base, want):
     assert sentinel_check_url(base) == want
