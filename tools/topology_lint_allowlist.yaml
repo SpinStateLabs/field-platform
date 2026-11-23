@@ -31,13 +31,11 @@ exceptions:
   - topology: gb10
     var: FIELD_SHARED_SECRET
     reason: >-
-      Presence check 2026-10-23 on the GB10 estate (values never read):
+      Presence check 2026-11-23 on the GB10 estate (values never read):
       FIELD_SHARED_SECRET is set in every field-platform-* container except
       proxy. Not set in proxy. Committed docker-compose.yml:96 still forwards
-      ${FIELD_SHARED_SECRET:-} (empty default). approver (profile approver) was
-      added 2026-10-26 WITHOUT a presence check because it is not deployed and
-      was not observed; it inherits the same x-service env anchor. Redo the
-      presence check, and bump verified_on, in the change that first deploys S2.
+      ${FIELD_SHARED_SECRET:-} (empty default). approver (profile approver) is
+      running on the GB10 and was observed set in this check.
     expected_status: empty-default
     services:
       - approver
@@ -56,7 +54,7 @@ exceptions:
       - replay
       - sentinel
       - witness
-    verified_on: 2026-10-23
+    verified_on: 2026-11-23
     verified_by: Claude coordinator session (presence check; operator to re-confirm)
     comment: >-
       Empty means authn.py skips perimeter auth. The GB10 .env is not in the
@@ -65,7 +63,7 @@ exceptions:
   - topology: gb10
     var: FIELD_DOA_ROSTER
     reason: >-
-      Presence check 2026-10-23 on the GB10 estate (values never read):
+      Presence check 2026-11-23 on the GB10 estate (values never read):
       FIELD_DOA_ROSTER is set in every field-platform-* container except
       canary-agent, witness and proxy, which do not mint or consult the roster.
       Committed docker-compose.yml:55 and docker-compose.gb10.yml:332 still
@@ -73,7 +71,7 @@ exceptions:
     expected_status: empty-default
     services:
       - delegation
-    verified_on: 2026-10-23
+    verified_on: 2026-11-23
     verified_by: Claude coordinator session (presence check; operator to re-confirm)
     comment: >-
       Empty on a minting service means the grantor, scope and 30-day TTL checks
@@ -83,13 +81,14 @@ exceptions:
   - topology: fly
     var: FIELD_DOA_ROSTER
     reason: >-
-      Presence check 2026-10-23 via `fly ssh` into app force-field-sandbox
-      (values never read): FIELD_DOA_ROSTER is set. Committed entrypoint.sh:62
+      Presence check 2026-11-23 with `fly secrets list` on app force-field-sandbox
+      (names and digests only, values never read): a secret named
+      FIELD_DOA_ROSTER is present. Not re-read inside the machine this time. Committed entrypoint.sh:62
       still defaults to empty and nothing in fly.toml [env] sets a roster path.
     expected_status: empty-default
     services:
       - fly-container
-    verified_on: 2026-10-23
+    verified_on: 2026-11-23
     verified_by: Claude coordinator session (presence check; operator to re-confirm)
     comment: >-
       Set live, but not from any file in this repo; where it comes from was not
