@@ -144,9 +144,9 @@ def test_enforce_failed_allow_append_through_the_real_ledger_in_the_require_sign
     with caplog.at_level("DEBUG", logger="field_core.upstream"):
         v = stack.check("draft invoices", token_id=token)
     assert v["decision"] == "BLOCK" and v["clause_id"] == "L.unreachable"
-    # C-503: the verdict names the status only; the ledger's own words (which variable it is) are in the DEBUG record
+    # C-503: the verdict names the status only; Backlog B4: the ledger's own words are not in the DEBUG record either
     assert "503" in v["reasons"][1] and "FIELD_LEDGER_REQUIRE_SIGNING" not in v["reasons"][1]
-    assert "FIELD_LEDGER_REQUIRE_SIGNING" in caplog.text
+    assert "FIELD_LEDGER_REQUIRE_SIGNING" not in caplog.text and "returned 503" in caplog.text
     allows = stack.ledger.get("/events", params={"event_type": "conformance.allow"}).json()
     assert len(allows) == 1  # only the first check's record landed
     # the stop-type path is still open: the revoke is ledger-first and succeeds

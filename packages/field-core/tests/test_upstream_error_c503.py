@@ -1,7 +1,7 @@
 """C-503 (design note C-490): a reply from another service never becomes part of an exception message.
 
-`field_core.errors.upstream_error` returns a fixed phrase and the status code; the body (first 200 characters, escaped,
-one line) goes to a DEBUG record. Every client that used to copy `resp.text` into its error is exercised against an
+`field_core.errors.upstream_error` returns a fixed phrase and the status code; the DEBUG record names the status and
+the body length only, never the body (Backlog B4). Every client that used to copy `resp.text` into its error is exercised against an
 upstream that answers 500 with a made-up marker plus a very long body.
 """
 from __future__ import annotations
@@ -13,7 +13,7 @@ import pytest
 
 from field_core.clients import (AgentNotRegisteredError, LedgerClient, LedgerUnreachableError, RegistryClient,
                                 RegistryUnreachableError)
-from field_core.errors import BODY_LOG_LIMIT, upstream_error
+from field_core.errors import upstream_error
 
 MARK = "CANARY-8f31-zq"          # made up; stands in for a value an upstream echoes back
 BIG = MARK + "x" * 5000
@@ -87,15 +87,23 @@ def test_a_reply_without_a_status_or_a_readable_body_does_not_raise(caplog):
         assert upstream_error(SimpleNamespace(), "x") == "x returned None"
 
 
-def test_the_body_goes_to_a_debug_record_truncated_and_on_one_line(caplog):
+def test_the_debug_record_never_carries_the_body(caplog):
+    """Backlog B4: the DEBUG record names the status and the byte length, not a single character of the body."""
+    body = MARK + "\nsecond line\x00" + "y" * 500
+
+    class WithContent(Resp):
+        @property
+        def content(self):
+            return self.text.encode("utf-8")
+
     with caplog.at_level(logging.DEBUG, logger="field_core.upstream"):
-        upstream_error(Resp(500, MARK + "\nsecond line\x00" + "y" * 500), "ledger append")
+        upstream_error(WithContent(500, body), "ledger append")
     (rec,) = [r for r in caplog.records if r.name == "field_core.upstream"]
     assert rec.levelno == logging.DEBUG
     text = rec.getMessage()
-    assert MARK in text and "\n" not in text and "\x00" not in text
-    assert text.count("y") < BODY_LOG_LIMIT                       # at most 200 characters of the body, not 500
-    assert len(text) < BODY_LOG_LIMIT + 120
+    assert MARK not in text and "second line" not in text and "yyy" not in text
+    assert "ledger append returned 500" in text and f"body withheld ({len(body.encode())} bytes)" in text
+    assert "\n" not in text and len(text) < 120
 
 
 def test_nothing_is_logged_above_debug(caplog):
@@ -151,26 +159,30 @@ def test_a_404_is_still_not_registered_and_never_echoes():
 
 # ---- properties of the helper that the stated behaviour depends on (C-584 F-C584-4/-5) ----------------------------
 
-def test_the_debug_body_limit_is_200_characters():
-    assert BODY_LOG_LIMIT == 200
-
-
-def test_the_body_is_not_read_unless_debug_is_on(caplog):
+def test_the_body_text_is_never_read_and_its_bytes_only_counted_at_debug(caplog):
+    """Backlog B4 replaces C-584's 200-character DEBUG excerpt: the body is never logged, so ``.text`` is never read at
+    any level, and ``.content`` is read (for its length only) only when DEBUG is on."""
     class Tripwire:
         status_code = 500
-        touched = False
+        text_touched = content_touched = False
 
         @property
         def text(self):
-            type(self).touched = True
+            type(self).text_touched = True
             return BIG
+
+        @property
+        def content(self):
+            type(self).content_touched = True
+            return BIG.encode("utf-8")
 
     with caplog.at_level(logging.INFO, logger="field_core.upstream"):
         assert upstream_error(Tripwire(), "x") == "x returned 500"
-    assert Tripwire.touched is False
+    assert Tripwire.text_touched is False and Tripwire.content_touched is False
     with caplog.at_level(logging.DEBUG, logger="field_core.upstream"):
-        upstream_error(Tripwire(), "x")
-    assert Tripwire.touched is True
+        assert upstream_error(Tripwire(), "x") == "x returned 500"
+    assert Tripwire.text_touched is False and Tripwire.content_touched is True
+    assert MARK not in caplog.text and f"body withheld ({len(BIG.encode())} bytes)" in caplog.text
 
 
 def test_a_body_carried_on_the_exception_chain_is_caught_by_the_check():
