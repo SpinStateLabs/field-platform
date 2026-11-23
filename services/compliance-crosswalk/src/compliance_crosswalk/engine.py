@@ -107,6 +107,13 @@ GATE_NOTE = "declared, enforced locally by the Claude Code gate, no estate evide
 #: FC-L-01 when evidence was collected but the ledger gave no /verify answer (503 busy, unreachable): not checked,
 #: neither verified nor failed. The evidence pack keys its "not-checked" gap on this exact detail.
 LEDGER_VERIFY_NOT_CHECKED = "ledger verify unavailable (busy or unreachable) - chain not verified; retry"
+#: gap kind -> its label in a Markdown "Gaps" list (the JSON carries the kind itself)
+GAP_LABELS = {"not-declared": "not declared", "not-evidenced": "not evidenced", "not-checked": "not checked"}
+#: the FC-L-01 "not-checked" gap detail: fixed text, so Markdown and JSON say the same
+LEDGER_NOT_CHECKED_GAP = (
+    "the ledger did not answer /verify (busy or unreachable), so the chain was not verified on this run; "
+    "this is not a pass: re-run the pack"
+)
 GATE_NOTE_UNDECLARED = ("not declared in the manifest, so the Claude Code gate enforces nothing for this key "
                         "(a manifest that is not governed by the gate legitimately omits it); no estate evidence")
 
@@ -261,6 +268,29 @@ def evaluate(
     )
 
 
+def _not_checked(control: ControlCoverage) -> bool:
+    """FC-L-01 with evidence collected but no /verify answer: not checked (neither verified nor failed)."""
+    return (control.evidenced is None and control.control_id == "FC-L-01"
+            and control.evidence_detail == LEDGER_VERIFY_NOT_CHECKED)
+
+
+def coverage_gaps(report: CoverageReport) -> list[dict[str, Any]]:
+    """Every gap a coverage report shows, in control order: not declared, not evidenced (a collected check failed),
+    not checked (FC-L-01: the ledger gave no /verify answer). The evidence pack and ``crosswalk run`` both print this
+    list (B7), so the two can never disagree. An offline run's uncollected evidence is an unknown, not a gap."""
+    gaps: list[dict[str, Any]] = []
+    for control in report.controls:
+        if not control.declared:
+            gaps.append({"control_id": control.control_id, "kind": "not-declared", "detail": control.declared_detail})
+        if control.evidenced is False:
+            gaps.append({"control_id": control.control_id, "kind": "not-evidenced", "detail": control.evidence_detail})
+        elif _not_checked(control):
+            # don.reviewer C1 (rebuild of PR 1093): not checked is not failed, but it is never silent; a provoked
+            # 503 on /verify must not let a report say "No gaps recorded" as it would for a verified chain
+            gaps.append({"control_id": control.control_id, "kind": "not-checked", "detail": LEDGER_NOT_CHECKED_GAP})
+    return gaps
+
+
 def render_markdown(report: CoverageReport) -> str:
     lines: list[str] = []
     add = lines.append
@@ -277,11 +307,28 @@ def render_markdown(report: CoverageReport) -> str:
     add("| Control | L | Statement | Declared | Evidenced | Evidence |")
     add("|---|---|---|---|---|---|")
     for c in report.controls:
-        evidenced = "—" if c.evidenced is None else ("✓" if c.evidenced else "✗")
+        # B7: an unanswered /verify is "✗" (not verified), never the "—" of a run that collected nothing
+        evidenced = ("✗" if _not_checked(c) else "—") if c.evidenced is None else ("✓" if c.evidenced else "✗")
         add(
             f"| {c.control_id} | {c.letter} | {c.statement} | "
             f"{'✓' if c.declared else '✗'} | {evidenced} | {c.evidence_detail} |"
         )
+    add("")
+    add("## Gaps")
+    add("")
+    gaps = coverage_gaps(report)
+    if gaps:
+        add("Each gap stands until remediated and re-checked:")
+        add("")
+        for gap in gaps:
+            add(f"- {gap['control_id']} — {GAP_LABELS[gap['kind']]}: {gap['detail']}")
+    elif report.evidence_collected:
+        add("No gaps recorded on this run: every control is declared, and no collected evidence check failed.")
+    else:
+        add("No declaration gaps.")
+    if not report.evidence_collected:
+        add("")
+        add("Evidence was not collected (offline run): every \"—\" above is an unknown, not a pass.")
     add("")
     add("## Framework mapping (source-grounded citations)")
     add("")
