@@ -17,6 +17,7 @@ for _stream in (sys.stdout, sys.stderr):
         _stream.reconfigure(encoding="utf-8")
 
 import httpx
+from httpx import URL as _URL, InvalidURL as _InvalidURL   # bound at import: tests replace cli.httpx with a fake
 
 from spend_governor import __version__
 from spend_governor.provisioning import path_segment
@@ -71,11 +72,11 @@ def _base() -> str:
     one carrying userinfo (``user:password@``: credentials in a URL get logged). A query or fragment is allowed."""
     raw = (os.environ.get("FIELD_GOVERNOR_URL") or "").strip().rstrip("/") or DEFAULT_GOVERNOR_URL
     try:
-        url = httpx.URL(raw + "/x")          # a path as the commands add one, so the composed URL is what is checked
+        url = _URL(raw + "/x")          # a path as the commands add one, so the composed URL is what is checked
         usable = (url.scheme in ("http", "https") and _is_host(url.host)
                   and (url.port is None or 0 < url.port <= 65535)    # httpx builds :99999 and fails only on connect
                   and not url.userinfo)                              # credentials in a URL end up in logs (builder-b)
-    except (httpx.InvalidURL, ValueError, TypeError):
+    except (_InvalidURL, ValueError, TypeError):   # names bound at import, so a fake cli.httpx cannot break them
         usable = False
     if not usable:                           # raised outside the handler: no chained text from httpx
         typer.echo(BAD_GOVERNOR_URL, err=True)

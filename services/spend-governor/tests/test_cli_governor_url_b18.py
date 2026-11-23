@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from typer.testing import CliRunner
 
@@ -83,3 +84,43 @@ def test_unset_is_the_default(monkeypatch, calls):
     monkeypatch.delenv("FIELD_GOVERNOR_URL", raising=False)
     assert runner.invoke(cli.app, ["rate-limits", "agent-1"]).exit_code == 0
     assert calls == [f"{cli.DEFAULT_GOVERNOR_URL}/rate-limits/agent-1"]
+
+
+class _BareHttpx:
+    """A stand-in for ``cli.httpx`` with only ``Client`` and ``HTTPError``, the shape the existing CLI tests install
+    (test_cli_set_cap_manifest_inputs, test_throttle): it has no ``URL`` and no ``InvalidURL``."""
+
+    def __init__(self, seen):
+        self.seen = seen
+        self.HTTPError = httpx.HTTPError
+
+    def Client(self, **kw):  # noqa: N802 (httpx's name)
+        seen = self.seen
+
+        class _C:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def request(self, method, url, **rkw):
+                seen.append(url)
+                return SimpleNamespace(status_code=200, text="{}", json=lambda: {})
+
+        return _C()
+
+
+def test_the_check_survives_a_fake_httpx_without_url_or_invalidurl(monkeypatch):
+    """rb61: the check named httpx.URL and httpx.InvalidURL at call time, so a test fake of cli.httpx made every CLI
+    call fail. Both are bound at import now."""
+    seen: list[str] = []
+    monkeypatch.setattr(cli, "httpx", _BareHttpx(seen))
+    monkeypatch.setenv("FIELD_GOVERNOR_URL", "http://gov.invalid")
+    r = runner.invoke(cli.app, ["rate-limits", "agent-1"])
+    assert r.exit_code == 0, r.output
+    assert seen == ["http://gov.invalid/rate-limits/agent-1"]
+    monkeypatch.setenv("FIELD_GOVERNOR_URL", f"http://{MARK}.invalid:port")
+    r = runner.invoke(cli.app, ["rate-limits", "agent-1"])
+    assert r.exit_code == 2 and cli.BAD_GOVERNOR_URL in r.output and MARK not in r.output
+    assert seen == ["http://gov.invalid/rate-limits/agent-1"]
