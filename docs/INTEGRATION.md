@@ -122,8 +122,10 @@ Two consequences worth planning for:
 
 - **Register agents with a `manifest_ref`.** Under a roster, an agent whose
   registry record has no resolvable manifest cannot be minted for — that is
-  deliberate (fail closed), and it is why `FIELD_DOA_ROSTER` stays unset in
-  compose, fly and CI, where the smoke flow registers without one. Install
+  deliberate (fail closed), and it is why `FIELD_DOA_ROSTER` is left unset in
+  the default compose files and defaults to empty in the fly entrypoint, where
+  the smoke flow registers without one (the CI upgrade-smoke job and the GB10
+  required overlay do set it). Install
   the manifest before registering: since v1.2 D3b `POST /agents` refuses a
   set `manifest_ref` that does not resolve (422).
 - The roster proves that a *string* is on a list. It is not authentication:
@@ -131,8 +133,8 @@ Two consequences worth planning for:
   Enforced-vs-Declared table.
 
 With `FIELD_DOA_ROSTER` unset the roster gate is off and a mint behaves as it
-did before v1.2 (`services/delegation-authority/src/delegation_authority/doa.py:40`
-names the variable); the roster claim is Declared until it is set, and
+did before v1.2 (`ROSTER_ENV` in
+`services/delegation-authority/src/delegation_authority/doa.py` names the variable); the roster claim is Declared until it is set, and
 enforced fail-closed once it is.
 
 ## 4. Hook 1 — ACTIONS
@@ -157,7 +159,7 @@ def draft(row): ...
   spelling makes the sentinel refuse to start rather than mean log-only (accepted,
   case-insensitive, with `-` read as `_`: `log_only`, `logonly`, `enforce`,
   `enforcing`, `enforced`; blank or unset means log-only)
-  (`services/conformance-sentinel/src/conformance_sentinel/mode.py:34-47`, C-169).
+  (`resolve_mode` in `services/conformance-sentinel/src/conformance_sentinel/mode.py`, C-169).
 - Every ALLOW the sentinel returns, in either mode (log-only shadows
   included), is metered to the governor as one action for that agent (an
   agent with no spend cap is not metered), so rate-limit windows fill in
@@ -187,7 +189,7 @@ truly want fire-and-forget, write the `try/except` yourself — visibly.
 **The observed alternative:** self-reported counts trust the reporter.
 Route LLM calls through force-gateway instead and metering happens at the
 proxy (with the real upstream, a gateway without `ANTHROPIC_API_KEY` answers `POST /v1/messages` with 502
-naming the key, `services/force-gateway/src/force_gateway/api.py:196-202`):
+naming the key, `real_upstream` in `services/force-gateway/src/force_gateway/api.py`):
 
 ```python
 httpx.post(f"{GATEWAY}/v1/messages", json=payload,
@@ -213,9 +215,8 @@ reply with no verdict, or `FIELD_SENTINEL_URL` unset), making no upstream call
 in any of them. Under enforce the
 `x-force-passthrough: judge` exemption holds only for the three self-manifest
 agents and only for instrumentation; their identity is still checked
-(docstring `api.py:41-43`; handler `api.py:887-910`; `_authorize` `api.py:551-585`;
-`SentinelClient.check` `api.py:358-375`)
-(`services/force-gateway/src/force_gateway/api.py:24-40`; see
+(in `services/force-gateway/src/force_gateway/api.py`: the module docstring's Phase F1 paragraph, the `messages`
+handler in `create_app`, `_authorize` and `SentinelClient.check`; see
 `services/force-gateway/README.md` for the full contract).
 
 ## 6. Hook 3 — LIVENESS

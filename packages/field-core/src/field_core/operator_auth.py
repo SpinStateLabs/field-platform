@@ -262,22 +262,23 @@ def _is_reserved(key) -> bool:
 
 _ON_SPELLINGS = frozenset({"1", "true", "yes", "on"})
 _OFF_SPELLINGS = frozenset({"", "0", "false", "no", "off"})
-_SHOWABLE_FLAG = re.compile(r"^[A-Za-z0-9._-]{1,32}$")
 
 
 def _require_flag() -> bool:
     """FIELD_OPERATOR_REQUIRE (C-17 / D-N). Unset, blank and the "off"
     spellings are OFF (no default change); 1/true/yes/on are ENFORCE; ANY
     other non-empty value (``enforce``, ``required``, ``2``) is ENFORCE too,
-    with one log.error per distinct value: a misspelt flag fails closed,
+    with one log.error per process (it names the variable and the accepted
+    spellings, never the value): a misspelt flag fails closed,
     never silently open."""
     raw = os.environ.get(ENV_REQUIRE, "").strip()
     v = raw.lower()
     if v in _OFF_SPELLINGS:
         return False
     if v not in _ON_SPELLINGS:
-        shown = repr(raw) if _SHOWABLE_FLAG.match(raw) else "(unprintable value)"
-        _log_once(logging.ERROR, f"{ENV_REQUIRE}={shown} is not one of 1/true/yes/on or "
+        # C-43 F-C43-2: the VALUE is never logged (it can be a pasted secret or key):
+        # the variable and the accepted spellings only.
+        _log_once(logging.ERROR, f"{ENV_REQUIRE} is not one of 1/true/yes/on or "
                   "0/false/no/off; treated as ENFORCE (fail closed)")
     return True
 
@@ -532,6 +533,8 @@ def _strip_reserved(obj):
         return {k: _strip_reserved(v) for k, v in obj.items() if not _is_reserved(k)}
     if isinstance(obj, list):
         return [_strip_reserved(v) for v in obj]
+    if isinstance(obj, tuple):          # _has_reserved looks inside tuples, so this must clean them (S9-7); a tuple stays a tuple
+        return tuple(_strip_reserved(v) for v in obj)
     return obj
 
 
@@ -1708,8 +1711,13 @@ def guard(action: str, rows_loader: Callable[[], list[dict]] | None = None,
                     await run_in_threadpool(
                         _record_unauthenticated, ledger, action,
                         request.url.path, auth)
-            except Exception:
-                pass
+            except Exception as exc:
+                # C-52 follow-up: a failure before or around the append (a ledger_getter
+                # that raises) is counted and logged like a failed append, never swallowed.
+                # LOG-ONLY still allows the request; type name only, never the message.
+                _count_dropped_unauthenticated()
+                log.warning("operator.unauthenticated record not written (%s); "
+                            "counted in dropped_unauthenticated_records", type(exc).__name__)
         return auth
 
     # `from __future__ import annotations` made the annotation a string FastAPI

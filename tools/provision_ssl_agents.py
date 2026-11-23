@@ -29,7 +29,7 @@ see docs/INTEGRATION.md §3). It is the single-port-proxy analogue of
 untracked in the PARENT folder, and its local path is now
 ``lifecycle provision`` too.
 
-Run from rog-command (venv C:\\Users\\donal\\.venvs\\field-platform):
+Run from rog-command (venv <home>\\.venvs\\field-platform):
 
     python tools/provision_ssl_agents.py [--operator-id don --operator-key-file PATH]
 
@@ -102,7 +102,23 @@ PROXY = os.environ.get("FIELD_PROXY_URL", "").rstrip("/")
 REG, LED, DEL, SEN, KIL, GOV = (f"{PROXY}/{p}" for p in
                                 ("registry", "ledger", "delegation",
                                  "sentinel", "killswitch", "governor"))
-TTL_DAYS = int(os.environ.get("FIELD_TOKEN_TTL_DAYS", "30"))
+def _ttl_days(raw: str | None) -> tuple[int, str | None]:
+    """(days, problem). Unset or blank = 30. A value that is not a whole number
+    >= 1 gives the default plus a problem for main() to refuse with, before any
+    request: an import-time ValueError here was a traceback, not a message."""
+    text = (raw or "").strip()
+    if not text:
+        return 30, None
+    try:
+        days = int(text)
+    except ValueError:
+        days = 0
+    if days < 1:
+        return 30, "FIELD_TOKEN_TTL_DAYS is not a whole number of days (1 or more)"
+    return days, None
+
+
+TTL_DAYS, _TTL_PROBLEM = _ttl_days(os.environ.get("FIELD_TOKEN_TTL_DAYS"))
 TOKENS_FILE = pathlib.Path(os.environ.get(
     "FIELD_TOKENS_FILE",
     str(pathlib.Path.home() / ".field-local" / "tokens-gb10.json")))
@@ -118,6 +134,46 @@ AGENTS = {
         "never": "send invoice email",
     },
 }
+
+#: ROLE LOOP agents (draft 2026-11-04): five agents whose manifests say "DRAFT, not provisioned". They are NOT in the
+#: default run (review C1 on PR 857: a bare run of this tool must keep provisioning exactly the two agents above); a run
+#: provisions one of them only when it is named with --only.
+ROLE_AGENTS = {
+    "ssl-fp-red-team": {
+        "name": "SSL FP Red Team", "domain": "engineering",
+        "never": "merge pull request",
+    },
+    "ssl-fp-architect": {
+        "name": "SSL FP Architect", "domain": "engineering",
+        "never": "merge pull request",
+    },
+    "ssl-fp-frontdoor-engineer": {
+        "name": "SSL FP Front Door Engineer", "domain": "engineering",
+        "never": "merge pull request",
+    },
+    "ssl-fp-router-engineer": {
+        "name": "SSL FP Router Engineer", "domain": "engineering",
+        "never": "merge pull request",
+    },
+    "ssl-fp-runtime-engineer": {
+        "name": "SSL FP Runtime Engineer", "domain": "engineering",
+        "never": "merge pull request",
+    },
+}
+
+#: Every agent this tool knows; the default run uses AGENTS only.
+ALL_AGENTS = {**AGENTS, **ROLE_AGENTS}
+
+
+def selected_agents(only: list[str] | None) -> dict:
+    """The agents one run provisions: AGENTS (the two original agents) by default, or exactly the named ids (in table
+    order) from ALL_AGENTS. An id this tool does not know is a ValueError."""
+    if not only:
+        return dict(AGENTS)
+    unknown = [a for a in only if a not in ALL_AGENTS]
+    if unknown:
+        raise ValueError(", ".join(unknown))
+    return {a: ALL_AGENTS[a] for a in ALL_AGENTS if a in only}
 
 headers = {}
 if os.environ.get("FIELD_SHARED_SECRET"):
@@ -305,7 +361,8 @@ def provision_agent(agent_id: str, meta: dict, engine=None):
     """One agent through `lifecycle provision`. Returns the ProvisionReport."""
     engine = engine or build_engine()
     m = manifest(agent_id)
-    assert m["agent"]["name"] == agent_id, f"manifest name mismatch for {agent_id}"
+    if m["agent"]["name"] != agent_id:      # a real check: an assert vanishes under python -O
+        raise ValueError(f"manifest name mismatch for {agent_id}")
     principal = m["identity"]["principal"]
     return engine.provision(
         manifest_path=manifest_path(agent_id),
@@ -343,6 +400,34 @@ def probe(agent_id: str, meta: dict, scope: list[str], token_id: str | None,
     return rows
 
 
+def save_tokens(tokens: dict[str, str]) -> None:
+    """Write the token cache so a crash never loses a token that is already minted: a temp file in the
+    same directory, 0600 from creation, fsync'd, then os.replace (atomic)."""
+    TOKENS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = TOKENS_FILE.with_name(TOKENS_FILE.name + ".tmp")
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(tokens, indent=2))
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, TOKENS_FILE)
+
+
+def _load_tokens(path: pathlib.Path) -> tuple[dict[str, str], str | None]:
+    """(tokens, problem): the saved {agent id: token id}, {} when the file does not
+    exist. A problem is one sentence that names what is wrong and never quotes the
+    file (it holds token ids). Returned, not raised: main() prints it at one site."""
+    if not path.exists():
+        return {}, None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:        # includes JSONDecodeError and UnicodeDecodeError
+        return {}, f"the tokens file {path.name} cannot be read as JSON ({type(exc).__name__})"
+    if not (isinstance(data, dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in data.items())):
+        return {}, f"the tokens file {path.name} is not a JSON object of agent id to token id"
+    return data, None
+
+
 def main(argv: list[str] | None = None) -> int:
     from lifecycle_manager.engine import LifecycleError
 
@@ -354,27 +439,47 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--operator-key-file", metavar="PATH",
                         help="file holding that operator's key; read and stripped here, never printed "
                              "(default: $FIELD_OPERATOR_KEY_FILE, else $FIELD_OPERATOR_KEY)")
+    parser.add_argument("--only", metavar="AGENT_ID", action="append",
+                        help="provision this agent id (repeatable); default: the two original agents, never the "
+                             "role-loop drafts, which run only when named here")
     args = parser.parse_args(argv)
+    try:
+        chosen = selected_agents(args.only)
+    except ValueError as exc:
+        _refuse(f"--only names an agent this tool does not know: {exc}; nothing sent")
+    # One refusal, one print (the boundary-echo lint counts print sites): the first
+    # problem found, before any request is sent.
+    refusal: str | None = None
+    tokens: dict[str, str] = {}
     if not PROXY:
-        print("FIELD_PROXY_URL is not set: it is the estate base URL, an operator setting with no default "
-              "in this repository. Nothing was sent.", file=sys.stderr)
+        refusal = ("FIELD_PROXY_URL is not set: it is the estate base URL, an operator setting with no default "
+                   "in this repository. Nothing was sent.")
+    elif _TTL_PROBLEM:
+        refusal = f"{_TTL_PROBLEM}. Nothing was sent."
+    else:
+        # a bad file must be found now, not after tokens were minted
+        tokens, problem = _load_tokens(TOKENS_FILE)
+        if problem:
+            refusal = f"{problem}. Nothing was sent; the file was not changed."
+    if refusal:
+        print(refusal, file=sys.stderr)
         return 2
     pair = operator_pair(args.operator_id, args.operator_key_file)
 
     print(f"estate: {PROXY}")
     health()
     engine = build_engine(client(pair))
-    tokens: dict[str, str] = {}
-    if TOKENS_FILE.exists():
-        tokens = json.loads(TOKENS_FILE.read_text(encoding="utf-8"))
-
     failed: list[str] = []
-    for agent_id, meta in AGENTS.items():
+    for agent_id, meta in chosen.items():
         print(f"\n== {agent_id}")
         try:
             report = provision_agent(agent_id, meta, engine=engine)
         except LifecycleError as exc:
             print(f"  REFUSED: {exc}")
+            failed.append(agent_id)
+            continue
+        except (httpx.HTTPError, ValueError, KeyError) as exc:
+            print(f"FAILED {agent_id}: {type(exc).__name__}")
             failed.append(agent_id)
             continue
         for step in report.steps:
@@ -387,13 +492,25 @@ def main(argv: list[str] | None = None) -> int:
             continue
         if report.token_id:
             tokens[agent_id] = report.token_id
-        probe(agent_id, meta, report.scope, report.token_id)
+            try:
+                save_tokens(tokens)      # saved NOW, before any probe can fail: the token exists on the estate
+            except OSError as exc:
+                print(f"FAILED {agent_id}: the minted token could not be saved ({type(exc).__name__})")
+                return 1
+        try:
+            probe(agent_id, meta, report.scope, report.token_id)
+        except (httpx.HTTPError, ValueError, KeyError, LifecycleError) as exc:
+            print(f"FAILED {agent_id}: {type(exc).__name__}")
+            failed.append(agent_id)
 
-    TOKENS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    TOKENS_FILE.write_text(json.dumps(tokens, indent=2), encoding="utf-8")
-    print(f"\ntokens ({TTL_DAYS}-day TTL) saved to {TOKENS_FILE}")
+    if tokens:
+        print(f"\ntokens ({TTL_DAYS}-day TTL) saved to {TOKENS_FILE}")
 
-    ver = H.get(f"{LED}/verify").json()
+    try:
+        ver = H.get(f"{LED}/verify").json()
+    except (httpx.HTTPError, ValueError) as exc:
+        ver = f"unavailable ({type(exc).__name__})"
+        failed.append("ledger verify")
     print(f"ledger verify: {ver}")
     if failed:
         print(f"FAILED: {', '.join(failed)}")

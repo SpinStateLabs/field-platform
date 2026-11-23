@@ -196,7 +196,17 @@ The verdict's `context` never repeats the presented `token_id`: it carries `toke
 sentinel check <agent-id> "<action>" [--token-id T] [--irreversible]   # exit 0/2/1 = ALLOW/ESCALATE/BLOCK
 sentinel clauses
 sentinel serve [--port 8004]
+sentinel version
+sentinel self-manifest                                                 # exit 1 if the self-manifest fails validation
+sentinel score [--out-md P] [--out-json P]                             # exit 0 gates pass / 3 gates fail; log-only estate only
 ```
+
+*Added 2026-11-04 (item B-P-22, verified against main
+cd3b76901f9aabfd45cee546f597177b8739d6ea):* the last three lines above were
+missing from this block; all three commands exist in
+`src/conformance_sentinel/cli.py` (`version`, `self-manifest`, `score`).
+`score` also takes `--ledger-down-cmd` and `--manifest-dir`; `serve` also
+takes `--host`.
 
 ## `@governed` — one decorator to govern any Python tool call
 

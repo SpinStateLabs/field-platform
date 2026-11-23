@@ -100,6 +100,9 @@ def test_every_status_write_for_an_authenticated_caller_goes_through_the_public_
     assert r.status_code == 200 and r.json()["restored"] is True
     assert stack.post("/kill/domain/finance", json=BODY, headers=don).status_code == 200
     named = {"extra_headers": {OBO: "don"}}
+    drill_writes = [c for c in calls if "if_updated_at" in c[2]]
+    assert [(a, st) for a, st, _ in drill_writes] == [("a1", "killed"), ("a1", "active")]   # the drill is conditional
+    calls = [(a, st, {k: v for k, v in kw.items() if k != "if_updated_at"}) for a, st, kw in calls]
     assert calls == [
         ("a1", "killed", named),     # kill
         ("a1", "active", named),     # revive

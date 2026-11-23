@@ -2,12 +2,31 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Annotated, Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator, model_validator
 
 from agent_registry.redaction import fingerprint, redact, redact_text
+
+
+def _strip(value: Any) -> Any:
+    """Strip surrounding whitespace from text (anything else is left for the type check to refuse)."""
+    return value.strip() if isinstance(value, str) else value
+
+
+#: Request-boundary text: stripped FIRST, then non-blank (where required) and bounded. A 422 never echoes the input
+#: (the app's validation handler drops it). ``AgentRecord`` below stays lenient on purpose: a row written before these
+#: bounds existed (a long name, a blank owner) must still read back, never 500 a GET.
+MAX_NAME, MAX_OWNER, MAX_DOMAIN, MAX_MANIFEST_REF, MAX_ATTESTED_BY = 200, 200, 64, 512, 200
+Name = Annotated[str, BeforeValidator(_strip), Field(min_length=1, max_length=MAX_NAME)]
+Owner = Annotated[str, BeforeValidator(_strip), Field(min_length=1, max_length=MAX_OWNER)]
+Domain = Annotated[str, BeforeValidator(_strip), Field(min_length=1, max_length=MAX_DOMAIN)]
+#: Not stripped: a whitespace-only ref is SET (not "no ref") and the resolver refuses it (D3b, test_d3b_manifest_ref_resolves).
+ManifestRef = Annotated[str, Field(max_length=MAX_MANIFEST_REF)]
+AttestedBy = Annotated[str, BeforeValidator(_strip), Field(min_length=1, max_length=MAX_ATTESTED_BY)]
 
 
 class AgentStatus(str, Enum):
@@ -46,14 +65,29 @@ class AgentRecord(BaseModel):
     )
 
 
+#: What a NEW agent id may be (reviewer C-528 F-C528-1/-2): lower-case letters and digits in runs, separated by
+#: ONE of ``.``, ``_`` or ``-``; no leading, trailing or doubled separator ("a1." and "a..1" would otherwise be
+#: distinct agents that read as "a1" in a log), at most 64 characters (the width of the rotation events' ids).
+#: Stored ids are not re-checked against this on read: a row written before it keeps working.
+MAX_AGENT_ID_LENGTH = 64
+_NEW_AGENT_ID = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
+
+
 class AgentCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    agent_id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9._-]*$")
-    name: str = Field(min_length=1)
-    owner: str = Field(min_length=1)
-    domain: str = "general"
-    manifest_ref: str | None = None
+    agent_id: str = Field(min_length=1, max_length=MAX_AGENT_ID_LENGTH, pattern=r"^[a-z0-9][a-z0-9._-]*$")
+    name: Name
+    owner: Owner
+    domain: Domain = "general"
+    manifest_ref: ManifestRef | None = None
+
+    @field_validator("agent_id")
+    @classmethod
+    def _no_confusable_id(cls, value: str) -> str:
+        if not _NEW_AGENT_ID.fullmatch(value):
+            raise ValueError("agent_id must be lower-case letters and digits separated by single '.', '_' or '-'")
+        return value
 
 
 class AgentUpdate(BaseModel):
@@ -64,11 +98,31 @@ class AgentUpdate(BaseModel):
     # store and failed only on read-back (a 500; before the atomic update, a
     # persisted row that made every read of the registry 500).
     # tests/test_registry_update_validation.py. Omitted (None) stays allowed.
-    name: str | None = Field(default=None, min_length=1)
-    owner: str | None = Field(default=None, min_length=1)
-    domain: str | None = None
-    manifest_ref: str | None = None
+    name: Name | None = None
+    owner: Owner | None = None
+    domain: Domain | None = None
+    manifest_ref: ManifestRef | None = None
     status: AgentStatus | None = None
+    # Compare-and-set (kill-path hardening): apply the patch only if the row's updated_at still equals this ISO 8601
+    # timestamp (the one a previous read or write of the row returned); otherwise 412. Not a column: it is never
+    # stored and never listed in the ledger's field list.
+    if_updated_at: str | None = Field(default=None, max_length=64)
+
+    @field_validator("if_updated_at")
+    @classmethod
+    def _parseable(cls, value: str | None) -> str | None:
+        if value is not None:
+            parse_updated_at(value)
+        return value
+
+
+def parse_updated_at(value: str) -> datetime:
+    """An ISO 8601 timestamp as an aware UTC datetime (``Z`` accepted, naive taken as UTC); ValueError otherwise."""
+    text = value.strip()
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    parsed = datetime.fromisoformat(text)
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
 
 class ShadowCandidate(BaseModel):

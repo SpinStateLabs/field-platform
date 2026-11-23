@@ -74,7 +74,7 @@ def _clean():
 class Driver:
     """Records every call. ``fail_do`` / ``fail_check`` / ``counters_at`` inject a fault at a (stage, step)."""
 
-    def __init__(self, services=("registry", "ledger")):
+    def __init__(self, services=sc.EIGHT_SERVICES):
         self.calls: list[tuple] = []
         self.services = services
         self.fail_do: dict[str, int] = {}        # step -> times it raises, then it works
@@ -111,7 +111,7 @@ class Driver:
         return [c[2] for c in self.calls if c[0] == "do"]
 
 
-def _records(tmp_path, *, alerts_proven=True, gates=(), clean_stage2=True, sha=None):
+def _records(tmp_path, *, alerts_proven=True, gates=(), clean_stage2=True, sha="a" * 40):
     r = sc.Records(tmp_path / "records.jsonl")
     extra = {"sha8": sha[:8]} if sha else {}
     if alerts_proven:
@@ -127,8 +127,8 @@ def _env(ntfy):
     return {alerts.ENV_TOPIC: FAKE_TOPIC, alerts.ENV_BASE_URL: ntfy.base}
 
 
-def _ctl(tmp_path, ntfy, driver, *, gates=("G21", "G22")):
-    return sc.Controller(_records(tmp_path, gates=gates), driver, estate="gb10", env=_env(ntfy))
+def _ctl(tmp_path, ntfy, driver, *, gates=("G18", "G21", "G22")):
+    return sc.Controller(_records(tmp_path, gates=gates), driver, estate="gb10", env=_env(ntfy), build_sha="a" * 40)
 
 
 def _kinds(ctl):
@@ -326,7 +326,7 @@ def test_a_rollback_verification_that_raises_is_a_rollback_failure(tmp_path, ntf
 def test_an_alert_that_cannot_be_sent_never_stops_the_stage_or_its_rollback(tmp_path):
     d = Driver()
     d.fail_check["recreate_eight"] = ["canary_c0_failed"]
-    ctl = sc.Controller(_records(tmp_path), d, estate="gb10", env={})          # no topic: every alert fails
+    ctl = sc.Controller(_records(tmp_path), d, estate="gb10", env={}, build_sha="a" * 40)   # no topic: every alert fails
     result = ctl.run(1, live=True)
     assert result.status == "aborted_rolled_back" and d.dos() == list(sc.STAGES[1].steps) + list(sc.STAGES[1].rollback)
     assert alerts.health_fields({})["alerts_failed"] >= 1
@@ -337,7 +337,7 @@ def test_an_alert_that_cannot_be_sent_never_stops_the_stage_or_its_rollback(tmp_
 @pytest.mark.parametrize("stage", [0, 4, -1, True, "1", None, 1.0])
 def test_an_unknown_stage_is_refused(stage, tmp_path):
     d = Driver()
-    ctl = sc.Controller(_records(tmp_path, gates=("G21", "G22")), d)
+    ctl = sc.Controller(_records(tmp_path, gates=("G18", "G21", "G22")), d)
     with pytest.raises(sc.Refused) as e:
         ctl.run(stage, go_sentence=GO, live=True)
     assert e.value.reason == "unknown_stage" and d.calls == []
@@ -363,7 +363,7 @@ def test_an_alerts_proven_record_that_is_not_ok_does_not_count(tmp_path):
 
 
 def test_stage_two_needs_the_g22_gate_and_stage_three_needs_g21(tmp_path):
-    for stage, missing, have in ((2, "G22", ("G21",)), (3, "G21", ("G22",))):
+    for stage, missing, have in ((2, "G22", ("G18", "G21")), (3, "G21", ("G18", "G22"))):
         d = Driver()
         ctl = sc.Controller(_records(tmp_path / f"s{stage}", gates=have), d)
         with pytest.raises(sc.Refused) as e:
@@ -375,7 +375,7 @@ def test_stage_two_needs_the_g22_gate_and_stage_three_needs_g21(tmp_path):
 @pytest.mark.parametrize("sentence", [None, "", "   ", "x" * 501, 7, FAKE_KEY, "ab" * 20])
 def test_stage_two_and_three_never_run_without_dons_go_sentence(stage, sentence, tmp_path):
     d = Driver()
-    ctl = sc.Controller(_records(tmp_path, gates=("G21", "G22")), d)
+    ctl = sc.Controller(_records(tmp_path, gates=("G18", "G21", "G22")), d)
     with pytest.raises(sc.Refused) as e:
         ctl.run(stage, go_sentence=sentence, live=True)
     assert e.value.reason == "go_sentence_missing" and d.calls == []
@@ -383,7 +383,7 @@ def test_stage_two_and_three_never_run_without_dons_go_sentence(stage, sentence,
 
 def test_stage_one_runs_on_the_alerts_record_alone(tmp_path, ntfy):
     d = Driver()
-    ctl = sc.Controller(_records(tmp_path), d, estate="gb10", env=_env(ntfy))
+    ctl = sc.Controller(_records(tmp_path), d, estate="gb10", env=_env(ntfy), build_sha="a" * 40)
     assert ctl.run(1, live=True).status == "completed"
 
 
@@ -398,10 +398,13 @@ def test_the_go_sentence_is_never_recorded_only_its_length_and_a_hash_prefix(tmp
 
 
 def test_the_go_sentence_is_not_taken_from_the_environment(tmp_path, monkeypatch):
+    # With a build sha, so a live run gets past build_sha_required (rebuild of PR 840): the refusal must be the go
+    # sentence's own, or a controller that took no go sentence at all would pass this test (R-STACK, mutant G25-2).
     monkeypatch.setenv("FIELD_GO_SENTENCE", GO)
-    ctl = sc.Controller(_records(tmp_path, gates=("G22",)), Driver())
-    with pytest.raises(sc.Refused):
+    ctl = sc.Controller(_records(tmp_path, gates=("G18", "G22")), Driver(), estate="gb10", env={}, build_sha="a" * 40)
+    with pytest.raises(sc.Refused) as ei:
         ctl.run(2, live=True)
+    assert ei.value.reason == "go_sentence_missing"
 
 
 # ------------------------------------------------------------------------ records
@@ -448,10 +451,11 @@ def test_the_command_line_has_no_run_and_plans_without_touching_anything(tmp_pat
 def test_the_command_line_records_a_gate_and_refuses_a_gate_record_without_a_name(tmp_path, capsys):
     rec = str(tmp_path / "r.jsonl")
     assert sc.main(["record", "gate", "--records", rec]) == 2
-    assert sc.main(["record", "gate", "G22", "--records", rec]) == 0
+    assert sc.main(["record", "gate", "G22", "--records", rec, "--build-sha", SHA_A]) == 0
     assert sc.Records(rec).gate_ok("G22") and not sc.Records(rec).gate_ok("G21")
-    sc.main(["record", "alerts-proven", "--records", rec])
-    assert sc.main(["plan", "--stage", "2", "--records", rec, "--go-sentence", GO]) == 0
+    assert sc.main(["record", "gate", "G18", "--records", rec, "--build-sha", SHA_A]) == 0 and sc.Records(rec).gate_ok("G18")
+    sc.main(["record", "alerts-proven", "--records", rec, "--build-sha", SHA_A])
+    assert sc.main(["plan", "--stage", "2", "--records", rec, "--go-sentence", GO, "--build-sha", SHA_A]) == 0
 
 
 def test_the_runbook_lists_every_abort_condition_and_every_stage_rollback_step():
@@ -473,7 +477,7 @@ def _fail_records(ctl, *kinds):
     ctl.records.append = append
 
 
-@pytest.mark.parametrize("kind", ["stage_start", "step_done", "stage_done"])
+@pytest.mark.parametrize("kind", ["step_done", "stage_done"])
 @pytest.mark.parametrize("stage", [1, 2, 3])
 def test_a_records_write_that_fails_rolls_the_stage_back_as_a_controller_error(kind, stage, tmp_path, ntfy):
     spec = sc.STAGES[stage]
@@ -482,7 +486,7 @@ def test_a_records_write_that_fails_rolls_the_stage_back_as_a_controller_error(k
     _fail_records(ctl, kind)
     result = ctl.run(stage, go_sentence=GO, live=True)               # nothing propagates to the caller
     assert result.status == "aborted_rolled_back" and result.abort == "controller_error"
-    ran = [] if kind == "stage_start" else list(spec.steps[:1] if kind == "step_done" else spec.steps)
+    ran = list(spec.steps[:1] if kind == "step_done" else spec.steps)
     assert d.dos() == ran + list(spec.rollback) and result.rolled_back == list(spec.rollback)
     assert ntfy.titles().count(alerts.CLASSES["stage_aborted"].title) == 1
 
@@ -490,10 +494,10 @@ def test_a_records_write_that_fails_rolls_the_stage_back_as_a_controller_error(k
 def test_a_records_file_that_fails_for_every_write_still_rolls_back_and_alerts(tmp_path, ntfy):
     d = Driver()
     ctl = _ctl(tmp_path, ntfy, d)
-    _fail_records(ctl, "stage_start", "step_done", "abort", "rollback_step", "rolled_back", "rollback_failed")
+    _fail_records(ctl, "step_done", "abort", "rollback_step", "rolled_back", "rollback_failed")
     result = ctl.run(2, go_sentence=GO, live=True)
     assert result.status == "aborted_rolled_back" and result.rolled_back == list(sc.STAGES[2].rollback)
-    assert d.dos() == list(sc.STAGES[2].rollback)
+    assert d.dos() == list(sc.STAGES[2].steps[:1]) + list(sc.STAGES[2].rollback)
     assert ntfy.titles().count(alerts.CLASSES["stage_aborted"].title) == 1
 
 
@@ -529,28 +533,33 @@ def test_an_empty_counters_baseline_is_a_health_failure_not_a_free_pass(tmp_path
 
 
 def test_a_baseline_that_misses_an_expected_service_is_a_health_failure(tmp_path, ntfy):
-    d = Driver(services=("registry",))
-    ctl = sc.Controller(_records(tmp_path), d, estate="gb10", env=_env(ntfy), expected_services=("registry", "ledger"))
-    result = ctl.run(1, live=True)
+    # Stage 2 checks killswitch and registry; the explicit list ADDS ledger (only additions are allowed, reviewer-8 C1)
+    wider = ("killswitch", "registry", "ledger")
+    gates = ("G18", "G21", "G22")
+    d = Driver(services=("killswitch", "registry"))
+    ctl = sc.Controller(_records(tmp_path, gates=gates), d, estate="gb10", env=_env(ntfy), expected_services=wider,
+                        build_sha=SHA_A)
+    result = ctl.run(2, go_sentence=GO, live=True)
     assert result.abort == "health_failure" and result.steps_done == []
-    d2 = Driver(services=("registry", "ledger"))
-    ok = sc.Controller(_records(tmp_path / "ok"), d2, estate="gb10", env=_env(ntfy), expected_services=("registry", "ledger"))
-    assert ok.run(1, live=True).status == "completed"
+    d2 = Driver(services=wider)
+    ok = sc.Controller(_records(tmp_path / "ok", gates=gates), d2, estate="gb10", env=_env(ntfy), expected_services=wider,
+                       build_sha=SHA_A)
+    assert ok.run(2, go_sentence=GO, live=True).status == "completed"
 
 
 # ------------------------------------------------- stage order and gate binding (red team F-816-4, F-816-5)
 def test_stage_three_needs_a_recorded_clean_stage_two(tmp_path, ntfy):
-    ctl = sc.Controller(_records(tmp_path, gates=("G21", "G22"), clean_stage2=False), Driver(), estate="gb10", env=_env(ntfy))
+    ctl = sc.Controller(_records(tmp_path, gates=("G18", "G21", "G22"), clean_stage2=False), Driver(), estate="gb10", env=_env(ntfy))
     with pytest.raises(sc.Refused) as ei:
         ctl.run(3, go_sentence=GO)
     assert ei.value.reason == "stage_2_not_clean"
-    ok = sc.Controller(_records(tmp_path / "ok", gates=("G21", "G22")), Driver(), estate="gb10", env=_env(ntfy))
+    ok = sc.Controller(_records(tmp_path / "ok", gates=("G18", "G21", "G22")), Driver(), estate="gb10", env=_env(ntfy))
     assert ok.run(3, go_sentence=GO).status == "dry-run"
 
 
 @pytest.mark.parametrize("later", ["stage_start", "abort", "rolled_back", "rollback_failed"])
 def test_a_stage_two_that_was_started_again_aborted_or_rolled_back_is_not_clean(later, tmp_path, ntfy):
-    records = _records(tmp_path, gates=("G21", "G22"))
+    records = _records(tmp_path, gates=("G18", "G21", "G22"))
     records.append(later, stage=2)
     with pytest.raises(sc.Refused) as ei:
         sc.Controller(records, Driver(), estate="gb10", env=_env(ntfy)).run(3, go_sentence=GO)
@@ -560,7 +569,7 @@ def test_a_stage_two_that_was_started_again_aborted_or_rolled_back_is_not_clean(
 
 
 def test_a_stage_done_for_another_stage_does_not_make_stage_two_clean(tmp_path, ntfy):
-    records = _records(tmp_path, gates=("G21", "G22"), clean_stage2=False)
+    records = _records(tmp_path, gates=("G18", "G21", "G22"), clean_stage2=False)
     records.append("stage_done", stage=1)
     records.append("stage_done", stage=3)
     with pytest.raises(sc.Refused) as ei:
@@ -572,7 +581,7 @@ SHA_A, SHA_B = "a" * 40, "b" * 40
 
 
 def test_with_a_build_sha_the_records_must_carry_that_sha(tmp_path, ntfy):
-    records = _records(tmp_path, gates=("G22",), sha=SHA_A)
+    records = _records(tmp_path, gates=("G18", "G22"), sha=SHA_A)
     ok = sc.Controller(records, Driver(), estate="gb10", env=_env(ntfy), build_sha=SHA_A)
     assert ok.run(2, go_sentence=GO).status == "dry-run"
     with pytest.raises(sc.Refused) as ei:                            # a record from an old head stays valid without this
@@ -589,7 +598,7 @@ def test_a_gate_recorded_for_another_sha_is_not_recorded(tmp_path, ntfy):
 
 
 def test_records_without_a_sha_do_not_satisfy_a_run_that_names_a_build_sha(tmp_path, ntfy):
-    records = _records(tmp_path, gates=("G22",))
+    records = _records(tmp_path, gates=("G18", "G22"), sha=None)
     with pytest.raises(sc.Refused) as ei:
         sc.Controller(records, Driver(), estate="gb10", env=_env(ntfy), build_sha=SHA_A).run(2, go_sentence=GO)
     assert ei.value.reason == "alerts_not_proven"
@@ -598,7 +607,7 @@ def test_records_without_a_sha_do_not_satisfy_a_run_that_names_a_build_sha(tmp_p
 @pytest.mark.parametrize("bad", ["", "xyz", "A" * 40, "a" * 6, "a" * 41, 5])
 def test_a_build_sha_that_is_not_lowercase_hex_is_refused(bad, tmp_path, ntfy):
     with pytest.raises(sc.Refused) as ei:
-        sc.Controller(_records(tmp_path, gates=("G22",)), Driver(), estate="gb10", env=_env(ntfy),
+        sc.Controller(_records(tmp_path, gates=("G18", "G22")), Driver(), estate="gb10", env=_env(ntfy),
                       build_sha=bad).run(2, go_sentence=GO)
     assert ei.value.reason == "build_sha_invalid"
 
@@ -607,6 +616,7 @@ def test_the_command_line_binds_a_record_to_a_sha_and_a_plan_checks_it(tmp_path,
     path = str(tmp_path / "r.jsonl")
     assert sc.main(["record", "alerts-proven", "--records", path, "--build-sha", SHA_A]) == 0
     assert sc.main(["record", "gate", "G22", "--records", path, "--build-sha", SHA_A]) == 0
+    assert sc.main(["record", "gate", "G18", "--records", path, "--build-sha", SHA_A]) == 0
     row = [json.loads(x) for x in Path(path).read_text(encoding="utf-8").splitlines()][-1]
     assert row["sha8"] == SHA_A[:8] and SHA_A not in json.dumps(row)         # 8 characters only, never the full sha
     capsys.readouterr()
@@ -677,16 +687,18 @@ def test_the_rehearsal_would_leave_services_in_require_if_the_flag_were_removed_
 def test_a_stage_three_plan_prints_the_irreversibility_notice_and_the_other_stages_do_not(tmp_path, capsys):
     path = str(tmp_path / "r.jsonl")
     r = sc.Records(path)
-    r.append("alerts_proven", ok=True)
-    r.append("gate", gate="G21", ok=True)
-    r.append("gate", gate="G22", ok=True)
+    sha = {"sha8": sc.sha8_of(SHA_A)}               # PR 855 (S2-2): a go sentence needs --build-sha, records bound to it
+    r.append("alerts_proven", ok=True, **sha)
+    r.append("gate", gate="G21", ok=True, **sha)
+    r.append("gate", gate="G22", ok=True, **sha)
+    r.append("gate", gate="G18", ok=True, **sha)   # G25 (rebuild of PR 838): the Stage 2 plan below needs it
     r.append("stage_done", stage=2)
-    assert sc.main(["plan", "--stage", "3", "--records", path, "--go-sentence", GO]) == 0
+    assert sc.main(["plan", "--stage", "3", "--records", path, "--go-sentence", GO, "--build-sha", SHA_A]) == 0
     out = capsys.readouterr().out
     assert "irreversibility: an image rollback is unavailable once REQUIRE is on all eight" in out
     assert "FIELD_OPERATOR_REQUIRE first, never by image alone" in out
     for stage in (1, 2):
-        assert sc.main(["plan", "--stage", str(stage), "--records", path, "--go-sentence", GO]) == 0
+        assert sc.main(["plan", "--stage", str(stage), "--records", path, "--go-sentence", GO, "--build-sha", SHA_A]) == 0
         assert "irreversibility" not in capsys.readouterr().out
 
 
@@ -694,9 +706,288 @@ def test_a_stage_three_plan_prints_the_irreversibility_notice_and_the_other_stag
 def test_a_stage_three_plan_without_a_go_sentence_refuses(sentence, tmp_path, capsys):
     path = str(tmp_path / "r.jsonl")
     r = sc.Records(path)
-    r.append("alerts_proven", ok=True)
-    r.append("gate", gate="G21", ok=True)
+    sha = {"sha8": sc.sha8_of(SHA_A)}               # PR 855 (S2-2): bound to the sha, so the go sentence is what refuses
+    r.append("alerts_proven", ok=True, **sha)
+    r.append("gate", gate="G21", ok=True, **sha)
     r.append("stage_done", stage=2)
-    argv = ["plan", "--stage", "3", "--records", path] + ([] if sentence is None else ["--go-sentence", sentence])
+    argv = ["plan", "--stage", "3", "--records", path, "--build-sha", SHA_A] + (
+        [] if sentence is None else ["--go-sentence", sentence])
     assert sc.main(argv) == 2
     assert "refused: go_sentence_missing" in capsys.readouterr().out
+
+
+# ---- G25: Stage 2 cannot be planned without the G18 clean window, the G22 record, alerts or Don's go sentence
+
+def _stage2_ready(tmp_path, sha=None, **omit):
+    r = sc.Records(tmp_path / "records.jsonl")
+    extra = {"sha8": sha[:8]} if sha else {}
+    if "alerts" not in omit:
+        r.append("alerts_proven", ok=True, **extra)
+    for g in ("G18", "G21", "G22"):
+        if g not in omit:
+            r.append("gate", gate=g, ok=True, **extra)
+    return r
+
+
+def test_stage_two_plans_only_with_every_gate_and_a_go_sentence(tmp_path):
+    sc.preconditions(2, _stage2_ready(tmp_path), GO)                               # all present: no refusal
+
+
+@pytest.mark.parametrize("omit,reason", [("G18", "gate_G18_not_recorded"), ("G22", "gate_G22_not_recorded"),
+                                         ("alerts", "alerts_not_proven")])
+def test_stage_two_plan_refuses_each_missing_record(tmp_path, omit, reason):
+    with pytest.raises(sc.Refused) as e:
+        sc.preconditions(2, _stage2_ready(tmp_path, **{omit: True}), GO)
+    assert e.value.reason == reason
+
+
+@pytest.mark.parametrize("sentence", [None, "", "   "])
+def test_stage_two_plan_refuses_without_a_go_sentence_even_with_every_record(tmp_path, sentence):
+    with pytest.raises(sc.Refused) as e:
+        sc.preconditions(2, _stage2_ready(tmp_path), sentence)
+    assert e.value.reason == "go_sentence_missing"
+
+
+def test_a_g18_record_for_another_build_is_not_a_g18_record(tmp_path):
+    r = _stage2_ready(tmp_path, sha=SHA_A, G18=True)
+    r.append("gate", gate="G18", ok=True, sha8="deadbeef")
+    with pytest.raises(sc.Refused) as e:
+        sc.preconditions(2, r, GO, build_sha=SHA_A)
+    assert e.value.reason == "gate_G18_not_recorded"
+
+
+def test_the_command_line_plan_for_stage_two_refuses_each_gate_in_turn(tmp_path, capsys):
+    rec = str(tmp_path / "r.jsonl")
+    sc.main(["record", "alerts-proven", "--records", rec, "--build-sha", SHA_A])
+    sc.main(["record", "gate", "G22", "--records", rec, "--build-sha", SHA_A])
+    assert sc.main(["plan", "--stage", "2", "--records", rec, "--go-sentence", GO, "--build-sha", SHA_A]) == 2
+    assert "gate_G18_not_recorded" in capsys.readouterr().out
+    sc.main(["record", "gate", "G18", "--records", rec, "--build-sha", SHA_A])
+    assert sc.main(["plan", "--stage", "2", "--records", rec, "--go-sentence", GO, "--build-sha", SHA_A]) == 0
+
+
+# ------------------------------------------------- red team re-review of 832 (RT-832-R1 to R4)
+def test_a_live_run_without_a_build_sha_is_refused_before_anything_runs(tmp_path, ntfy):
+    d = Driver()
+    ctl = sc.Controller(_records(tmp_path), d, estate="gb10", env=_env(ntfy))           # no build_sha
+    with pytest.raises(sc.Refused) as ei:
+        ctl.run(1, live=True)
+    assert ei.value.reason == "build_sha_required" and d.calls == []
+    assert [r["reason"] for r in ctl.records.rows() if r["kind"] == "refused"] == ["build_sha_required"]
+    assert ctl.run(1).status == "dry-run"                                              # a plan stays possible without one
+
+
+@pytest.mark.parametrize("stage,named", [(1, ("registry",)), (2, ("registry",)), (2, ("killswitch",)), (3, ("killswitch", "registry"))])
+def test_a_baseline_that_names_too_few_services_for_the_stage_is_a_health_failure(stage, named, tmp_path, ntfy):
+    d = Driver(services=named)
+    result = _ctl(tmp_path, ntfy, d).run(stage, go_sentence=GO, live=True)
+    assert result.abort == "health_failure" and result.steps_done == []
+
+
+def test_stage_two_needs_only_the_killswitch_and_the_registry_in_the_baseline(tmp_path, ntfy):
+    d = Driver(services=("killswitch", "registry"))
+    assert _ctl(tmp_path, ntfy, d).run(2, go_sentence=GO, live=True).status == "completed"
+
+
+def test_an_explicit_list_narrower_than_the_stage_is_refused_before_anything(tmp_path, ntfy):
+    # reviewer-8 C1 (controller ruling): a list may only add to the stage's own services, never leave one out
+    d = Driver(services=("registry",))
+    ctl = sc.Controller(_records(tmp_path), d, estate="gb10", env=_env(ntfy), build_sha=SHA_A, expected_services=("registry",))
+    with pytest.raises(sc.Refused) as ei:
+        ctl.run(1, live=True)
+    assert ei.value.reason == "services_narrower_than_stage"
+    assert d.calls == [] and "stage_start" not in _kinds(ctl)
+    assert [r["reason"] for r in ctl.records.rows() if r["kind"] == "refused"] == ["services_narrower_than_stage"]
+
+
+def test_an_explicit_list_that_adds_to_the_stage_runs(tmp_path, ntfy):
+    wider = ("killswitch", "registry", "governor")
+    ctl = sc.Controller(_records(tmp_path, gates=("G18", "G21", "G22")), Driver(services=wider), estate="gb10",
+                        env=_env(ntfy), build_sha=SHA_A, expected_services=wider)
+    assert ctl.run(2, go_sentence=GO, live=True).status == "completed"
+
+
+@pytest.mark.parametrize("later", ["abort", "rolled_back", "rollback_failed"])
+def test_a_stage_three_abort_or_rollback_makes_stage_two_not_clean(later, tmp_path, ntfy):
+    records = _records(tmp_path, gates=("G21", "G22"))
+    records.append(later, stage=3)
+    with pytest.raises(sc.Refused) as ei:
+        sc.Controller(records, Driver(), estate="gb10", env=_env(ntfy)).run(3, go_sentence=GO)
+    assert ei.value.reason == "stage_2_not_clean"
+    records.append("stage_done", stage=2)                       # Stage 2 re-armed and recorded: clean again
+    if later != "rolled_back":
+        # Stage 3's own run is still unresolved (RT-HARD-3 on main: an abort with no terminal row is in progress, a
+        # failed rollback waits for a hand): Stage 2 being clean does not lift that, `record ack-rollback --stage 3` does.
+        with pytest.raises(sc.Refused) as ei:
+            sc.Controller(records, Driver(), estate="gb10", env=_env(ntfy)).run(3, go_sentence=GO)
+        assert ei.value.reason == ("stage_in_progress" if later == "abort" else "rollback_failed_unresolved")
+        records.append("rollback_ack", stage=3)
+    assert sc.Controller(records, Driver(), estate="gb10", env=_env(ntfy)).run(3, go_sentence=GO).status == "dry-run"
+
+
+def test_an_abort_of_an_earlier_stage_does_not_unclean_a_later_one(tmp_path):
+    records = _records(tmp_path, gates=("G21", "G22"))
+    records.append("abort", stage=1)
+    assert records.stage_clean(2) is True
+
+
+def test_a_failed_stage_start_record_arms_nothing_and_rolls_nothing_back(tmp_path, ntfy):
+    d = Driver()
+    ctl = _ctl(tmp_path, ntfy, d)
+    _fail_records(ctl, "stage_start")
+    result = ctl.run(2, go_sentence=GO, live=True)
+    assert result.status == "aborted_nothing_armed" and result.abort == "controller_error"
+    assert d.dos() == [] and result.rolled_back == []                 # an untouched estate is not restarted
+    assert [r["stage"] for r in ctl.records.rows() if r["kind"] == "abort"] == [2]      # the abort is still recorded
+    assert ntfy.titles().count(alerts.CLASSES["stage_aborted"].title) == 1
+
+
+# ------------------------------------------------- reviewer-7 conditions on PR 840 (literal lists, empty override)
+def test_the_service_lists_are_pinned_literally():
+    compose = ("registry", "ledger", "delegation", "killswitch", "governor", "fedbroker", "console", "lifecycle")
+    assert sc.EIGHT_SERVICES == compose and len(set(compose)) == 8
+    assert sc.STAGES[1].services == compose and sc.STAGES[3].services == compose
+    assert sc.STAGES[2].services == ("killswitch", "registry")
+
+
+@pytest.mark.parametrize("stage,names", [(1, sc.EIGHT_SERVICES), (3, sc.EIGHT_SERVICES), (2, ("killswitch", "registry"))])
+def test_a_driver_naming_exactly_the_literal_list_completes_the_stage(stage, names, tmp_path, ntfy):
+    assert _ctl(tmp_path, ntfy, Driver(services=names)).run(stage, go_sentence=GO, live=True).status == "completed"
+
+
+@pytest.mark.parametrize("missing", ["registry", "ledger", "delegation", "killswitch", "governor", "fedbroker", "console", "lifecycle"])
+def test_each_of_the_eight_names_is_required_in_stage_one(missing, tmp_path, ntfy):
+    named = tuple(s for s in sc.EIGHT_SERVICES if s != missing)
+    result = _ctl(tmp_path, ntfy, Driver(services=named)).run(1, go_sentence=GO, live=True)
+    assert result.abort == "health_failure" and result.steps_done == []
+
+
+def test_the_stage_zero_label_federation_does_not_satisfy_the_baseline(tmp_path, ntfy):
+    named = tuple("federation" if s == "fedbroker" else s for s in sc.EIGHT_SERVICES)
+    result = _ctl(tmp_path, ntfy, Driver(services=named)).run(1, go_sentence=GO, live=True)
+    assert result.abort == "health_failure" and result.steps_done == []
+
+
+@pytest.mark.parametrize("override", [(), [], ""])
+def test_an_empty_expected_services_override_is_the_stage_list_not_no_check(override, tmp_path, ntfy):
+    ctl = sc.Controller(_records(tmp_path), Driver(services=("registry",)), estate="gb10", env=_env(ntfy),
+                        build_sha=SHA_A, expected_services=override)
+    assert ctl.expected_services is None
+    result = ctl.run(1, live=True)
+    assert result.abort == "health_failure" and result.steps_done == []        # one name is not the eight
+
+
+@pytest.mark.parametrize("bad", [("federation",), ("registry", "federation"), ("fed",), "registry", ("Registry",)])
+def test_an_override_with_a_name_that_is_not_a_compose_name_is_refused_loudly(bad, tmp_path, ntfy):
+    with pytest.raises(ValueError, match="compose names"):
+        sc.Controller(_records(tmp_path), Driver(), estate="gb10", env=_env(ntfy), build_sha=SHA_A, expected_services=bad)
+
+
+def test_every_compose_name_is_accepted_as_an_override(tmp_path, ntfy):
+    for name in sc.EIGHT_SERVICES:
+        ctl = sc.Controller(_records(tmp_path), Driver(), estate="gb10", env=_env(ntfy), expected_services=(name,))
+        assert ctl.expected_services == (name,)
+
+
+def _clean_records(tmp_path, stage=2):
+    path = str(tmp_path / "r.jsonl")
+    r = sc.Records(path)
+    sha = {"sha8": sc.sha8_of(SHA_A)}
+    r.append("alerts_proven", ok=True, **sha)
+    r.append("gate", gate="G22", ok=True, **sha)
+    r.append("gate", gate="G18", ok=True, **sha)     # G25 (rebuild of PR 838): Stage 2 needs it
+    return path
+
+@pytest.mark.parametrize("stage, expect", [(1, sc.EIGHT_SERVICES), (2, ("killswitch", "registry")), (3, sc.EIGHT_SERVICES)])
+def test_plan_without_services_prints_the_stages_own_list(stage, expect, tmp_path, capsys):
+    path = str(tmp_path / "r.jsonl")
+    r = sc.Records(path)
+    sha = {"sha8": sc.sha8_of(SHA_A)}
+    r.append("alerts_proven", ok=True, **sha)
+    r.append("gate", gate="G21", ok=True, **sha)
+    r.append("gate", gate="G22", ok=True, **sha)
+    r.append("gate", gate="G18", ok=True, **sha)
+    r.append("stage_done", stage=2)
+    argv = ["plan", "--stage", str(stage), "--records", path]
+    if stage > 1:
+        argv += ["--go-sentence", GO, "--build-sha", SHA_A]
+    assert sc.main(argv) == 0
+    assert ("services: " + ", ".join(expect)) in capsys.readouterr().out
+
+
+def test_plan_with_services_shows_exactly_that_list_in_that_order(tmp_path, capsys):
+    path = _clean_records(tmp_path)
+    assert sc.main(["plan", "--stage", "2", "--records", path, "--go-sentence", GO, "--build-sha", SHA_A,
+                    "--services", "registry, killswitch ,governor"]) == 0
+    assert "services: registry, killswitch, governor" in capsys.readouterr().out.splitlines()
+
+
+@pytest.mark.parametrize("value", ["", "  ", ",", "registry,,killswitch", "registry,"])
+def test_an_empty_services_list_or_an_empty_name_is_refused(value, tmp_path, capsys):
+    path = _clean_records(tmp_path)
+    assert sc.main(["plan", "--stage", "2", "--records", path, "--go-sentence", GO, "--build-sha", SHA_A,
+                    "--services", value]) == 2
+    out = capsys.readouterr().out
+    assert "refused: services_empty" in out and "services:" not in out.replace("refused: services_empty", "")
+
+
+@pytest.mark.parametrize("value", ["federation", "registry,nope", "REGISTRY", "kill-switch"])
+def test_an_unknown_service_name_is_refused_with_the_compose_names(value, tmp_path, capsys):
+    path = _clean_records(tmp_path)
+    assert sc.main(["plan", "--stage", "2", "--records", path, "--go-sentence", GO, "--build-sha", SHA_A,
+                    "--services", value]) == 2
+    out = capsys.readouterr().out
+    assert "refused: services_unknown" in out and "fedbroker" in out
+
+
+def test_a_go_sentence_without_a_build_sha_is_refused_and_a_plan_without_one_is_not(tmp_path, capsys):
+    path = _clean_records(tmp_path)
+    assert sc.main(["plan", "--stage", "2", "--records", path, "--go-sentence", GO]) == 2
+    assert "refused: build_sha_required" in capsys.readouterr().out
+    assert sc.main(["plan", "--stage", "1", "--records", str(tmp_path / "x.jsonl")]) == 2    # no alerts proof: other refusal
+    r = sc.Records(str(tmp_path / "y.jsonl"))
+    r.append("alerts_proven", ok=True)
+    assert sc.main(["plan", "--stage", "1", "--records", str(tmp_path / "y.jsonl")]) == 0     # no go sentence, no sha needed
+
+
+def test_the_services_flag_reaches_the_controller_as_expected_services(tmp_path, monkeypatch):
+    seen = {}
+    real = sc.Controller
+
+    class Spy(real):
+        def __init__(self, *a, **k):
+            seen.update(k)
+            super().__init__(*a, **k)
+
+    monkeypatch.setattr(sc, "Controller", Spy)
+    path = _clean_records(tmp_path)
+    assert sc.main(["plan", "--stage", "2", "--records", path, "--go-sentence", GO, "--build-sha", SHA_A,
+                    "--services", "registry,killswitch"]) == 0
+    assert tuple(seen["expected_services"]) == ("registry", "killswitch") and seen["build_sha"] == SHA_A
+    seen.clear()
+    assert sc.main(["plan", "--stage", "2", "--records", path, "--go-sentence", GO, "--build-sha", SHA_A]) == 0
+    assert seen["expected_services"] is None
+
+
+@pytest.mark.parametrize("value", ["registry", "killswitch", "governor,ledger"])
+def test_plan_with_a_services_list_narrower_than_the_stage_is_refused(value, tmp_path, capsys):
+    # reviewer-8 C1 (controller ruling): Stage 2 checks killswitch and registry; a list that leaves one out is refused
+    path = _clean_records(tmp_path)
+    assert sc.main(["plan", "--stage", "2", "--records", path, "--go-sentence", GO, "--build-sha", SHA_A,
+                    "--services", value]) == 2
+    assert "refused: services_narrower_than_stage" in capsys.readouterr().out
+
+
+def test_the_runbook_shows_the_two_flags_and_the_matching_expected_services():
+    text = (ROOT / "docs" / "runbooks" / "v1.2-deploy-rollback.md").read_text(encoding="utf-8")
+    section = text[text.index("## Stage controller (P36, G24)"):]
+    for needle in ("--services", "--build-sha", "build_sha_required", "expected_services", "services_unknown"):
+        assert needle in section, needle
+
+
+@pytest.mark.parametrize("sentence", ["", "   ", GO])
+def test_any_go_sentence_argument_even_an_empty_one_needs_a_build_sha(sentence, tmp_path, capsys):
+    path = _clean_records(tmp_path)
+    assert sc.main(["plan", "--stage", "2", "--records", path, "--go-sentence", sentence]) == 2
+    assert "refused: build_sha_required" in capsys.readouterr().out
+
