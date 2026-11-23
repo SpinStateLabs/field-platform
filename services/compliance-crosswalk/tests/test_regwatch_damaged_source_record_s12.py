@@ -29,6 +29,7 @@ def _damage(store, url, record):
 
 
 BAD_RECORDS = [
+    pytest.param(None, id="null"),
     pytest.param({}, id="empty-dict"),
     pytest.param(5, id="int"),
     pytest.param("text", id="str"),
@@ -138,6 +139,9 @@ def test_C2_a_damaged_mirror_record_and_a_change_on_the_other_mirror_in_the_same
     by_url = {s["url"]: s["status"] for s in row["sources"]}
     assert by_url[SRC_EU_ART12] == "store-damaged" and by_url[SRC_EU_ART14] == "changed"
     assert row["status"] == "changed" and report["exit_code"] == regwatch.EXIT_CHANGED
+    # F2: the change next to the damaged record is FLAGGED and the flag is stored (not just reported once)
+    assert row["flag_active"] is True and "eu-ai-act" in report["flagged"]
+    assert [f["framework"] for f in store.active()] == ["eu-ai-act"]
     assert json.loads(store.path.read_text(encoding="utf-8"))["sources"][SRC_EU_ART12] == 5   # left as stored
     assert before_art12 != 5
 
@@ -151,3 +155,48 @@ def test_C3_a_non_dict_record_is_never_echoed_by_run_check_or_check_file(store, 
     with pytest.raises(regwatch.ManualFileRefused) as exc:
         regwatch.check_file("osfi-e23", src, "tester", store=store)
     assert "SECRET-STORED-VALUE" not in str(exc.value)
+
+
+def test_F3_the_reverse_order_a_change_on_the_first_mirror_and_a_damaged_record_on_the_second(store):  # noqa: F811
+    official_down = {SRC_EU_OFFICIAL: ConnectionError("down")}
+    regwatch.run_check(store, FakeFetcher(official_down))                 # baseline the mirror tier
+    _write_record(store, SRC_EU_ART14, 5)
+    report = regwatch.run_check(store, FakeFetcher({**official_down, SRC_EU_ART12: page("Article 12 text is entirely different now.")}))
+    row = by_framework(report)["eu-ai-act"]
+    by_url = {s["url"]: s["status"] for s in row["sources"]}
+    assert by_url[SRC_EU_ART12] == "changed" and by_url[SRC_EU_ART14] == "store-damaged"
+    assert row["status"] == "changed" and report["exit_code"] == regwatch.EXIT_CHANGED
+    assert row["flag_active"] is True and "eu-ai-act" in report["flagged"]
+    assert [f["framework"] for f in store.active()] == ["eu-ai-act"]
+    assert json.loads(store.path.read_text(encoding="utf-8"))["sources"][SRC_EU_ART14] == 5
+
+
+def test_F1_a_stored_null_with_a_real_change_is_loud_not_a_silent_baseline(store):  # noqa: F811
+    """On main a stored JSON null was read as "never seen", reported as a baseline and overwritten with the new hash: the
+    regulator's change was lost with exit 0 and no flag. It is now a named store-damaged row, exit 2, left as stored."""
+    regwatch.run_check(store, FakeFetcher())
+    _write_record(store, SRC_NIST, None)
+    changed = FakeFetcher({SRC_NIST: page("NIST text that is entirely different now.")})
+    report = regwatch.run_check(store, changed)
+    row = by_framework(report)["nist-ai-rmf"]
+    assert row["status"] == "store-damaged" and report["exit_code"] == regwatch.EXIT_UNREACHABLE != 0
+    assert SRC_NIST in report["unreachable"]
+    assert json.loads(store.path.read_text(encoding="utf-8"))["sources"][SRC_NIST] is None   # NOT overwritten with the new hash
+    assert store.has_source_record(SRC_NIST) and store.source_record(SRC_NIST) is None
+
+
+def test_F1_a_url_that_was_never_stored_is_still_a_baseline(store):  # noqa: F811
+    assert not store.has_source_record(SRC_NIST)
+    report = regwatch.run_check(store, FakeFetcher())
+    assert by_framework(report)["nist-ai-rmf"]["status"] == "baseline" and report["exit_code"] == 0
+    assert store.has_source_record(SRC_NIST)
+
+
+def test_F1_check_file_refuses_a_stored_null_and_writes_nothing(store, tmp_path):  # noqa: F811
+    regwatch.run_check(store, FakeFetcher())
+    _write_record(store, SRC_OSFI, None)
+    src = tmp_path / "osfi.html"
+    src.write_bytes(FakeFetcher().default)
+    with pytest.raises(regwatch.ManualFileRefused):
+        regwatch.check_file("osfi-e23", src, "tester", store=store)
+    assert json.loads(store.path.read_text(encoding="utf-8"))["sources"][SRC_OSFI] is None

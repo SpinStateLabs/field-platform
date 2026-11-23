@@ -366,6 +366,10 @@ def _compare(store: StaleStore, obs: dict, checked_at: str) -> tuple[dict, str |
         prior = store.source_record(obs["url"])   # dict(record): a TypeError / ValueError for a non-dict
     except (TypeError, ValueError):
         return {**row, "status": STORE_DAMAGED, "error": _DAMAGED_TEXT}, None
+    if prior is None and store.has_source_record(obs["url"]):
+        # a stored JSON null is NOT "never seen": treating it as a baseline would overwrite it with the new hash and lose
+        # a real regulator change with exit 0 (wave2-engineer F1)
+        return {**row, "status": STORE_DAMAGED, "error": _DAMAGED_TEXT}, None
     if prior is not None and not _record_usable(prior):
         return {**row, "status": STORE_DAMAGED, "error": _DAMAGED_TEXT}, None
     record = {

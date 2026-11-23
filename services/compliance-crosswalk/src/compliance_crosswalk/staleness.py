@@ -380,6 +380,12 @@ class StaleStore:
         record = self._sources.get(url)
         return dict(record) if record is not None else None
 
+    def has_source_record(self, url: str) -> bool:
+        """True when the store file holds a key for ``url`` at all, even one whose value is JSON ``null`` or not an
+        object: ``source_record`` answers None for both "never seen" and a stored ``null``, and only the first is a
+        baseline (S12-26, wave2-engineer F1)."""
+        return url in self._sources
+
     def sources(self) -> dict[str, dict]:
         return {url: dict(record) for url, record in self._sources.items()}
 
