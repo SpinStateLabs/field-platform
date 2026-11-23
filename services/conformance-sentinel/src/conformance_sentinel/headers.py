@@ -5,7 +5,10 @@
 governor's status reads and the delegation introspection carry no operator guard, so those clients send the
 perimeter secret and nothing else. The measurement CLI provisions an agent and a token through the registry and the
 delegation service: those two clients carry the pair on the receiver's guarded writes only
-(``POST /agents``, ``POST /tokens`` and the routes in field-core's tables), and never to another origin."""
+(``POST /agents``, ``POST /tokens`` and the routes in field-core's tables), and never to another origin.
+
+Every client sets ``follow_redirects=False`` explicitly (Backlog B4): httpx's default is already False, but a redirect
+would carry the perimeter secret to wherever the Location points, so the choice is pinned here, not inherited."""
 
 from __future__ import annotations
 
@@ -32,14 +35,17 @@ def _pair() -> tuple[str, str] | None:
 
 def sentinel_client(base: str, *, timeout: float = 15.0, transport=None) -> httpx.Client:
     """A client of the sentinel: no operator guard on its routes, so the secret alone."""
-    return httpx.Client(base_url=base, timeout=timeout, headers=perimeter_headers(), transport=transport)
+    return httpx.Client(base_url=base, timeout=timeout, headers=perimeter_headers(), transport=transport,
+                        follow_redirects=False)
 
 
 def registry_client(base: str, *, timeout: float = 10.0, transport=None) -> httpx.Client:
     return httpx.Client(base_url=base, timeout=timeout, headers=perimeter_headers(),
-                        auth=GuardedOperatorAuth(base, _pair(), REGISTRY_GUARDED), transport=transport)
+                        auth=GuardedOperatorAuth(base, _pair(), REGISTRY_GUARDED), transport=transport,
+                        follow_redirects=False)
 
 
 def delegation_client(base: str, *, timeout: float = 10.0, transport=None) -> httpx.Client:
     return httpx.Client(base_url=base, timeout=timeout, headers=perimeter_headers(),
-                        auth=GuardedOperatorAuth(base, _pair(), DELEGATION_GUARDED), transport=transport)
+                        auth=GuardedOperatorAuth(base, _pair(), DELEGATION_GUARDED), transport=transport,
+                        follow_redirects=False)
