@@ -417,7 +417,9 @@ def _named_halt_uncovered(registry: Any, results: list[dict[str, Any]]) -> tuple
         if not isinstance(row, dict) or row.get("status") in ("retired", "killed"):
             continue
         d = row["domain"] if row.get("domain") is not None else "general"
-        if isinstance(d, str) and REGISTRY_DOMAIN_RE.fullmatch(d.strip()):
+        # strip(" ") exactly as the registry filter's SQLite trim() (U+0020 only): str.strip() would also drop a TAB, a LF or a
+        # no-break space, judge "finance" + NBSP conforming, and leave out the very row the listing for "finance" missed
+        if isinstance(d, str) and REGISTRY_DOMAIN_RE.fullmatch(d.strip(" ")):
             continue
         aid = row.get("agent_id")
         aid = aid if isinstance(aid, str) and len(aid) <= 128 and AGENT_ID_RE.fullmatch(aid) else None
