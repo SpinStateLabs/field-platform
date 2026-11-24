@@ -58,7 +58,7 @@ jobs:
           pip install $C --no-deps -e "packages/field-agent"
           # defence-shield/agent-incident-retro: pydantic, typer, field-core come from field-core above.
           pip install $C --no-deps -e "defence-shield/agent-incident-retro"
-          pip install $C fastapi uvicorn httpx pytest
+          pip install $C fastapi uvicorn httpx pytest vulture
       - name: Vendored field-agent templates in sync
         if: matrix.shard == 1
         run: bash plugins/field-agent/verify_sync.sh
@@ -100,6 +100,16 @@ jobs:
             2) FILES=$(ls tools/tests/test_*.py | grep -vxF -f <(printf '%s\n' $HEAVY)); [ -n "$FILES" ] || { echo "shard 2 is empty: every tools test module is in HEAVY" >&2; exit 1; }; printf '%s\n' $FILES | xargs -r pytest -q ;;
             *) echo "unknown TOOLS_SHARD=$TOOLS_SHARD" >&2; exit 1 ;;
           esac
+      - name: Dead-code gate (vulture, 80% confidence, packages and services)
+        # B-11: fails on a NEW unused import, unused function argument or unreachable code in packages/*/src and
+        # services/*/src (unused functions, classes and methods are not reported at 80% confidence, and a name
+        # that is used anywhere else in those trees is never reported as unused); the six framework-signature
+        # parameters are listed in tools/vulture_gate.py (exact entries, a stale entry fails too). vulture is
+        # installed above from integration/ci-constraints.txt. The tree it scans is the same on both shards, so it
+        # runs on shard 2 only (beside the deployed-topology lint); tools/tests/test_vulture_gate_b11.py accepts
+        # exactly this condition and nothing else.
+        if: matrix.shard == 2
+        run: python tools/vulture_gate.py
       - name: Deployed-topology lint (fail-open env vars armed on deployed estates)
         # Red-team plan item M3. Statically reads the shipped compose/Fly
         # descriptors; fails if FIELD_SHARED_SECRET or FIELD_DOA_ROSTER is not
