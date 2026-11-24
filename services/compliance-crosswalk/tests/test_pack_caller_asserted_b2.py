@@ -285,3 +285,21 @@ class _NoStale:
 
     def status(self):
         return {"active": [], "corpus_version": "test"}
+
+
+# ---- reviewer-R2 C1 (controller ruling on 570159e): the JSON `evidenced` field is never True on the caller's word --
+
+@pytest.mark.parametrize("case", ["no_agent_id", "full_outage"])
+def test_c1_no_control_is_evidenced_on_the_callers_word(client, monkeypatch, case):
+    """Kills mutant K2 (a caller positive set to evidenced True). Reads the pack JSON field itself, every control."""
+    _live(monkeypatch, EvidenceSources())                    # full outage: no live service answers
+    req = {"signer": SIGNER, "manifest": resolved_manifest(), "sources": FORGED}
+    if case == "full_outage":
+        req["agent_id"] = "agent-1"
+    r = client.post("/pack", json=req)
+    assert r.status_code == 200, r.text
+    controls = r.json()["pack"]["controls"]
+    assert [c["control_id"] for c in controls if c["evidenced"] is True] == []
+    for c in controls:
+        if c["control_id"] in SOURCE_BACKED:
+            assert c["evidenced"] is None, c["control_id"]   # caller-asserted: an honest unknown, never True
