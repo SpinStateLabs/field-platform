@@ -24,7 +24,16 @@ def test_ci_installs_the_retro_package_and_runs_its_tests_and_the_tools_tests():
     # the premise: if CI stops doing these, this pin should be revisited, not silently pass
     assert 'pip install $C --no-deps -e "defence-shield/agent-incident-retro"' in CI
     assert "(cd defence-shield/agent-incident-retro && python -m pytest -q tests)" in CI
-    assert "run: pytest -q tools/tests" in CI
+    # B-21 (PR 796): CI runs tools/tests in two matrix shards, not as one `pytest -q tools/tests` line. The premise is
+    # that the shards TOGETHER run every tools/tests module: shard 1 is the literal HEAVY list, shard 2 the computed rest
+    # (test_ci_tools_shards.problems checks that wiring), and their union is every tools/tests/test_*.py, none twice.
+    import test_ci_tools_shards as shards
+
+    assert shards.problems(CI) == []
+    heavy, literal = shards._lists(shards._tools_step(shards._job(CI)))
+    every = {p.relative_to(ROOT).as_posix() for p in (ROOT / "tools" / "tests").glob("test_*.py")}
+    shard2 = every - set(heavy)
+    assert set(literal) == set(heavy) <= every and shard2 and set(literal) | shard2 == every
 
 
 @pytest.mark.parametrize("needle", [

@@ -232,6 +232,7 @@ def test_ci_installs_vulture_through_the_pinned_constraints():
 
 
 GATE_RUN = "python tools/vulture_gate.py"
+GATE_SHARD_CONDITION = "matrix.shard == 2"
 
 
 def wiring_problems(text: str) -> list[str]:
@@ -242,10 +243,19 @@ def wiring_problems(text: str) -> list[str]:
         return [f"{len(gate)} gate steps, wanted exactly 1"]
     out = []
     for key in ("continue-on-error", "if"):
-        if key in gate[0]:
-            out.append(f"the gate step has {key!r}")
         if key in job:
             out.append(f"the tests job has {key!r}")
+    if "continue-on-error" in gate[0]:
+        out.append("the gate step has 'continue-on-error'")
+    # B-21 (PR 796) runs the tests job as two matrix shards; the gate scans the same tree on both, so it runs on ONE:
+    # exactly `if: matrix.shard == 2`, on a shard the matrix has. Any other condition (advisory, never, a missing
+    # shard) is a way to skip it.
+    cond = gate[0].get("if")
+    shards = (job.get("strategy") or {}).get("matrix", {}).get("shard") or []
+    if cond is not None and (str(cond).strip() != GATE_SHARD_CONDITION or 2 not in shards):
+        out.append(f"the gate step has 'if' {cond!r}, not {GATE_SHARD_CONDITION!r} on an existing shard")
+    if cond is None and shards:
+        out.append("the gate step has no shard condition and would run on every shard")
     return out
 
 
@@ -258,6 +268,10 @@ WIRING_MUTANTS = {
     "an if on the gate step (C04)": (f"        run: {GATE_RUN}\n", f"        run: {GATE_RUN}\n        if: github.event_name == 'never'\n"),
     "continue-on-error on the tests job": ("  tests:\n    runs-on: ubuntu-latest\n", "  tests:\n    runs-on: ubuntu-latest\n    continue-on-error: true\n"),
     "the gate step runs twice": (f"        run: {GATE_RUN}\n", f"        run: {GATE_RUN}\n      - run: {GATE_RUN}\n"),
+    "the gate moved to a shard that does not exist": ("        if: matrix.shard == 2\n        run: python tools/vulture_gate.py\n",
+                                                      "        if: matrix.shard == 3\n        run: python tools/vulture_gate.py\n"),
+    "the gate's shard condition dropped (runs on every shard)": ("        if: matrix.shard == 2\n        run: python tools/vulture_gate.py\n",
+                                                                 "        run: python tools/vulture_gate.py\n"),
 }
 
 
