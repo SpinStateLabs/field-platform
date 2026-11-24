@@ -59,10 +59,12 @@ What ``verify_bundle`` proves, and what it does not:
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
+from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from pydantic import BaseModel, ConfigDict, NonNegativeInt, ValidationError
@@ -188,8 +190,9 @@ def _signer_public_pem(private_key_pem: str) -> str:
         private = serialization.load_pem_private_key(
             private_key_pem.encode("ascii"), password=None
         )
-    except (TypeError, ValueError) as exc:
-        raise InvalidSigningKey(f"signing key is not a readable PEM private key: {exc}") from exc
+    except (TypeError, ValueError, UnsupportedAlgorithm) as exc:  # unknown OID is not a ValueError
+        raise InvalidSigningKey(
+            f"signing key is not a readable PEM private key ({type(exc).__name__})") from exc
     if not isinstance(private, Ed25519PrivateKey):
         raise InvalidSigningKey("signing key is not Ed25519")
     return private.public_key().public_bytes(
@@ -215,6 +218,8 @@ def _new_bundle_dir(out_dir: Path, now: datetime) -> Path:
 def _write_text(path: Path, text: str) -> None:
     with path.open("w", encoding="utf-8", newline="\n") as fh:
         fh.write(text)
+        fh.flush()
+        os.fsync(fh.fileno())
 
 
 def write_bundle(
@@ -422,8 +427,8 @@ def _verify(
             )
         try:
             supplied = key_fingerprint(public_key_pem)
-        except ValueError as exc:
-            raise _Fail(f"supplied public key is not usable: {exc}") from exc
+        except (ValueError, UnsupportedAlgorithm) as exc:
+            raise _Fail(f"supplied public key is not usable ({type(exc).__name__})") from exc
         if supplied != sig.key_fingerprint:
             raise _Fail(
                 f"wrong key: supplied key fingerprint {supplied[:12]}… but the bundle "

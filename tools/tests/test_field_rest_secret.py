@@ -14,7 +14,7 @@ in the REAL Windows PowerShell against:
 Every run asserts that no secret value appears in anything PowerShell printed,
 including under `Set-PSDebug -Trace 2` and against an upstream that reflects the
 header into every field it returns.
-Tests never touch C:\\Users\\donal\\.field-local: FIELD_SECRET_FILE always
+Tests never touch the real .field-local directory: FIELD_SECRET_FILE always
 points into tmp_path. Skipped where powershell.exe does not exist.
 """
 
@@ -69,7 +69,7 @@ def _code_lines(source: str) -> str:
 
 
 def _safe_env(env: dict[str, str], shim: Path, tmp_path: Path) -> dict[str, str]:
-    """Every PowerShell run must be unable to reach C:\\Users\\donal\\.field-local. The real shim
+    """Every PowerShell run must be unable to reach the real .field-local directory. The real shim
     names that directory in code, and before 1.3's fix it silently replaced a FIELD_TOKENS_FILE that
     did not exist with the real token file there (a real ssl token was once sent to a local harness
     that way). So a run of the real shim names an EXISTING token file inside tmp_path; only a copy
@@ -85,18 +85,32 @@ def _safe_env(env: dict[str, str], shim: Path, tmp_path: Path) -> dict[str, str]
     return env
 
 
+# C-726 (reviewer C-693 F-C693-1): the decoy finds the shim's real defaults by SHAPE, and
+# test_windows_pins_without_powershell_c726.py checks that this shape matches the shim's code exactly once per default.
+# Since B14 the defaults are built from $HOME (`Join-Path $HOME '.field-local\<name>'`), so no account is named here.
+_PROFILE = r"Join-Path \$HOME '\.field-local\\"
+
+
+def _real_default(name: str) -> "re.Pattern[str]":
+    return re.compile(_PROFILE + re.escape(name) + "'")
+
+
 def decoy_shim(tmp_path: Path, real_tokens: Path, home: Path) -> Path:
-    """A copy of the REAL shim whose only change is its path literals: the rog-command token file
-    becomes `real_tokens`, the $HOME default becomes `home`, the default secret file a tmp path.
+    """A copy of the REAL shim whose only change is its path defaults: the $HOME token default becomes
+    `home`, the $HOME secret default a tmp path. `real_tokens` is a decoy the test plants where the old
+    one-account fallback pointed (B14 removed it): no run may ever read it.
     Every line of logic is the shim's own, so a fallback in it shows up here, against files the
     test owns, instead of against the real .field-local."""
     source = SHIM.read_text(encoding="utf-8")
-    swaps = {r"C:\Users\donal\.field-local\tokens-gb10.json": str(real_tokens),
-             r"C:\Users\donal\.field-local\gb10-estate-secret": str(tmp_path / "decoy-default-secret"),
-             r"Join-Path $HOME '.field-local\tokens-gb10.json'": f"Join-Path '{home}' 'tokens-gb10.json'"}
+    swaps = {_real_default("gb10-estate-secret"): f"Join-Path '{tmp_path}' 'decoy-default-secret'",
+             _real_default("tokens-gb10.json"): f"Join-Path '{home}' 'tokens-gb10.json'"}
     for old, new in swaps.items():
-        assert old in source, old
-        source = source.replace(old, new)
+        if isinstance(old, re.Pattern):
+            source, hits = old.subn(lambda _m, new=new: new, source)
+            assert hits, old.pattern
+        else:
+            assert old in source, old
+            source = source.replace(old, new)
     code = _code_lines(source).lower()
     assert ".field-local" not in code and "$home" not in code, "the decoy still names a real path"
     path = tmp_path / "decoy-field-rest.ps1"
@@ -382,16 +396,17 @@ def test_a_tokens_file_the_environment_names_is_never_replaced_by_another_file(t
     assert capture.requests == []
 
 
-def test_without_tokens_file_in_the_environment_the_default_and_its_fallback_are_kept(tmp_path, capture):
-    """Unchanged behaviour when FIELD_TOKENS_FILE is unset: the $HOME default, else the rog-command file."""
+def test_without_tokens_file_in_the_environment_only_the_home_default_is_used(tmp_path, capture):
+    """FIELD_TOKENS_FILE unset: the $HOME default and nothing else (B14 removed the one-account fallback). A missing
+    default is no token, never the decoy planted where the fallback used to point."""
     real = tmp_path / "decoy-real-tokens.json"
     real.write_text(json.dumps({AGENT: DECOY_TOKEN}), encoding="utf-8")
     home = tmp_path / "decoy-home"
     home.mkdir()
     shim = decoy_shim(tmp_path, real_tokens=real, home=home)
     out = run_shim(tmp_path, capture.base, f"Get-FieldToken {AGENT}", secret_file=None, shim=shim,
-                   tokens_file=UNSET)
-    assert f"tokens={real} " in out and DECOY_TOKEN in out, out
+                   tokens_file=UNSET, forbidden=(DECOY_TOKEN,))
+    assert f"tokens={home / 'tokens-gb10.json'} " in out and DECOY_TOKEN not in out, out
     (home / "tokens-gb10.json").write_text(json.dumps({AGENT: "home-token"}), encoding="utf-8")
     out = run_shim(tmp_path, capture.base, f"Get-FieldToken {AGENT}", secret_file=None, shim=shim,
                    tokens_file=UNSET)

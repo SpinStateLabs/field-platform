@@ -48,7 +48,7 @@ def test_retention_check_non_200_is_unreachable_not_ok(status):
 
 
 def test_retention_check_transport_error_is_unreachable():
-    with pytest.raises(LedgerUnreachableError, match="connection refused"):
+    with pytest.raises(LedgerUnreachableError, match="^OSError$"):
         LedgerClient(client=_Http(exc=OSError("connection refused")), base_url="http://t").retention_check()
 
 
@@ -77,5 +77,5 @@ def test_events_that_did_not_come_back_as_a_list_are_unreachable_never_empty(res
 
 
 def test_events_transport_error_is_unreachable():
-    with pytest.raises(LedgerUnreachableError, match="connection refused"):
+    with pytest.raises(LedgerUnreachableError, match="^OSError$"):
         LedgerClient(client=_Http(exc=OSError("connection refused")), base_url="http://t").events()
