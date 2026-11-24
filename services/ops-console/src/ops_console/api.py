@@ -386,6 +386,48 @@ MAX_ERROR_TEXT = 200
 #: the most skipped registry rows one fleet-halt answer (and its ledger row) lists
 MAX_LISTED_SKIPPED = 50
 
+#: The registry's write rule for a NEW domain (agent_registry.models._NEW_DOMAIN, backlog B80). Copied, not imported: the
+#: console does not depend on the registry package. tests/test_fleet_halt_uncovered_b80.py pins that the two are equal.
+REGISTRY_DOMAIN_RE = re.compile(r"[A-Za-z0-9]+(?:[ ._-][A-Za-z0-9]+)*")
+
+
+def _named_halt_uncovered(registry: Any, results: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
+    """B80: the agents a fleet halt that NAMED its domains cannot have reached. The registry's domain filter folds ASCII
+    case and trims spaces only, so a stored row whose domain is outside the registry's write rule (a look-alike such as
+    "fin" + zero-width space + "ance", written before the rule existed) is in no named domain's listing: the halt never
+    touches it, and the completeness check, built from that same listing, cannot see it. The registry is read ONCE, after
+    every kill was sent (it never delays one). Returned: each active row whose domain is outside the rule and whose id no
+    domain report confirmed, by id only (never the domain text; an unusable id is None), and whether the read worked. A
+    failed read cannot show the halt complete. Nothing is killed here: the operator named the domains; the fallback is a
+    halt by id or a fleet halt naming no domain."""
+    reached: set[str] = set()
+    for r in results:
+        try:
+            reached |= _result_ids(r.get("result", r.get("error"))) or set()
+        except Exception:  # noqa: BLE001 - an odd report confirms nothing
+            pass
+    try:
+        status, rows = registry.get("/agents")
+    except Exception:  # noqa: BLE001 - the halt already happened; the check just cannot be made
+        return [], False
+    if status != 200 or not isinstance(rows, list):
+        return [], False
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict) or row.get("status") in ("retired", "killed"):
+            continue
+        d = row["domain"] if row.get("domain") is not None else "general"
+        # strip(" ") exactly as the registry filter's SQLite trim() (U+0020 only): str.strip() would also drop a TAB, a LF or a
+        # no-break space, judge "finance" + NBSP conforming, and leave out the very row the listing for "finance" missed
+        if isinstance(d, str) and REGISTRY_DOMAIN_RE.fullmatch(d.strip(" ")):
+            continue
+        aid = row.get("agent_id")
+        aid = aid if isinstance(aid, str) and len(aid) <= 128 and AGENT_ID_RE.fullmatch(aid) else None
+        if aid is not None and aid in reached:
+            continue
+        out.append({"agent_id": aid, "reason": "domain is outside the registry rule: no named halt reaches it"})
+    return out, True
+
 
 def _result_ids(data: Any) -> set[str] | None:
     """The agent ids a kill-switch domain report CONFIRMS as halted (outcome killed or already_killed), in the body or in
@@ -1010,6 +1052,8 @@ def create_app(
                 f"/kill/{_seg(aid)}", json={"operator": req.operator, "reason": req.reason}, **okw)
             good = st in (200, 201) and isinstance(data, dict) and data.get("agent_id") == aid
             agent_kills.append({"agent_id": aid, "ok": good, "status": st})
+        # B80: a halt that named its domains also reports the active agents no named halt can reach (after the kills)
+        uncovered, coverage_checked = _named_halt_uncovered(app.state.registry, results) if explicit else ([], True)
         if skipped:
             # best effort, never a reason to stop: the halt already happened
             try:
@@ -1023,11 +1067,15 @@ def create_app(
             except Exception:  # noqa: BLE001
                 pass
         return {"operator": req.operator, "domains": list(dict.fromkeys(domains)),
-                "all_ok": bad_rows == 0 and all(r["ok"] for r in results) and all(k["ok"] for k in agent_kills),
+                "all_ok": (bad_rows == 0 and all(r["ok"] for r in results) and all(k["ok"] for k in agent_kills)
+                           and coverage_checked and not uncovered),
                 "agent_errors": sum(r["counts"]["error"] for r in results if r["counts"]) + bad_rows,
                 "bad_rows": bad_rows,
                 "skipped_rows": skipped[:MAX_LISTED_SKIPPED],
                 "agent_kills": agent_kills,
+                "coverage_checked": coverage_checked,
+                "uncovered_count": len(uncovered),
+                "uncovered_rows": uncovered[:MAX_LISTED_SKIPPED],
                 "domains_failed": sum(1 for r in results if not r["ok"]),
                 "results": results}
 

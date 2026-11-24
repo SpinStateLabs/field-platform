@@ -13,7 +13,7 @@ inventory and any text you can paste — into a review queue of
 
 | Endpoint | Method | Purpose |
 |---|---|---|
-| `/agents` | POST | Register an agent (id, name, human owner, domain, manifest ref). A SET `manifest_ref` that does not resolve ⇒ 422 `{error, reason: missing\|invalid, hint}` (v1.2 D3b; the caller's ref is not echoed, RT-HARD-4 F2) |
+| `/agents` | POST | Register an agent (id, name, human owner, domain, manifest ref). A SET `manifest_ref` that does not resolve ⇒ 422 `{error, reason: missing\|invalid, hint}` (v1.2 D3b; the caller's ref is not echoed, RT-HARD-4 F2). A `domain` (on POST and PATCH) must be ASCII letters and digits separated by single spaces, `.`, `_` or `-`. The 64-character limit applies after surrounding whitespace is stripped; the ASCII rule is checked after invisible characters at either end are also trimmed; anything else is a 422 that does not echo the value (backlog B80: a look-alike domain is missed by a domain halt). Rows stored before the rule are not re-checked |
 | `/agents` | GET | List (filter by `status`, `domain`; `domain` matches ignoring case and surrounding whitespace, so `FINANCE` finds `finance `; SQLite `lower` folds ASCII only) |
 | `/agents/{id}` | GET / PATCH | Read / update (incl. `status`: active·killed·retired). A PATCH may carry `if_updated_at` (the `updated_at` of an earlier read or write): applied only if the row has not been written since, otherwise **412**; `updated_at` is strictly increasing per row, so even two writes in one clock tick differ (kill-switch drill compare-and-set) |
 | `/agents/{id}/attest` | POST | Record a human re-attestation: body `{attested_by}` (stripped; blank ⇒ 422, unknown agent ⇒ 404) |
@@ -100,6 +100,16 @@ registry serve [--port 8001]
   expect false positives (e.g. non-AI automation accounts) — it produces a
   review queue, not a verdict. False negatives are possible if an AI node
   type contains none of the known markers.
+  The service-account name rule is main's rule (`discover.ACCOUNT_PATTERNS`: `svc-`/`bot-` prefixes, a `-bot` suffix,
+  `agent`, `automation`, and `ai` before a separator) applied after NFKC normalisation with the Unicode format characters
+  removed (so a zero-width space inside `openai` or a full-width letter cannot hide a name), plus AI vendor names as whole
+  tokens (`huggingface_token`, `Anthropic_Admin`), and nothing else: there is NO exclusion. Person names ending in -ai
+  (`kai_nakamura`, `rai-chu`, `jsmith@thai.example`, `tsai.wu`) are therefore still flagged, exactly as on main, and so are
+  `mai.job` and `kai.sync`: a review queue prefers a false positive to a missed shadow account. Narrowing the false
+  positives is a backlog row; two exclusion designs were each blocked because they let real service accounts through.
+  A **retired** agent does not make a candidate "registered": the candidate is surfaced and the note names the retired
+  agent; a **killed** agent still counts as registered (it may still run; an owner decision is open); an owner who owns
+  only retired agents no longer makes an API key's owner known. `registered_agents` stays the full count.
 - Name matching between candidates and registered agents is normalized
   substring matching — a completely renamed shadow account with no overlap
   to a registered name will (correctly) surface, but a shadow account named

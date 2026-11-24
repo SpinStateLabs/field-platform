@@ -31,11 +31,13 @@ import csv
 import io
 import json
 import re
+import unicodedata
 from pathlib import Path
 from typing import Any, Iterable
 
 from agent_registry.models import (
     AgentRecord,
+    AgentStatus,
     DiscoveryReport,
     SecretHit,
     ShadowCandidate,
@@ -57,8 +59,36 @@ AI_NODE_MARKERS = (
 )
 
 # Service-account naming patterns that indicate automation identity.
+# ``ACCOUNT_PATTERNS`` is MAIN's rule, unchanged. ``looks_like_automation`` is that rule applied to the NFKC-normalised name
+# with its format characters removed, plus AI vendor names as WHOLE tokens (``huggingface_token``, ``Anthropic_Admin``), and
+# nothing else: no exclusion. So every name main flags is still flagged, including person names ending in -ai (kai_nakamura,
+# rai-chu, jsmith@thai.example): a review queue prefers a false positive (PR 1024: two narrowing designs were each BLOCKED
+# because they let real service accounts through; the narrowing is a backlog row).
 ACCOUNT_PATTERNS = re.compile(r"(^svc[-_.]|^bot[-_.]|[-_.]bot$|agent|automation|ai[-_.])", re.I)
 ACCOUNT_TYPE_MARKERS = ("service", "bot", "application", "automation")
+
+#: AI vendor and product tokens, matched as WHOLE tokens only. Words that are also personal names (claude, gemini, mistral)
+#: are deliberately not listed: claude.martin is a person.
+_AI_VENDOR_TOKENS = frozenset((
+    "openai", "anthropic", "huggingface", "geminiai", "mistralai", "cohereai", "vertexai", "azureai", "stabilityai",
+    "perplexityai", "togetherai", "fireworksai", "deepai", "jasperai", "scaleai", "llamaai", "copilotai", "xai", "genai",
+    "mlai", "metaai"))
+
+
+def _fold(account: str) -> str:
+    """NFKC, then the format characters (Unicode category Cf: zero-width space and joiner, bidi marks, soft hyphen) removed:
+    ``open<ZWSP>ai-key``, a Kelvin sign and full-width letters match like their plain forms."""
+    return "".join(ch for ch in unicodedata.normalize("NFKC", account) if unicodedata.category(ch) != "Cf")
+
+
+def looks_like_automation(account: str) -> bool:
+    """Main's rule on the RAW name or on the folded name, plus whole-token AI vendor names. The raw-name test is what makes
+    "everything main flags is flagged" true by construction: NFKC can compose a trailing combining mark into the last letter of
+    a keyword (``agent`` + U+0308 becomes ``agen`` + U+1E97) and so remove a match main has. The candidate keeps the raw name."""
+    text = _fold(account)
+    if ACCOUNT_PATTERNS.search(account) or ACCOUNT_PATTERNS.search(text):
+        return True
+    return any(tok in _AI_VENDOR_TOKENS for tok in re.split(r"[\W_]+", text.lower()) if tok)
 
 
 def _normalize(text: str) -> str:
@@ -178,7 +208,7 @@ def scan_service_accounts(
             continue
         scanned += 1
         acc_type = row.get("type", "")
-        looks_automated = bool(ACCOUNT_PATTERNS.search(account)) or any(
+        looks_automated = looks_like_automation(account) or any(
             marker in acc_type.lower() for marker in ACCOUNT_TYPE_MARKERS
         )
         if not looks_automated:
@@ -394,6 +424,19 @@ def scan_secrets_text(text: str, include_very_broad: bool = False) -> list[Secre
     return out
 
 
+def _note_retired(candidate: ShadowCandidate, retired: list[AgentRecord]) -> ShadowCandidate:
+    """Name the first retired agent this candidate matches (by id/name, or by owner for an API key), in the reason."""
+    for record in retired:
+        if _is_registered(candidate.identifier, candidate.display_name, [record]) or (
+            candidate.source == "api-keys"
+            and candidate.evidence.get("owner", "").strip().lower() == record.owner.strip().lower()
+            and record.owner.strip()
+        ):
+            return candidate.model_copy(update={
+                "reason": f"{candidate.reason}; matches retired agent '{record.agent_id}'"})
+    return candidate
+
+
 def discover(
     registered: list[AgentRecord],
     n8n_export: dict[str, Any] | list[dict[str, Any]] | None = None,
@@ -406,6 +449,11 @@ def discover(
     """Raises ScanInputError on a malformed or oversized D3 input (the API maps it
     to 422, the CLI to exit 2) — a scan that could not read its input must
     never look like a scan that found nothing."""
+    # A retired agent has nothing left running, so a workflow, account or key that matches one is NOT registered:
+    # it is surfaced, with the retired agent named (S12-11). ``registered_agents`` stays the full count.
+    all_records = registered
+    retired = [r for r in all_records if r.status == AgentStatus.RETIRED]
+    registered = [r for r in all_records if r.status != AgentStatus.RETIRED]
     known = parse_principals(principals_csv) if principals_csv is not None else None
     key_candidates: list[ShadowCandidate] = []
     keys_scanned = 0
@@ -429,11 +477,12 @@ def discover(
             accounts_csv, registered
         )
 
+    candidates = [_note_retired(c, retired) for c in n8n_candidates + account_candidates + key_candidates]
     return DiscoveryReport(
         scanned_workflows=workflows_scanned,
         scanned_accounts=accounts_scanned,
-        registered_agents=len(registered),
-        candidates=n8n_candidates + account_candidates + key_candidates,
+        registered_agents=len(all_records),
+        candidates=candidates,
         scanned_api_keys=keys_scanned,
         scanned_secret_hits=len(secret_hits),
         secret_hits=secret_hits,

@@ -63,6 +63,7 @@ import time
 import unicodedata
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from collections.abc import Mapping
 from typing import Any, Callable
 from urllib.parse import urlparse
 
@@ -388,10 +389,100 @@ def checked_sentinel_timeout(value: float, default: float = DEFAULT_SENTINEL_TIM
     return min(float(value), MAX_SENTINEL_TIMEOUT)
 
 
+_HOSTNAME = re.compile(r"[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?")
+
+
+def public_origin(url: str | None) -> str | None:
+    """scheme://host[:port] of a configured URL, the only part ever shown (`/health`, the 503 detail, logs): userinfo,
+    path, query and fragment are dropped, an unparsable value shows as a fixed word (C-623, reviewer C-596 F-C596-2)."""
+    if not url:
+        return None
+    try:
+        parts = urlparse(url)
+        host, port = parts.hostname, parts.port
+    except ValueError:
+        return "(unparsable url)"
+    if parts.scheme not in ("http", "https") or not _is_host(host):   # a junk host is text from the value: fixed word instead
+        return "(unparsable url)"
+    return f"{parts.scheme}://{'[' + host + ']' if ':' in host else host}" + (f":{port}" if port else "")
+
+
+def _is_host(host: str | None) -> bool:
+    """A hostname (letters, digits, dot, hyphen, underscore) or an IP literal; anything else is not shown (C-734 F-C734-1)."""
+    if not host or "%" in host:                           # a scope id (a link-local IPv6 address + `%text`) is accepted by ipaddress: refuse it (C-846 F-C846-1)
+        return False
+    if _HOSTNAME.fullmatch(host):
+        return True
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return True
+
+
+class _SentinelUrlLogFilter(logging.Filter):
+    """roley.reviewer C1 on #1272: httpx logs every request at INFO as ``HTTP Request: <method> <url> ...`` and the
+    url there is the whole sentinel URL, userinfo, path and query included. For a request to a sentinel origin this
+    filter puts the origin (``_httpx_origin``) in its place, so the success path logs no userinfo, path or query.
+    It does not depend on that message format (independent verdict on 6ab6b25f: fail closed on a record format it does
+    not know): EVERY argument of an httpx record, positional or in a mapping, that reads as a URL to a sentinel origin
+    is replaced by that origin, whatever the message says. Requests to any other origin are left as httpx logs them.
+    The record is kept, not dropped."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.origins: set[str] = set()
+
+    def _shown(self, value: object) -> object:
+        """``value`` itself, or the sentinel origin when ``value`` reads as a URL to one (numbers and bytes are left)."""
+        if isinstance(value, (int, float, bytes, bytearray)) or value is None:
+            return value
+        shown = _httpx_origin(value)
+        return shown if shown is not None and shown in self.origins else value
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not self.origins:
+            return True
+        args = record.args
+        if isinstance(args, tuple):
+            record.args = tuple(self._shown(a) for a in args)
+        elif isinstance(args, Mapping):
+            record.args = {k: self._shown(v) for k, v in args.items()}
+        return True
+
+
+def _httpx_origin(url: object) -> str | None:
+    """``scheme://host[:port]`` as httpx itself normalises it, for BOTH sides of the filter's comparison: the host as
+    ``raw_host`` (an IDN name in punycode), the port as a number and absent when it is the scheme's default. httpx logs
+    that form, so a base written with an IDN host, a non-ASCII-digit port or an explicit :80 / :443 still matches
+    (reviewer-R1, don.reviewer N1 and teammate-don F1 on #1272). None when httpx cannot read it."""
+    import httpx
+
+    try:
+        parsed = httpx.URL(str(url))
+        host = parsed.raw_host.decode("ascii")
+    except (httpx.InvalidURL, ValueError, TypeError):
+        return None
+    if parsed.scheme not in ("http", "https") or not host:
+        return None
+    shown = f"[{host}]" if ":" in host else host
+    return f"{parsed.scheme}://{shown}" + (f":{parsed.port}" if parsed.port is not None else "")
+
+
+_SENTINEL_URL_LOG_FILTER = _SentinelUrlLogFilter()
+logging.getLogger("httpx").addFilter(_SENTINEL_URL_LOG_FILTER)
+
+
 class SentinelUnavailable(RuntimeError):
     """The sentinel could not be asked, or did not answer a verdict: transport
     error, timeout, any non-200, or a body that is not a verdict. The caller
-    refuses 503 — a check that did not happen is never an ALLOW."""
+    refuses 503 — a check that did not happen is never an ALLOW. ``failure`` is
+    the transport exception's class name when there was one: the log names it
+    without chaining the exception, whose text can carry the URL (C-734)."""
+
+    def __init__(self, message: str, failure: str | None = None):
+        super().__init__(message)
+        self.failure = failure
 
 
 class SentinelClient:
@@ -404,6 +495,10 @@ class SentinelClient:
         self._base = (base_url or resolve_sentinel_url() or "http://127.0.0.1:8004").rstrip("/")
         self.timeout = checked_sentinel_timeout(timeout) if timeout is not None else resolve_sentinel_timeout()
         self._client = client
+        # C1: httpx's request line for this sentinel shows its origin only
+        origin = _httpx_origin(self._base)
+        if origin is not None:
+            _SENTINEL_URL_LOG_FILTER.origins.add(origin)
         if self._client is None:
             import httpx
 
@@ -419,9 +514,12 @@ class SentinelClient:
             resp = self._client.post(sentinel_check_url(self._base), json={   # B17: /check goes on the path
                 "agent_id": agent_id, "token_id": token_id, "action": action})
         except Exception as exc:
-            raise SentinelUnavailable(
-                f"sentinel unreachable at {self._base}: {type(exc).__name__}: {exc}"
-            ) from exc
+            failure = type(exc).__name__
+        else:
+            failure = None
+        if failure is not None:                           # raised outside the handler: no cause or context keeps the transport text
+            raise SentinelUnavailable(f"sentinel unreachable at {public_origin(self._base)}: {failure}",
+                                      failure=failure)
         if resp.status_code != 200:
             raise SentinelUnavailable(f"sentinel returned {resp.status_code}")
         try:
@@ -657,7 +755,8 @@ def _authorize(app: FastAPI, agent_id: str, token_id: str,
         verdict = sentinel.check(agent_id, token_id, action)
     except SentinelUnavailable as exc:
         # the caller gets a fixed category; the log gets the exception CLASS (never its text, which can name the URL)
-        log.warning("sentinel check did not happen: %s", type(exc.__cause__ or exc).__name__)
+        log.warning("sentinel check did not happen: %s",
+                    getattr(exc, "failure", None) or type(exc.__cause__ or exc).__name__)   # #1272: not chained
         return _refuse(app, 503, agent_id, action, None, {
             "detail": f"sentinel check did not happen — refusing: {_public_sentinel_reason(str(exc))}",
             "decision": None, "clause_id": None})
@@ -993,7 +1092,7 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
                 "enforce": app.state.enforce,
                 "tool_check": app.state.tool_check,
                 "tool_check_active": app.state.enforce and app.state.tool_check,
-                "sentinel_url": app.state.sentinel_url,
+                "sentinel_url": public_origin(app.state.sentinel_url),
                 "sentinel_timeout_seconds": app.state.sentinel_timeout,
                 "ledger_appends_dropped": app.state.ledger_appends_dropped,
                 "spend_forwards_dropped": app.state.spend_forwards_dropped,
