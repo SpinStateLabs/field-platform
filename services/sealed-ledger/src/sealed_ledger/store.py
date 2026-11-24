@@ -1878,7 +1878,12 @@ class LedgerStore:
                     tail = data_open[data_open.rfind(b"\n") + 1:]
                     if tail.strip():
                         try:
-                            json.loads(tail)
+                            # decode once, scan for depth, parse that text: a deep unterminated line is refused by the
+                            # cap here (treated like any torn tail) on every stack, and no bytes reach json.loads
+                            tail_text = tail.decode("utf-8")
+                            if json_depth_exceeds(tail_text):
+                                raise JsonTooDeep()
+                            json.loads(tail_text)
                         except ValueError:
                             now = time.monotonic()
                             if torn is None or torn[0] != (len(data_open), tail):

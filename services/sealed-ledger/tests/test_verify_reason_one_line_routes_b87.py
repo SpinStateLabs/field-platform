@@ -358,3 +358,13 @@ def test_a_segment_line_in_another_encoding_is_refused_not_scanned_blind(tmp_pat
                 pass
         events, bad = _parse_events_located(data)
         assert events == [] and bad is not None and bad[0] == 0
+
+
+def test_default_route_a_deep_unterminated_last_line_gives_the_cap_text_on_any_stack(tmp_path):
+    """the torn-tail probe at store open used json.loads(bytes): a deep unterminated line raised RecursionError on a small
+    stack and parsed on a large one, so the TAMPERED text depended on the stack. It now goes through the same cap."""
+    path = _plain(tmp_path)
+    with open(path, "ab") as fh:
+        fh.write(b"[" * 200000 + b"]" * 200000)                       # no trailing newline
+    line = _one_tampered_line(_run("verify", "--path", str(path)))
+    assert line == "TAMPERED — unparseable line: nesting is deeper than 500 levels"
