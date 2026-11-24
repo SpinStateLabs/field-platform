@@ -1428,6 +1428,38 @@ _SIDECAR_FILE_RE = re.compile(r"[A-Za-z0-9._-]{1,160}")
 _SIDECAR_MAX_BYTES = 1 << 20
 
 
+#: Explicit JSON nesting cap for untrusted text parsed on the verify path. CPython 3.14 derives the decoder's recursion
+#: limit from the thread's C stack (a 100000-deep list raises at an 8 MiB stack and parses at 16 MiB), so relying on
+#: RecursionError makes the result depend on the host. A real sidecar or ledger line nests a handful of levels.
+JSON_MAX_DEPTH = 500
+
+
+def json_depth_exceeds(data: bytes | str, limit: int = JSON_MAX_DEPTH) -> bool:
+    """True when ``[``/``{`` nest deeper than ``limit`` outside string literals. A linear scan, no recursion, so the
+    answer is the same on every Python and stack size. It does not validate the JSON: the decoder still does that."""
+    text = data.decode("utf-8", errors="replace") if isinstance(data, bytes) else data
+    depth = 0
+    in_str = False
+    esc = False
+    for ch in text:
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+        elif ch == '"':
+            in_str = True
+        elif ch in "[{":
+            depth += 1
+            if depth > limit:
+                return True
+        elif ch in "]}":
+            depth -= 1
+    return False
+
+
 def _read_sidecar(path: Path) -> tuple[bytes | None, str | None]:
     """``(bytes, None)``; ``(None, None)`` when it does not exist; ``(None, reason)`` when it cannot be a sidecar (not a
     regular file, over the size cap, or unreadable). The reason never carries the content."""
@@ -1482,6 +1514,8 @@ def verify_segment_file(path: str | Path, public_key_pem: str | None = None) -> 
         out["reason"] = f"no sidecar {sidecar_path_for(p).name!r} beside {str(p)!r}"
         return out
     try:
+        if json_depth_exceeds(side_raw):
+            raise ValueError(f"nesting is deeper than {JSON_MAX_DEPTH} levels")
         side = json.loads(side_raw)
         missing = [k for k in _SIDECAR_KEYS if k not in side]
         if missing or side["format"] != SIDECAR_FORMAT:
