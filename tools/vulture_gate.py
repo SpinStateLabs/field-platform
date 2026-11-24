@@ -11,9 +11,8 @@ Run from the repository root:  python tools/vulture_gate.py
 
 ALLOWLIST is exact, not a global name whitelist: one entry per (file, name) and each entry covers ONE finding, so a
 second unused `msg` in the same file is still reported. An entry that no longer matches a finding is reported too
-(the allowlist cannot rot). The seven entries below are parameters a framework signature forces the function to
-accept (urllib's `redirect_request`, a signal handler, `HTMLParser.handle_starttag`, the copy protocol's
-`__deepcopy__(self, memo)`); none is dead code. `msg` of
+(the allowlist cannot rot). The six entries below are parameters a framework signature forces the function to
+accept (urllib's `redirect_request`, a signal handler, `HTMLParser.handle_starttag`); none is dead code. `msg` of
 `redirect_request` is not listed: the name `msg` is now used elsewhere in the scanned trees, and vulture decides use by NAME, so it
 no longer reports those three parameters (a listed entry that stops matching fails the gate, so they had to go).
 
@@ -37,9 +36,6 @@ ALLOWLIST: list[tuple[str, str]] = [
     ("packages/field-agent/src/field_agent/canary.py", "frame"),
     ("packages/field-agent/src/field_agent/field_client.py", "newurl"),
     ("packages/field-core/src/field_core/alerts.py", "newurl"),
-    # copy protocol: copy.deepcopy (and dataclasses.asdict) call _Hidden.__deepcopy__(self, memo) positionally; the
-    # method returns a fixed word and ignores the memo, but the parameter cannot be dropped (train rb99)
-    ("packages/field-core/src/field_core/alerts.py", "memo"),
     ("services/compliance-crosswalk/src/compliance_crosswalk/regwatch.py", "attrs"),  # HTMLParser.handle_starttag
 ]
 
