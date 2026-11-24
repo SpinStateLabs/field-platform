@@ -118,7 +118,8 @@ def test_forged_body_sources_during_a_full_outage_are_never_evidenced(client, mo
 
 
 def test_live_collection_confirms_only_what_it_saw(client, monkeypatch):
-    # the ledger answered and verified; nothing else did
+    # the ledger answered and verified; nothing else did. Every live verdict stands (F1): FC-L-01 True from the live
+    # row, and the controls whose source the live run did not get read False (a live finding), not caller-asserted
     _live(monkeypatch, EvidenceSources(ledger_verify={"ok": True, "length": 7}))
     r = client.post(
         "/pack",
@@ -129,23 +130,75 @@ def test_live_collection_confirms_only_what_it_saw(client, monkeypatch):
     assert rows["FC-L-01"]["evidenced"] is True
     assert rows["FC-L-01"]["evidence_detail"] == "ledger chain verified"  # the live row, not the caller's
     for cid in ("FC-R-01", "FC-I-01", "FC-E-02", "FC-D-01"):
-        assert rows[cid]["evidenced"] is None, cid
-        assert (cid, "caller-asserted") in _gap_kinds(body), cid
-    assert ("FC-L-01", "caller-asserted") not in _gap_kinds(body)
+        assert rows[cid]["evidenced"] is False, cid               # the caller's True never upgrades a live False
+        assert (cid, "not-evidenced") in _gap_kinds(body), cid
+    assert not [g for g in body["pack"]["gaps"] if g["kind"] == "caller-asserted"]
 
 
-def test_a_negative_caller_verdict_stands_as_a_gap(client, monkeypatch):
-    _live(monkeypatch, EvidenceSources(ledger_verify={"ok": True}))
-    r = client.post(
+def test_a_negative_caller_verdict_fills_an_unknown_row_as_a_gap(client, monkeypatch):
+    calls = _live(monkeypatch, EvidenceSources(ledger_verify={"ok": True}))
+    r = client.post(          # no agent_id: nothing is collected, so the caller's negative fills the unknown row
         "/pack",
-        json={
-            "signer": SIGNER, "manifest": resolved_manifest(), "agent_id": "agent-1",
-            "sources": {"ledger_verify": {"ok": False, "reason": "hash mismatch"}},
-        },
+        json={"signer": SIGNER, "manifest": resolved_manifest(),
+              "sources": {"ledger_verify": {"ok": False, "reason": "hash mismatch"}}},
     )
+    body = r.json()
+    assert calls == []
+    assert _rows(body)["FC-L-01"]["evidenced"] is False
+    assert _rows(body)["FC-L-01"]["evidence_detail"].startswith("caller-asserted")
+    assert ("FC-L-01", "not-evidenced") in _gap_kinds(body)
+
+
+# ---- F1 (review of d8561c8): a caller's body can never hide what the live collection found -----------------------
+
+def test_f1_live_failed_verify_with_an_empty_body_is_a_gap_not_no_gaps(client, monkeypatch):
+    _live(monkeypatch, EvidenceSources(registry_record={"owner": "Controller"},
+                                       ledger_verify={"ok": False, "reason": "hash mismatch at 3"}))
+    r = client.post("/pack", json={"signer": SIGNER, "manifest": resolved_manifest(),
+                                   "agent_id": "agent-1", "sources": {}})
     body = r.json()
     assert _rows(body)["FC-L-01"]["evidenced"] is False
     assert ("FC-L-01", "not-evidenced") in _gap_kinds(body)
+    assert "No gaps recorded" not in body["markdown"]
+    assert body["pack"]["evidence_status"] == "collected"        # N3: {} asserts nothing
+
+
+def test_f1_partial_outage_keeps_the_not_checked_gap_with_an_empty_body(client, monkeypatch):
+    _live(monkeypatch, EvidenceSources(registry_record={"owner": "Controller"}))      # ledger 503, registry up
+    for sources in ({}, {"ledger_verify": None}, {"ledger_verify": {"ok": True}}):
+        r = client.post("/pack", json={"signer": SIGNER, "manifest": resolved_manifest(),
+                                       "agent_id": "agent-1", "sources": sources})
+        body = r.json()
+        assert ("FC-L-01", "not-checked") in _gap_kinds(body), sources
+        assert _rows(body)["FC-L-01"]["evidenced"] is None, sources
+        assert "No gaps recorded" not in body["markdown"], sources
+
+
+def test_f1_live_false_beats_caller_true(client, monkeypatch):
+    _live(monkeypatch, EvidenceSources(registry_record={"owner": "Controller"},
+                                       ledger_verify={"ok": False, "reason": "broken"}))
+    r = client.post("/pack", json={"signer": SIGNER, "manifest": resolved_manifest(),
+                                   "agent_id": "agent-1", "sources": FORGED})
+    body = r.json()
+    row = _rows(body)["FC-L-01"]
+    assert row["evidenced"] is False
+    assert "caller-asserted" not in row["evidence_detail"] and "broken" in row["evidence_detail"]
+    assert ("FC-L-01", "not-evidenced") in _gap_kinds(body)
+
+
+def test_n1_an_empty_agent_id_requests_nothing(client, monkeypatch):
+    calls = _live(monkeypatch, EvidenceSources())
+    r = client.post("/pack", json={"signer": SIGNER, "manifest": resolved_manifest(), "agent_id": ""})
+    assert r.status_code == 200, r.text
+    assert calls == []
+    assert r.json()["pack"]["evidence_status"] == "not-requested"
+    assert EVIDENCE_UNKNOWN_HEADLINE not in r.json()["markdown"]
+
+
+def test_n3_an_empty_body_without_agent_id_is_not_requested(client, monkeypatch):
+    _live(monkeypatch, EvidenceSources())
+    r = client.post("/pack", json={"signer": SIGNER, "manifest": resolved_manifest(), "sources": {}})
+    assert r.json()["pack"]["evidence_status"] == "not-requested"
 
 
 def test_full_outage_with_agent_id_is_unknown_not_no_gaps(client, monkeypatch):

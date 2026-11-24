@@ -36,6 +36,7 @@ from typing import Any
 from compliance_crosswalk.engine import (
     GAP_LABELS,
     LEDGER_NOT_CHECKED_GAP,  # moved to engine (B7); still importable from here, and used for the B2 outage gap
+    LEDGER_VERIFY_NOT_CHECKED,
     REFUSED_CATEGORIES,
     EvidenceSources,
     coverage_gaps,
@@ -174,26 +175,27 @@ def _any_source(sources: EvidenceSources | None) -> bool:
 def _caller_asserted_coverage(
     manifest: dict[str, Any], agent_id: str | None, caller: EvidenceSources, live: EvidenceSources | None
 ) -> tuple[Any, set[str]]:
-    """B2: coverage when the caller supplied the sources. A positive verdict counts as evidenced only when the live
-    collection on this run (``live``) gives the same control a positive verdict too; otherwise the row is
-    unevidenced (None), its detail says caller-asserted, and the control id is returned so a gap is recorded. A
-    negative or unknown caller verdict stands as it is: over-conservative is survivable."""
-    claimed = evaluate(manifest, agent_id=agent_id, sources=caller)
-    checked = {c.control_id: c for c in evaluate(manifest, agent_id=agent_id, sources=live).controls}
+    """B2 (F1, review of d8561c8): coverage when the caller supplied sources. Every row starts from the LIVE
+    evaluation of this run, and a live verdict always stands: True, False, and FC-L-01 "not checked" (the ledger was
+    asked and did not answer). Caller input only fills a row the live collection had nothing on (evidenced None):
+    a caller positive becomes ``caller-asserted`` (None, plus a gap, returned in the id set), a caller negative
+    becomes a not-evidenced gap. So a body can add gaps, never hide one the live run found."""
+    claimed = {c.control_id: c for c in evaluate(manifest, agent_id=agent_id, sources=caller).controls}
+    checked = evaluate(manifest, agent_id=agent_id, sources=live)
     asserted: set[str] = set()
     rows = []
-    for row in claimed.controls:
-        if row.evidenced is True:
-            confirmed = checked[row.control_id]
-            if confirmed.evidenced is True:
-                row = confirmed
-            else:
+    for row in checked.controls:
+        live_unknown = row.evidenced is None and row.evidence_detail != LEDGER_VERIFY_NOT_CHECKED
+        said = claimed[row.control_id]
+        if live_unknown and said.evidenced is not None:
+            detail = one_line(CALLER_ASSERTED_PREFIX + said.evidence_detail)
+            if said.evidenced is True:
                 asserted.add(row.control_id)
-                row = row.model_copy(
-                    update={"evidenced": None, "evidence_detail": one_line(CALLER_ASSERTED_PREFIX + row.evidence_detail)}
-                )
+                row = row.model_copy(update={"evidenced": None, "evidence_detail": detail})
+            else:
+                row = row.model_copy(update={"evidenced": False, "evidence_detail": detail})
         rows.append(row)
-    return claimed.model_copy(update={"controls": rows}), asserted
+    return checked.model_copy(update={"controls": rows}), asserted
 
 
 def generate_pack(
@@ -229,10 +231,13 @@ def generate_pack(
     status = dict(stale_store.status() or {})
     corpus_version = _corpus_version(status)
     asserted: set[str] = set()
+    if not _any_source(caller_sources):
+        caller_sources = None  # N3: a body that names no source ({}) asserts nothing; the run is judged on its own
+    requested = bool(agent_id)  # N1: an empty agent_id collects nothing (api.py), so it requests nothing either
     if caller_sources is not None:
         coverage, asserted = _caller_asserted_coverage(manifest, agent_id, caller_sources, sources)
         evidence_status = "caller-asserted"
-        if agent_id is not None and not _any_source(sources):
+        if requested and not _any_source(sources):
             # B1: the outage is a fact of the LIVE collection alone; whatever the caller's body holds (even {})
             # cannot turn "the ledger was asked and nothing answered" into a clean-looking pack
             evidence_status = "unknown"
@@ -240,7 +245,7 @@ def generate_pack(
         coverage = evaluate(manifest, agent_id=agent_id, sources=sources)
         if _any_source(sources):
             evidence_status = "collected"
-        elif agent_id is not None:
+        elif requested:
             evidence_status = "unknown"  # collection was requested (agent_id) and no service answered
         else:
             evidence_status = "not-requested"

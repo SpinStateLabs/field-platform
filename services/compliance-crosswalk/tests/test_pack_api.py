@@ -108,8 +108,8 @@ def test_pack_equals_generate_pack_for_same_inputs(client, store, monkeypatch):
     )
     assert body["markdown"] == md
     assert body["pack"] == payload
-    # the not-evidenced gap survived the HTTP round trip verbatim
-    assert ("FC-L-01", "not-evidenced") in {
+    # F1: the live run asked the ledger and got no answer: its not-checked gap stands over the caller's claim
+    assert ("FC-L-01", "not-checked") in {
         (g["control_id"], g["kind"]) for g in body["pack"]["gaps"]
     }
 
@@ -235,7 +235,10 @@ def test_body_sources_never_skip_live_collection(client, monkeypatch):
     )
     assert r.status_code == 200, r.text
     assert calls == ["agent-1"]
-    assert "broken chain" in r.json()["markdown"]
+    # F1: the live verdict (verified) stands; the caller's contrary body cannot replace it
+    assert "broken chain" not in r.json()["markdown"]
+    row = next(c for c in r.json()["pack"]["controls"] if c["control_id"] == "FC-L-01")
+    assert row["evidenced"] is True
     assert r.json()["pack"]["evidence_status"] == "caller-asserted"
 
     # agent_id only: collect, exactly as ``crosswalk pack --agent-id`` does
