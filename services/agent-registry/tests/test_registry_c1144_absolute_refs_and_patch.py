@@ -73,10 +73,9 @@ def test_an_existing_non_manifest_file_and_a_missing_one_are_not_told_apart_by_t
     nothing = _post(client, "twin-2", manifest_ref=str(outside / "no-such-file.yaml"))
     for r in (exists, nothing):
         assert r.status_code == 422
-        body = dict(r.json()["detail"])
-        body.pop("manifest_ref")                 # the body echoes the caller's own ref, which differs by design
+        body = r.json()["detail"]                # RT-HARD-4 F2 (rebuild of 862): the caller's ref is no longer echoed
         assert body == {"error": "manifest_ref does not resolve", "reason": "missing", "hint": body["hint"]}
-    assert exists.json()["detail"]["hint"] == nothing.json()["detail"]["hint"]
+    assert exists.content == nothing.content     # with no echo left, the two answers are byte-identical
 
 
 def test_a_relative_ref_inside_the_directory_still_tells_missing_from_invalid(env):

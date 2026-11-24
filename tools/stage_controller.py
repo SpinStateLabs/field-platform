@@ -2,7 +2,7 @@
 """stage_controller - the Phase G stage controller (P36; G24; Don's ruling lifts C-552).
 
     python tools/stage_controller.py plan   --stage N [--records PATH] [--go-sentence TEXT --build-sha SHA] [--services a,b,c]
-    python tools/stage_controller.py record alerts-proven | gate G18 | gate G21 | gate G22 [--records PATH]
+    python tools/stage_controller.py record alerts-proven | gate G21 | gate G22 [--records PATH]
 
 WHAT IT IS. A state machine for the three Phase G arming stages (``docs/runbooks/v1.2-deploy-rollback.md``,
 "Stage pre-flight checklists"). It decides, in order: may this stage start (``preconditions``), what are the steps
@@ -16,7 +16,9 @@ action, sends no alert and writes a ``plan`` record.
 
 WHAT IT REFUSES (``Refused``; nothing runs, one ``refused`` record). A stage that is unknown. No ``alerts_proven``
 record (the test alert reached Don, P36). Stage 2 without the ``G22`` and ``G18`` gate records (G18 is the clean Stage 1 window, written by
-tools/stage1_window.py), Stage 3 without ``G21``. Stage 2
+tools/stage1_window.py only: ``record gate G18`` is refused, and a G18 row counts only while it carries the clean-window
+evidence, ``window_hours`` of at least 24, ``window_end`` and ``services`` = 8; Backlog B5), Stage 3 without ``G21``. A
+gate or alerts row counts only when its ``ok`` is exactly ``true``. Stage 2
 and Stage 3 without Don's go sentence passed in as an input (``go_sentence``; never read from the environment, and only
 its length and an 8-hex prefix of its sha256 (16 hex would be withheld by the content check) are recorded). Stage 1 is the only stage that runs on the alerts record
 alone: "automatic" means Stage 1 steps and the rollbacks until Don says otherwise (G25, G26).
@@ -42,6 +44,7 @@ import datetime as _dt
 import enum
 import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -53,6 +56,8 @@ from typing import Any, Mapping, Protocol, Sequence
 from field_core import alert_senders, alerts
 
 WITHHELD = "(withheld)"
+#: B5: the shortest Stage 1 window a G18 row may evidence (the runbook's Stage 2 entry; tools/stage1_window.py reuses it)
+G18_MIN_WINDOW_HOURS = 24.0
 COUNTER_KEYS = ("dropped_unauthenticated_records", "dropped_refused_records")
 MAX_GO_SENTENCE = 500
 
@@ -187,8 +192,11 @@ class Records:
                    for r in self.rows())
 
     def gate_ok(self, gate: str, sha8: str | None = None) -> bool:
+        """A gate row counts only when ``ok`` is exactly ``True`` (not "true", 1 or missing), and a G18 row only while it
+        carries its clean-window evidence (``g18_evidence_ok``; Backlog B5)."""
         return any(r.get("kind") == "gate" and r.get("gate") == gate and r.get("ok") is True
-                   and (sha8 is None or r.get("sha8") == sha8) for r in self.rows())
+                   and (sha8 is None or r.get("sha8") == sha8) and (gate != "G18" or g18_evidence_ok(r))
+                   for r in self.rows())
 
     def stage_clean(self, stage: int) -> bool:
         """True when the last word the records have on ``stage`` is ``stage_done``: a later start of that stage, or an
@@ -275,6 +283,24 @@ def _go_fields(go_sentence: Any) -> dict:
 
 
 _BUILD_SHA_RE = re.compile(r"[0-9a-f]{7,40}")
+
+
+def _number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def g18_evidence_ok(row: Mapping[str, Any]) -> bool:
+    """True when a G18 row carries the clean-window evidence tools/stage1_window.py writes with it: ``window_hours`` a
+    finite number of at least ``G18_MIN_WINDOW_HOURS``, ``window_end`` a positive integer (epoch seconds) and
+    ``services`` equal to the number of services judged (``EIGHT_SERVICES``). A row without it is a hand-written claim,
+    not a judged window (Backlog B5)."""
+    hours, end, services = row.get("window_hours"), row.get("window_end"), row.get("services")
+    try:
+        long_enough = _number(hours) and hours >= G18_MIN_WINDOW_HOURS
+    except OverflowError:
+        long_enough = False
+    return (long_enough and isinstance(end, int) and not isinstance(end, bool) and end > 0
+            and isinstance(services, int) and not isinstance(services, bool) and services == len(EIGHT_SERVICES))
 
 
 def sha8_of(build_sha: Any) -> str | None:
@@ -577,7 +603,12 @@ def main(argv: list[str] | None = None) -> int:
             print(f"recorded ack-rollback stage {args.stage}")
             return 0
         if args.what == "gate" and not args.gate:
-            print("refused: record gate needs G18, G21 or G22")
+            print("refused: record gate needs G21 or G22")
+            return 2
+        if args.what == "gate" and args.gate == "G18":
+            # B5: G18 is a judged window, never a hand claim: only stage1_window writes it, with its evidence
+            print("refused: G18 is the clean Stage 1 window; write it with "
+                  "tools/stage1_window.py evaluate --before FILE --after FILE --records PATH")
             return 2
         try:
             sha = {"sha8": sha8_of(args.build_sha)} if args.build_sha else {}

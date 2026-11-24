@@ -51,6 +51,7 @@ import json
 import logging
 import os
 import re
+import stat
 import threading
 import time
 from dataclasses import dataclass, field
@@ -1388,6 +1389,71 @@ _SIDECAR_KEYS = ("format", "logical", "n", "file", "start_index", "end_index",
                  "closing_rotation_event_hash", "sha256", "archived_by")
 
 
+def _sidecar_int(side: dict[str, Any], key: str) -> int:
+    """A sidecar number as a real integer. The sidecar is unsigned, so ``Infinity`` / ``1e999`` (floats, and
+    ``int()`` of an infinity is OverflowError), ``2.5``, ``true`` and ``"7"`` are refused, never coerced."""
+    value = side[key]
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{key} is not an integer")
+    if not 0 <= value < _SIDECAR_INT_LIMIT:    # a 4300-digit count would make the failure text itself raise (F1)
+        raise ValueError(f"{key} is out of range")
+    return value
+
+
+#: A sidecar number is a count or an index: 0 <= value < 2**63. Anything larger is refused before it is used or printed.
+_SIDECAR_INT_LIMIT = 1 << 63
+#: A sidecar text field is printed by the CLI: it must be printable (no newline, ESC, NUL, lone surrogate: a newline in
+#: ``logical`` could forge a verifier output line) and at most this long. The hash fields are also ASCII.
+_SIDECAR_TEXT_MAX = 256
+
+
+def _sidecar_text(side: dict[str, Any], key: str, *, ascii_only: bool = False) -> str:
+    value = side[key]
+    if not isinstance(value, str):
+        raise ValueError(f"{key} is not a string")
+    if len(value) > _SIDECAR_TEXT_MAX or not value.isprintable() or (ascii_only and not value.isascii()):
+        raise ValueError(f"{key} is not a short printable string")
+    return value
+
+
+#: B1 (independent review of 2483b96e): ``logical`` and ``file`` are DERIVED from the segment's own file name, so a renamed
+#: segment and sidecar could carry any printable text into the OK line. A real name is ``events.jsonl`` and
+#: ``events-<n>.jsonl`` (both estates, ``ledger/events.jsonl``; closed_path_for adds ``-<n>``): only these characters
+#: are accepted, with room for a longer ledger file name. A name outside the set is refused with a fixed reason.
+_SIDECAR_LOGICAL_RE = re.compile(r"[A-Za-z0-9._-]{1,128}")
+_SIDECAR_FILE_RE = re.compile(r"[A-Za-z0-9._-]{1,160}")
+
+#: A real sidecar is about a kilobyte. The sidecar is unsigned input, so it is read only when it is a regular file and
+#: no larger than this (a symlink to /dev/zero or a 64 MiB pad would otherwise be read whole).
+_SIDECAR_MAX_BYTES = 1 << 20
+
+
+def _read_sidecar(path: Path) -> tuple[bytes | None, str | None]:
+    """``(bytes, None)``; ``(None, None)`` when it does not exist; ``(None, reason)`` when it cannot be a sidecar (not a
+    regular file, over the size cap, or unreadable). The reason never carries the content."""
+    try:
+        if os.name == "nt":
+            fh = open_shared(path)
+        else:
+            # O_NONBLOCK: opening a FIFO with no writer would block forever here, before the regular-file check below
+            # (F3); on a regular file the flag changes nothing.
+            fh = os.fdopen(os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)), "rb")
+    except FileNotFoundError:
+        return None, None
+    except OSError as exc:  # a directory, a permission error: a failed verification, never a traceback
+        return None, f"cannot be read ({type(exc).__name__})"
+    with fh:
+        try:
+            if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
+                return None, "is not a regular file"
+            raw = fh.read(_SIDECAR_MAX_BYTES + 1)
+        except OSError as exc:
+            return None, f"cannot be read ({type(exc).__name__})"
+    if len(raw) > _SIDECAR_MAX_BYTES:
+        return None, f"is larger than {_SIDECAR_MAX_BYTES} bytes"
+    return raw, None
+
+
 def verify_segment_file(path: str | Path, public_key_pem: str | None = None) -> dict[str, Any]:
     """Verify ONE archived segment standalone from ``<file>.segment.json`` beside it.
 
@@ -1408,18 +1474,39 @@ def verify_segment_file(path: str | Path, public_key_pem: str | None = None) -> 
         "ok": False, "segment": None, "logical": None, "events": 0, "global_first": None,
         "global_last": None, "reason": None, "signature_checked": False,
     }
-    side_raw = read_shared(sidecar_path_for(p))
+    side_raw, side_bad = _read_sidecar(sidecar_path_for(p))
+    if side_bad is not None:
+        out["reason"] = f"sidecar {sidecar_path_for(p).name!r} {side_bad}"
+        return out
     if side_raw is None:
-        out["reason"] = f"no sidecar {sidecar_path_for(p).name} beside {p}"
+        out["reason"] = f"no sidecar {sidecar_path_for(p).name!r} beside {str(p)!r}"
         return out
     try:
         side = json.loads(side_raw)
         missing = [k for k in _SIDECAR_KEYS if k not in side]
         if missing or side["format"] != SIDECAR_FORMAT:
-            raise ValueError(f"missing {missing}" if missing else f"format {side['format']!r}")
-        n, start, end = int(side["n"]), int(side["start_index"]), int(side["end_index"])
-    except (ValueError, TypeError, KeyError) as exc:
-        out["reason"] = f"sidecar {sidecar_path_for(p).name} invalid: {exc}"
+            raise ValueError(f"missing {missing}" if missing else "format is not supported")   # never print the value (R2)
+        n, start, end = (_sidecar_int(side, k) for k in ("n", "start_index", "end_index"))
+        if n < 1 or start < 0:
+            raise ValueError("n must be at least 1 and start_index at least 0")
+        if end < start:
+            raise ValueError(f"end_index {end} is before start_index {start}")
+        for k in ("logical", "file"):
+            _sidecar_text(side, k)
+        for k in ("genesis_prev_hash", "head_hash", "sha256"):
+            _sidecar_text(side, k, ascii_only=True)
+        # R1: ``logical`` is printed in the OK line, so it must be exactly what the writer put there: the ledger file's
+        # own name, from which ``file`` was derived (closed_path_for(logical, n)). A free-text value with spaces could
+        # otherwise read as part of the sentence ("... segment 1 of x (signed rotation anchor verified ...)") on an
+        # unsigned file.
+        logical = side["logical"]
+        if not logical or Path(logical).name != logical or closed_path_for(logical, n).name != side["file"]:
+            raise ValueError("logical is not the ledger file name that file was derived from")
+        # B1: even a consistent rename (file, sidecar and both fields) must not carry free text into the OK line
+        if _SIDECAR_LOGICAL_RE.fullmatch(logical) is None or _SIDECAR_FILE_RE.fullmatch(side["file"]) is None:
+            raise ValueError("logical and file must be plain file names (letters, digits, dot, dash, underscore)")
+    except (ValueError, TypeError, KeyError, RecursionError) as exc:
+        out["reason"] = f"sidecar {sidecar_path_for(p).name!r} invalid: {exc}"
         return out
     out.update(segment=n, logical=side["logical"], global_first=start, global_last=end)
 
@@ -1431,7 +1518,7 @@ def verify_segment_file(path: str | Path, public_key_pem: str | None = None) -> 
         return fail(f"sidecar describes {side['file']!r}, not {p.name!r}")
     data = read_shared(p)
     if data is None:
-        return fail(f"file {p} is missing (expected {end - start + 1} events)")
+        return fail(f"file {str(p)!r} is missing (expected {end - start + 1} events)")
     try:
         events = _parse_events(data)
     except ValueError as exc:

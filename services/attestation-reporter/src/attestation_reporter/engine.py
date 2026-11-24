@@ -32,6 +32,8 @@ from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
+from field_core.http import get_retrying_once
+
 from attestation_reporter.window import InvalidWindow, Window, normalise_bound, resolve_window
 
 #: The FIELD canary agents — tools/estate_probe.py CANARIES | RETIRED_CANARIES
@@ -200,7 +202,7 @@ def _fetch_answer(client, base: str, path: str, params: dict[str, Any] | None = 
     retries = 0
     while True:
         try:
-            resp = client.get(target)
+            resp = get_retrying_once(client, target)   # B16: one more GET on a dead pooled connection only
         except Exception:
             if down is not None:
                 down.add(id(client))

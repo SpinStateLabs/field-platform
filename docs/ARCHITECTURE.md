@@ -164,6 +164,7 @@ flowchart TD
     C1 -- no --> B1["BLOCK L.unreachable<br/>(unloggable action may not run)"]
     C1 -- yes --> C2{"2 · registered<br/>and active?"}
     C2 -- "unregistered" --> B2["BLOCK R.unregistered"]
+    C2 -- "registry unreachable" --> B2b["BLOCK R.registry_unreachable"]
     C2 -- killed --> B3["BLOCK E.kill_switch"]
     C2 -- yes --> C3{"3 · manifest resolves<br/>+ field validate OK?"}
     C3 -- no --> B4["BLOCK I.manifest"]

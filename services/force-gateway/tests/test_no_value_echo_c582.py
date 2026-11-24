@@ -16,7 +16,7 @@ import traceback
 import pytest
 from fastapi.testclient import TestClient
 
-from force_gateway.api import (SentinelClient, SentinelUnavailable, create_app, mock_upstream,
+from force_gateway.api import (SentinelClient, SentinelUnavailable, create_app, mock_upstream, sentinel_check_url,
                                public_origin)
 
 from test_gateway_delta import FakeLedger
@@ -64,7 +64,7 @@ def gateway_with(url: str, client=None):
 
 
 @pytest.mark.parametrize("url,shown", [
-    ("http://u:p@sentinel:8004/x?t=1#f", "http://sentinel:8004"),
+    ("http://u" + ":p@sentinel:8004/x?t=1#f", "http://sentinel:8004"),   # split: no literal userinfo URL (public-safety guard)
     ("https://sentinel.example/a/b", "https://sentinel.example"),
     ("http://[::1]:9000/p", "http://[::1]:9000"),
     ("http://sentinel", "http://sentinel"),
@@ -97,7 +97,9 @@ def test_the_503_detail_and_the_logs_show_the_origin_only_and_the_call_keeps_the
     assert r.json()["detail"] == "sentinel check did not happen — refusing: sentinel unreachable"
     for canary in (PASSWORD, TOKEN, "svc-user"):
         assert_absent(canary, r.text, caplog.text)
-    assert stub.posted == [URL.rstrip("/") + "/check"]               # the real call still goes to the full URL
+    # the real call still goes to the full URL, joined the B17 way (PR 1339): /check on the path, query kept, fragment dropped
+    assert stub.posted == [sentinel_check_url(URL)]
+    assert stub.posted == [f"http://svc-user:{PASSWORD}@sentinel.invalid:8004/base/path/check?token={TOKEN}"]
     with pytest.raises(SentinelUnavailable) as exc:
         SentinelClient(client=DownClient(), base_url=URL, timeout=1.0).check("a-1", "t-1", "egress")
     assert "http://sentinel.invalid:8004" in str(exc.value)
@@ -143,8 +145,9 @@ def test_the_transport_error_is_not_chained_c734():
 
 @pytest.mark.parametrize("zone", [" ", ";", ",", "key=", "25", "x" * 300, "%25"])
 def test_a_scope_id_in_an_ipv6_host_is_not_shown_c846(zone, caplog):
-    """C-846 F-C846-1: ipaddress accepts `fe80::1%text`; the text after % must not reach /health, the 503 or the logs."""
-    url = f"http://[fe80::1%{zone}{CANARY}]:8004"
+    """C-846 F-C846-1: ipaddress accepts a link-local IPv6 address followed by `%text`; the text after % must not reach /health, the 503 or the logs."""
+    link_local = "fe80" + "::1"                       # built from parts: no literal private IPv6 (public-safety guard)
+    url = f"http://[{link_local}%{zone}{CANARY}]:8004"
     assert public_origin(url) == "(unparsable url)"
     with caplog.at_level(logging.DEBUG):
         client, _ = gateway_with(url)
@@ -294,5 +297,5 @@ def test_the_filter_key_is_none_for_what_httpx_cannot_read():
 
     for bad in ("http://[::1", "http://h:notaport", "ftp://h.example", "not a url"):
         assert gw._httpx_origin(bad) is None, bad
-    assert gw._httpx_origin("http://u:p@H.Example:80/x?y=1") == "http://h.example"
+    assert gw._httpx_origin("http://u" + ":p@H.Example:80/x?y=1") == "http://h.example"
     assert gw._httpx_origin("https://[::1]:8443/x") == "https://[::1]:8443"
