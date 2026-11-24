@@ -141,3 +141,21 @@ def test_a_value_error_from_the_anchor_write_after_a_rotation_keeps_the_result_e
     _no_traceback(r)
     assert json.loads(r.stdout)["segment"] == 1
     assert "rotation SUCCEEDED" in r.stderr and "Do NOT re-run rotate" in r.stderr and "unusable anchor" not in r.output
+
+
+def test_a_torn_anchors_file_after_a_rotation_keeps_the_do_not_rerun_contract(seg, tmp_path):
+    """don.reviewer C1 on #916: append_anchor_line refuses a torn last record with LedgerCorrupt (a RuntimeError). After
+    a completed rotation that must not escape as a traceback with an empty stderr: an operator would re-run rotate."""
+    p, key = seg
+    a = tmp_path / "torn.jsonl"
+    torn = b'{"segment": 1, "torn-marker-Zk4'                 # no final newline, not a complete record
+    a.write_bytes(torn)
+    r = _offline(p, key, "--anchors", str(a))
+    assert r.exit_code == 1, r.output
+    _no_traceback(r)
+    result = json.loads(r.stdout)
+    assert result["segment"] == 1 and (p.parent / result["file"]).exists()      # really rotated, result printed first
+    assert "rotation SUCCEEDED" in r.stderr and "NOT written" in r.stderr and "Do NOT re-run rotate" in r.stderr
+    assert "LedgerCorrupt" in r.stderr and '"head_hash"' in r.stderr            # the class, and the anchor to store
+    assert "torn-marker-Zk4" not in r.output                                    # nothing of the file is quoted
+    assert a.read_bytes() == torn                                               # the torn file is left as it was

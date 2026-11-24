@@ -37,6 +37,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from field_core import operator_auth, operator_health
 from field_core.startup import warn_open
 from field_core.authn import HEADER as AUTH_HEADER, install as install_authn, shared_secret
+from field_core.http import get_retrying_once, pooled_limits
 from field_core.http_errors import install_validation_handler
 from field_core.buildinfo import build_sha
 from field_core.clients import (
@@ -161,13 +162,14 @@ class ServiceClient:
         if self._client is None:
             import httpx
 
+            # B16: idle connections expire before the upstream's keep-alive closes them
             self._client = httpx.Client(
-                base_url=self.base, timeout=10.0, headers=_console_headers()
+                base_url=self.base, timeout=10.0, headers=_console_headers(), limits=pooled_limits()
             )
 
     def get(self, path: str, **kw) -> tuple[int, Any]:
         try:
-            return _decode(self._client.get(path, **kw))
+            return _decode(get_retrying_once(self._client, path, **kw))   # B16: once more on a dead connection
         except Exception as exc:
             return 0, type(exc).__name__
 

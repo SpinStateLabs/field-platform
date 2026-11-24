@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from field_core.guarded_operator import compile_routes, request_headers
 
+import ipaddress
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -15,6 +17,7 @@ for _stream in (sys.stdout, sys.stderr):
         _stream.reconfigure(encoding="utf-8")
 
 import httpx
+from httpx import URL as _URL, InvalidURL as _InvalidURL   # bound at import: tests replace cli.httpx with a fake
 
 from spend_governor import __version__
 from spend_governor.provisioning import path_segment
@@ -38,8 +41,50 @@ def _hdr(method: str, path: str) -> dict:
     return request_headers(method, path, GOVERNOR_GUARDED)
 
 
+DEFAULT_GOVERNOR_URL = "http://127.0.0.1:8006"
+#: The one line a bad FIELD_GOVERNOR_URL gets (backlog B18): fixed text, never the value (it may be a secret pasted
+#: into the wrong variable, or carry userinfo).
+BAD_GOVERNOR_URL = "error: FIELD_GOVERNOR_URL is not a usable http(s) URL (the value is not shown)"
+
+
+_HOSTNAME = re.compile(r"[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?")
+
+
+def _is_host(host: str) -> bool:
+    """``host`` is httpx's ``raw_host`` as ASCII, so an IDN name is checked in its punycode form (``url.host`` would
+    decode it back to non-ASCII). A hostname (letters, digits, dot, hyphen, underscore), with at most one trailing dot
+    (a fully qualified name), or an IP literal. httpx builds a URL whose host holds a space, and that fails only at
+    connect time; in ``raw_host`` the space is ``%20``, which is refused here."""
+    name = host[:-1] if host.endswith(".") else host
+    if not name:
+        return False
+    if _HOSTNAME.fullmatch(name):
+        return True
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return True
+
+
 def _base() -> str:
-    return os.environ.get("FIELD_GOVERNOR_URL", "http://127.0.0.1:8006").rstrip("/")
+    """FIELD_GOVERNOR_URL without a trailing ``/``; blank counts as unset (the default). Refused before any request,
+    with the fixed line above on stderr, exit 2 and no traceback (B18): a value httpx cannot build a URL from
+    (``httpx.InvalidURL``, ``ValueError``: a port that is not a number, a control character, an unclosed IPv6
+    bracket), one that is not http(s), one with no usable host (a space in it), one with a port outside 1..65535 and
+    one carrying userinfo (``user:password@``: credentials in a URL get logged). A query or fragment is allowed."""
+    raw = (os.environ.get("FIELD_GOVERNOR_URL") or "").strip().rstrip("/") or DEFAULT_GOVERNOR_URL
+    try:
+        url = _URL(raw + "/x")          # a path as the commands add one, so the composed URL is what is checked
+        usable = (url.scheme in ("http", "https") and _is_host(url.raw_host.decode("ascii"))
+                  and (url.port is None or 0 < url.port <= 65535)    # httpx builds :99999 and fails only on connect
+                  and not url.userinfo)                              # credentials in a URL end up in logs (builder-b)
+    except (_InvalidURL, ValueError, TypeError):   # names bound at import, so a fake cli.httpx cannot break them
+        usable = False
+    if not usable:                           # raised outside the handler: no chained text from httpx
+        typer.echo(BAD_GOVERNOR_URL, err=True)
+        raise typer.Exit(code=2)
+    return raw
 
 
 #: Errors raised before any request bytes reach the governor: the call cannot have been applied.
@@ -332,7 +377,12 @@ def serve(
         from field_core.clients import LedgerClient
 
         ledger = LedgerClient()
-    uvicorn.run(create_app(ledger=ledger), host=host, port=port)
+    registry = None
+    if os.environ.get("FIELD_REGISTRY_URL"):  # unset = no lookup, no retired-agent line (C-757)
+        from field_core.clients import RegistryClient
+
+        registry = RegistryClient()
+    uvicorn.run(create_app(ledger=ledger, registry=registry), host=host, port=port)
 
 
 if __name__ == "__main__":  # pragma: no cover

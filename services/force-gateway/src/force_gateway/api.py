@@ -75,6 +75,7 @@ from field_core.authn import install as install_authn, shared_secret
 from field_core.guarded_operator import perimeter_headers
 from field_core.http_errors import install_validation_handler
 from field_core.buildinfo import build_sha
+from field_core.http import pooled_limits
 from field_core.llm import AGENT_ID_HEADER, EGRESS_ACTION, TOKEN_HEADER
 from pydantic import BaseModel
 
@@ -359,6 +360,16 @@ def resolve_sentinel_url() -> str | None:
     return value or None
 
 
+def sentinel_check_url(base: str) -> str:
+    """The sentinel's ``/check`` URL for a configured base (backlog B17). ``/check`` is appended to the base's PATH,
+    so a base that carries a query keeps it after ``/check`` (``http://s:8004/p?x=1`` -> ``http://s:8004/p/check?x=1``)
+    instead of ``/check`` landing inside the query or the fragment. The fragment is dropped: it is never sent."""
+    from urllib.parse import urlsplit, urlunsplit
+
+    parts = urlsplit(base)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path.rstrip("/") + "/check", parts.query, ""))
+
+
 def resolve_sentinel_timeout(default: float = DEFAULT_SENTINEL_TIMEOUT) -> float:
     """`FORCE_GATEWAY_SENTINEL_TIMEOUT` in seconds (> 0, at most ``MAX_SENTINEL_TIMEOUT``); junk, NaN, infinity and
     a non-positive value ⇒ the default."""
@@ -396,7 +407,8 @@ class SentinelClient:
         if self._client is None:
             import httpx
 
-            self._client = httpx.Client(timeout=self.timeout, headers=perimeter_headers())
+            # B16: idle connections expire before the sentinel's keep-alive closes them; POST /check is not retried
+            self._client = httpx.Client(timeout=self.timeout, headers=perimeter_headers(), limits=pooled_limits())
 
     @property
     def base_url(self) -> str:
@@ -404,7 +416,7 @@ class SentinelClient:
 
     def check(self, agent_id: str, token_id: str, action: str) -> dict[str, Any]:
         try:
-            resp = self._client.post(f"{self._base}/check", json={
+            resp = self._client.post(sentinel_check_url(self._base), json={   # B17: /check goes on the path
                 "agent_id": agent_id, "token_id": token_id, "action": action})
         except Exception as exc:
             raise SentinelUnavailable(
