@@ -762,7 +762,6 @@ def create_app(
         # drill's compare-and-set restore compares, so a kill that lands during a drill can never be mistaken for the
         # drill's own state (from this process or any other).
         failure: HTTPException | None = None
-        signal_anyway = previous == "killed"        # already marked killed: still try to stop the agent itself
         try:
             answer = _set_status(agent_id, "killed")
         except AgentNotRegisteredError:
@@ -781,10 +780,12 @@ def create_app(
                 # a 200 whose body does not say killed is NOT a kill: never report or ledger it as one. A kill we could
                 # not confirm in the registry should still try to stop the agent, so the halt signal goes out first.
                 failure = HTTPException(502, f"registry did not confirm the kill of '{agent_id}'")
-                signal_anyway = True
         if failure is not None:
-            if signal_anyway:
-                _signal_and_ledger(agent_id, record, origin, {"operator": operator, "reason": reason})
+            # B108: ANY failed or unconfirmed write still sends the halt signal (an agent left active must not also be
+            # left unsignalled: the signal is the only stop left). The refusals that must send nothing (operator 403,
+            # retired 409, unknown agent 404 on the read) are raised before the write, so they never reach here. The
+            # caller still gets the error, never a 200, and a domain kill records it and moves on to the next agent.
+            _signal_and_ledger(agent_id, record, origin, {"operator": operator, "reason": reason})
             raise failure
         # The signal is sent even on an idempotent re-kill: the flip is what
         # is idempotent, the halt signal is the whole point of repeating it.
