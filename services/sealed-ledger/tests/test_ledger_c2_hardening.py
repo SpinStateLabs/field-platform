@@ -18,6 +18,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 from fastapi.testclient import TestClient
@@ -1135,12 +1136,16 @@ def test_heavy_read_gate_width(tmp_path, monkeypatch, setting, width):
 @pytest.mark.parametrize("method,path_fn", [
     ("GET", lambda tmp: "/verify"),
     ("GET", lambda tmp: "/events"),
-    ("POST", lambda tmp: f"/export?out_dir={tmp / 'bundles'}"),
+    ("POST", lambda tmp: "/export?out_dir=" + quote(str(tmp / "bundles"), safe="")),   # encoded: a "+" or "&" in the temp path must stay part of the value
 ])
 def test_every_served_heavy_read_waits_on_the_read_gate(tmp_path, monkeypatch, method, path_fn):
     """B-1075-TESTS: test_heavy_read_gate_width only drives store.snapshot(); a /verify, /events or /export that
     skipped the gate survived it. Hold the ONLY slot; the served route must not answer until it is released."""
     monkeypatch.setenv("FIELD_LEDGER_READ_CONCURRENCY", "1")
+    # Backlog B10: out_dir is confined to FIELD_EXPORT_ROOT in every operator mode, and an out_dir outside it is refused
+    # 422 BEFORE the read gate (a refusal is not a served heavy read). The /export case must be a SERVED read, so its
+    # out_dir (tmp_path / "bundles") is put under the export root.
+    monkeypatch.setenv("FIELD_EXPORT_ROOT", str(tmp_path))
     s, p, hashes = three_segments(tmp_path / "ledger")
     app = create_app(store=s)
     held, release, done = threading.Event(), threading.Event(), threading.Event()
