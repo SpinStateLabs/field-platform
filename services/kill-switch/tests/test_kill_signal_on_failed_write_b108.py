@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import types
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -22,8 +23,9 @@ FAILURES = {
     "unreachable": RegistryUnreachableError("registry returned 500"),
     "404": AgentNotRegisteredError("a2"),
     "generic": ValueError("boom"),
+    "timeout": httpx.ReadTimeout("the write may have committed"),   # a timeout a wrapper did not map
 }
-SINGLE_STATUS = {"unreachable": 502, "404": 404, "generic": 502}
+SINGLE_STATUS = {"unreachable": 502, "404": 404, "generic": 502, "timeout": 502}
 
 
 class Endpoint:
@@ -80,8 +82,16 @@ def _status(stack, agent_id):
     return stack.registry.get(f"/agents/{agent_id}").json()["status"]
 
 
+def _events(stack, event_type):
+    return stack.ledger.get("/events", params={"event_type": event_type}).json()
+
+
 def _signalled(stack):
-    return sorted(e["agent_id"] for e in stack.ledger.get("/events", params={"event_type": "kill.endpoint_called"}).json())
+    return sorted(e["agent_id"] for e in _events(stack, "kill.endpoint_called"))
+
+
+def _failed(stack):
+    return sorted(e["agent_id"] for e in _events(stack, "kill.agent.failed"))
 
 
 @pytest.mark.parametrize("case", sorted(FAILURES))
@@ -92,6 +102,7 @@ def test_single_kill_with_a_failed_write_still_signals_and_answers_an_error(buil
     assert _status(stack, "a2") == "active"
     assert len(stack.endpoint.urls) == 1                      # the halt signal went out anyway
     assert _signalled(stack) == ["a2"]
+    assert _failed(stack) == ["a2"]                           # the failed kill is still ledgered as one
 
 
 @pytest.mark.parametrize("case", sorted(FAILURES))
@@ -105,6 +116,7 @@ def test_domain_kill_with_one_failed_write_signals_it_and_still_kills_the_rest(b
     assert [_status(stack, a) for a in ("a1", "a2", "a3")] == ["killed", "active", "killed"]
     assert len(stack.endpoint.urls) == 3                      # every agent signalled, a2 included
     assert _signalled(stack) == ["a1", "a2", "a3"]
+    assert _failed(stack) == ["a2"]
 
 
 def test_a_refusal_before_the_write_still_sends_nothing(build):
@@ -114,3 +126,17 @@ def test_a_refusal_before_the_write_still_sends_nothing(build):
     r = stack.kill.post("/kill/a2", json=OP)
     assert r.status_code == 409
     assert stack.endpoint.urls == [] and _signalled(stack) == []
+
+
+def test_control_a_working_write_kills_signals_and_answers_200(build):
+    stack = build(["a1"], RuntimeError("never raised"))           # only a2's write fails
+    r = stack.kill.post("/kill/a1", json=OP)
+    assert r.status_code == 200 and _status(stack, "a1") == "killed"
+    assert _signalled(stack) == ["a1"] and _failed(stack) == []
+
+
+def test_control_a_domain_with_no_failure_answers_200_and_signals_all(build):
+    stack = build(["a1", "a3"], RuntimeError("never raised"))      # a2 absent: no write fails
+    r = stack.kill.post("/kill/domain/finance", json=OP)
+    assert r.status_code == 200
+    assert _signalled(stack) == ["a1", "a3"] and _failed(stack) == []
