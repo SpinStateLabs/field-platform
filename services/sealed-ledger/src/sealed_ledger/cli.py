@@ -780,7 +780,9 @@ def rotate(
         try:
             record = AnchorRecord.model_validate(result.anchor)
             append_anchor_line(Path(anchors), record)
-        except (OSError, ValueError) as exc:  # ValidationError is a ValueError; a NUL path was refused above
+        # ValidationError is a ValueError; a NUL path was refused above; LedgerCorrupt: the anchors file ends in a torn
+        # record (a RuntimeError), and the operator must still get the "do not re-run" text (don.reviewer C1 on #916)
+        except (OSError, ValueError, LedgerCorrupt) as exc:
             typer.echo(
                 f"error: the rotation SUCCEEDED (segment {result.segment}) but the anchor line was NOT "
                 f"written to {anchors} ({type(exc).__name__}). Do NOT re-run rotate. Store the "
