@@ -11,7 +11,7 @@ sealed-ledger event *before* it takes effect.
 
 | Endpoint | Method | Purpose |
 |---|---|---|
-| `/tokens` | POST | Mint (`agent_id`, `granted_by`, `scope[]`, `ttl_seconds` xor `expires_at`) |
+| `/tokens` | POST | Mint (`agent_id`, `granted_by`, `scope[]`, `ttl_seconds` xor `expires_at`). A blank scope entry or one with leading or trailing whitespace is a 422 that names the field and never the value (never rewritten); exact duplicates are dropped, first place kept |
 | `/tokens` | GET | List (filter `agent_id`) |
 | `/tokens/{id}` | GET | Read one |
 | `/tokens/{id}/revoke` | POST | Revoke. Idempotent: a token has at most ONE revocation id, a function of its token id (`stable_revocation_id`), the same on every attempt; concurrent revokes of one token in a process run one at a time (a lock per token, not one for all tokens) and return that id with one event. The ledger gets AT LEAST ONE `delegation.revoke` event (ledger first, then the write): a crash between the two, or a second process, can add a repeat event carrying the same id, never a different one. `delegation.revoke` therefore means "revoke REQUESTED" and may repeat for one token with the same id (a ledger reader counts distinct `revocation_id`, not events); between the ledger append and the write a crash leaves the token introspecting active until a retry finishes it, and nothing sweeps those for you. A ledger outage or refusal refuses the revoke (502, "ledger unreachable" / "ledger refused (HTTP n)") and leaves the token active |
