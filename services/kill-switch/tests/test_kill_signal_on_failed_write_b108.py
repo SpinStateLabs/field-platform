@@ -140,3 +140,22 @@ def test_control_a_domain_with_no_failure_answers_200_and_signals_all(build):
     r = stack.kill.post("/kill/domain/finance", json=OP)
     assert r.status_code == 200
     assert _signalled(stack) == ["a1", "a3"] and _failed(stack) == []
+
+
+def test_a_failed_write_whose_signal_also_fails_answers_the_write_error_and_ledgers_both(build):
+    """Review question 2: the write fails AND the halt signal fails. The caller sees the write's error (the signal
+    never raises); the ledger holds kill.endpoint_failed (with the signal's reason) and kill.agent.failed."""
+    stack = build(["a2"], RegistryUnreachableError("registry returned 500"))
+
+    def refuse(method, url, headers=None, timeout=None):
+        stack.endpoint.urls.append(url)
+        raise ConnectionError("endpoint down")
+
+    stack.endpoint.request = refuse
+    r = stack.kill.post("/kill/a2", json=OP)
+    assert r.status_code == 502 and "registry unreachable" in r.json()["detail"]
+    assert len(stack.endpoint.urls) == 1                      # the signal was attempted
+    failed_signal = _events(stack, "kill.endpoint_failed")
+    assert [e["agent_id"] for e in failed_signal] == ["a2"]
+    assert failed_signal[0]["payload"]["reason"] == "transport_error"
+    assert _signalled(stack) == [] and _failed(stack) == ["a2"]
