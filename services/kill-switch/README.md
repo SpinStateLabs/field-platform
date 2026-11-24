@@ -67,7 +67,7 @@ Every outcome is ledgered as `kill.endpoint_called` / `kill.endpoint_failed` /
 | Endpoint | Method | Purpose |
 |---|---|---|
 | `/kill/{agent_id}` | POST | Halt one agent (`operator`, `reason` required) — returns timing; **409 for a `retired` agent** |
-| `/kill/domain/{domain}` | POST | Halt every agent in a domain; retired agents are skipped and listed in `skipped_retired` |
+| `/kill/domain/{domain}` | POST | Halt every agent in a domain; retired agents are skipped and listed in `skipped_retired`. The domain is matched the registry's way (ASCII case, surrounding spaces): a row stored before the registry's ASCII domain rule with a look-alike domain is NOT reached; halt it by id, or use the console's fleet halt naming no domain (B80) |
 | `/revive/{agent_id}` | POST | Restore after incident review; **409 for a `retired` agent** |
 | `/heartbeat/{agent_id}` | GET | Agents poll; unknown agents get `killed: true` (fail closed). **Never writes** |
 | `/heartbeat/{agent_id}` | POST | Check-in: records `last_seen`, then answers with the SAME semantics as the GET |
