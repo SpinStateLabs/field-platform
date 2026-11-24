@@ -270,6 +270,32 @@ def reject_non_finite(value: Any) -> None:
             stack.extend(v)
 
 
+#: The deepest payload an append accepts, counted in NODES with the payload itself as level 1 (``{}`` is 1, ``{"a": {}}``
+#: is 2, ``{"a": 1}`` is 2: a scalar value is a node one level below its container). Dicts, lists and tuples all count a
+#: level. Measured against the serializer for dict, list and mixed nesting with scalar, empty-dict and empty-list leaves:
+#: 98 seals and 99 is refused in every shape. The bound is OURS: pydantic-core's JSON serializer refuses a payload at
+#: 99 levels (``PydanticSerializationError`` "Circular reference detected (depth exceeded)" at ``model_dump_json``,
+#: an unmapped 500 over HTTP), so a bound at or below that turns the refusal into ours, before anything is written.
+#: A test pins that the serializer still accepts this depth (it fails if pydantic's own limit ever drops below ours).
+MAX_PAYLOAD_DEPTH = 98
+
+
+def reject_too_deep(value: Any, limit: int = MAX_PAYLOAD_DEPTH) -> None:
+    """Raise ``ValueError("payload nests too deeply")`` if a node of ``value`` lies deeper than ``limit`` levels (the
+    value itself is level 1; every node counts, a scalar too; dicts, lists and tuples nest). Iterative, so neither a
+    deep payload nor a self-referencing one can hit the recursion limit (a cycle is deeper than any limit and is
+    refused). The message never carries the value."""
+    stack: list[tuple[Any, int]] = [(value, 1)]
+    while stack:
+        v, level = stack.pop()
+        if level > limit:       # every node counts, a scalar too: the serializer's own counter walks values, not only containers
+            raise ValueError("payload nests too deeply")
+        if isinstance(v, dict):
+            stack.extend((child, level + 1) for child in v.values())
+        elif isinstance(v, (list, tuple)):
+            stack.extend((child, level + 1) for child in v)
+
+
 def compute_event_hash(event: LedgerEvent | dict[str, Any]) -> str:
     """sha-256 over the canonical record minus ``hash`` and minus ``signature``
     (F2: the signature is taken over the hash, so it cannot be inside it).
@@ -317,6 +343,7 @@ def make_event(
     event_id: str | None = None,
 ) -> LedgerEvent:
     """Build a sealed event linked to ``prev_hash``."""
+    reject_too_deep(payload)      # first: it also refuses a self-referencing payload before the walk below could loop
     reject_non_finite(payload)
     partial = {
         "event_id": event_id or str(uuid.uuid4()),
