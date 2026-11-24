@@ -272,9 +272,12 @@ def test_an_unanswered_verify_can_never_head_the_pack_no_gaps():
 
 
 def test_an_offline_pack_has_no_not_checked_gap():
-    # nothing collected at all (manifest-only): FC-L-01 is "evidence not collected", as before, not "not checked"
-    _, payload = _pack(None)
+    # nothing requested at all (manifest-only, no agent_id): FC-L-01 is "evidence not collected", not "not checked"
+    from compliance_crosswalk.evidence_pack import generate_pack
+
+    _, payload = generate_pack(resolved_manifest(), signer="Test Signer 1", stale_store=_NoStale())
     assert not [g for g in payload["gaps"] if g["kind"] == "not-checked"]
+    assert payload["evidence_status"] == "not-requested"
 
 
 def test_pack_failed_and_answered_not_verified_ledger_are_gaps():
