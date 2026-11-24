@@ -241,6 +241,48 @@ def test_the_filter_rewrites_only_a_sentinel_origin_and_keeps_the_record():
     assert f.filter(other) is True and other.args[1] == "https://api.example.org/v1/messages?x=1"
 
 
+@pytest.mark.parametrize("msg,args", [
+    ("HTTP Request: %s %s", ("POST", "{url}")),                                   # a shorter request line
+    ("Request to %s failed: %s", ("{url}", "ConnectError")),                      # another format, URL first
+    ("%(method)s %(url)s", {"method": "POST", "url": "{url}"}),                   # mapping args
+    ("retrying %s (%d)", ("{url}", 2)),
+], ids=["short", "other-format", "mapping", "with-number"])
+def test_the_filter_redacts_a_sentinel_url_in_any_httpx_record_format(msg, args):
+    """Independent verdict on 6ab6b25f: the filter must not fail open on a record format it does not know. Any httpx
+    record argument that reads as a URL to a sentinel origin is replaced by the origin; other arguments are untouched."""
+    import logging as _logging
+
+    from force_gateway import api as gw
+
+    base = f"http://u:{PASSWORD}@sentinel-any.example:8004/p?token={TOKEN}"
+    SentinelClient(base_url=base, timeout=1.0, client=object())
+    full = base + "/check"
+    if isinstance(args, dict):
+        args = {k: (full if v == "{url}" else v) for k, v in args.items()}
+    else:
+        args = tuple(full if a == "{url}" else a for a in args)
+    r = _logging.LogRecord("httpx", _logging.INFO, __file__, 1, msg, None, None)
+    r.args = args
+    assert gw._SENTINEL_URL_LOG_FILTER.filter(r) is True
+    text = r.getMessage()
+    assert "http://sentinel-any.example:8004" in text
+    assert_absent(PASSWORD, text)
+    assert_absent(TOKEN, text)
+    assert "/p" not in text.replace("http://", "")
+
+
+def test_the_filter_leaves_other_origins_and_non_url_arguments_alone():
+    import logging as _logging
+
+    from force_gateway import api as gw
+
+    SentinelClient(base_url="http://sentinel-keep.example:8004", timeout=1.0, client=object())
+    r = _logging.LogRecord("httpx", _logging.INFO, __file__, 1, "%s %s %d %s",
+                           ("POST", "https://api.example.org/v1/messages?x=1", 200, b"raw"), None)
+    assert gw._SENTINEL_URL_LOG_FILTER.filter(r) is True
+    assert r.args == ("POST", "https://api.example.org/v1/messages?x=1", 200, b"raw")
+
+
 @pytest.mark.parametrize("scheme,port", [("http", 80), ("https", 443)])
 def test_an_explicit_default_port_is_filtered_too_r1(caplog, scheme, port):
     """reviewer-R1 on #1272: httpx logs http://h:80/... as http://h/... (and https :443 the same way), while the

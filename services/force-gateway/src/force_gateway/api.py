@@ -63,6 +63,7 @@ import time
 import unicodedata
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from collections.abc import Mapping
 from typing import Any, Callable
 from urllib.parse import urlparse
 
@@ -423,19 +424,30 @@ class _SentinelUrlLogFilter(logging.Filter):
     """roley.reviewer C1 on #1272: httpx logs every request at INFO as ``HTTP Request: <method> <url> ...`` and the
     url there is the whole sentinel URL, userinfo, path and query included. For a request to a sentinel origin this
     filter puts the origin (``_httpx_origin``) in its place, so the success path logs no userinfo, path or query.
-    Requests to any other origin are left as httpx logs them. The record is kept, not dropped."""
+    It does not depend on that message format (independent verdict on 6ab6b25f: fail closed on a record format it does
+    not know): EVERY argument of an httpx record, positional or in a mapping, that reads as a URL to a sentinel origin
+    is replaced by that origin, whatever the message says. Requests to any other origin are left as httpx logs them.
+    The record is kept, not dropped."""
 
     def __init__(self) -> None:
         super().__init__()
         self.origins: set[str] = set()
 
+    def _shown(self, value: object) -> object:
+        """``value`` itself, or the sentinel origin when ``value`` reads as a URL to one (numbers and bytes are left)."""
+        if isinstance(value, (int, float, bytes, bytearray)) or value is None:
+            return value
+        shown = _httpx_origin(value)
+        return shown if shown is not None and shown in self.origins else value
+
     def filter(self, record: logging.LogRecord) -> bool:
+        if not self.origins:
+            return True
         args = record.args
-        if (self.origins and isinstance(args, tuple) and len(args) >= 2
-                and isinstance(record.msg, str) and record.msg.startswith("HTTP Request:")):
-            shown = _httpx_origin(args[1])
-            if shown is not None and shown in self.origins:
-                record.args = (args[0], shown, *args[2:])
+        if isinstance(args, tuple):
+            record.args = tuple(self._shown(a) for a in args)
+        elif isinstance(args, Mapping):
+            record.args = {k: self._shown(v) for k, v in args.items()}
         return True
 
 
