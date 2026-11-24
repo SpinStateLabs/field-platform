@@ -1,6 +1,6 @@
 """Phase G C-20, tools half (G19): an operator key goes over cleartext to LOOPBACK only. The tools' RFC 1918
-allowance stays for the perimeter secret alone (flags-off behaviour unchanged). https is always fine, and
---allow-plaintext remains the explicit override where the tool has it."""
+allowance stays for the perimeter secret alone (flags-off behaviour unchanged). https is always fine. No tool keeps a
+cleartext override: estate_probe dropped --allow-plaintext (PR 760/864) and phase_g_check dropped it in Backlog B1."""
 from __future__ import annotations
 
 import argparse

@@ -846,8 +846,6 @@ def build_parser() -> argparse.ArgumentParser:
                    "login id. Defaults to the shipped canary manifest names")
     p.add_argument("--allow", help="comma list of AGENT:EVENT_TYPE ledger events expected from other agents "
                    "during the run (collateral check)")
-    p.add_argument("--allow-plaintext", action="store_true",
-                   help="permit http:// to a non-loopback, non-private host with the secret")
     p.add_argument("--restore", action="store_true",
                    help="revive the canary if killed, print the host command that resumes the canary-agent "
                    "container, and exit; probes nothing else")
@@ -903,9 +901,9 @@ def _run(args: argparse.Namespace, secret: str | None, key: str | None) -> int:
         parts = urllib.parse.urlsplit(args.base)
         host = parts.hostname or ""
         # An operator key travels in cleartext to loopback only (C-20); the secret alone keeps the
-        # loopback/private allowance.
+        # loopback/private allowance. No override (Backlog B1): --allow-plaintext is gone, as in estate_probe.
         local = _loopback_host(host) if has_key else _internal_host(host)
-        if parts.scheme != "https" and not local and not args.allow_plaintext:
+        if parts.scheme != "https" and not local:
             ep._die("the secret/key would travel in cleartext: use https://, or a loopback address "
                     "(a private address is allowed for the secret alone, never with an operator key)")
     estate = _make_estate(args.base, secret)
