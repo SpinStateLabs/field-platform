@@ -1,5 +1,7 @@
-"""S12-11: the 'ai' naming rule matches a token, not letters inside a name; a RETIRED agent does not make a match
-'registered' (it is surfaced, naming the retired agent); the registered count stays the full count."""
+"""S12-11: ``looks_like_automation`` is main's naming rule, unchanged, applied to the NFKC-normalised, Cf-stripped name, plus
+the 21 whole-token AI vendor names; it has NO exclusion (a differential test over a corpus proves the head flags everything
+main flags). A RETIRED agent does not make a match 'registered' (it is surfaced, naming the retired agent); the registered
+count stays the full count."""
 
 from __future__ import annotations
 
@@ -25,10 +27,10 @@ def test_ai_tokens_are_still_flagged(name):
     assert looks_like_automation(name)
 
 
-@pytest.mark.parametrize("name", ["openai-key", "openai_worker", "bob@openai.com", "mlai_worker", "azure-openai-svc",
+@pytest.mark.parametrize("name", ["openai-key", "openai_worker", "bob@openai.example", "mlai_worker", "azure-openai-svc",
                                   "anthropic-prod", "x@ai.example", "x.ai.y", "genai.runner", "xai-key"])
 def test_vendor_named_ai_accounts_are_still_flagged(name):
-    """don.reviewer B1 on #1024: the ``ai`` anchor must not lose an AI vendor account typed as a user or left blank."""
+    """don.reviewer B1 on #1024: an AI vendor account typed as a user or left blank must still be flagged."""
     assert looks_like_automation(name)
 
 
@@ -103,7 +105,7 @@ MAIN_RULE = re.compile(r"(^svc[-_.]|^bot[-_.]|[-_.]bot$|agent|automation|ai[-_.]
 
 #: AI-ish service names (the 1024 advisory's probe, wave2's realm/ARN forms, the Unicode forms).
 SERVICE_NAMES = [
-    "my-ai-bot", "AI_agent", "agentai", "openai-key", "bob@openai.com", "ai-runner", "svc-llm", "AI-Ops", "x.ai.y",
+    "my-ai-bot", "AI_agent", "agentai", "openai-key", "bob@openai.example", "ai-runner", "svc-llm", "AI-Ops", "x.ai.y",
     "genai.runner", "vertexai-sa", "azureai-svc", "svc@vertexai.example", "h2oai-key", "c3ai-svc", "stabilityai-svc",
     "perplexityai-key", "togetherai-key", "fireworksai_key", "deepai-key", "jasperai-key", "scaleai-x", "metaai_bot",
     "chatai-runner", "myai-helper", "teamai.sync", "llamaai-x", "copilotai-svc", "OPENAI_API", "mistralai-svc",
@@ -114,7 +116,7 @@ SERVICE_NAMES = [
     # a combining mark after the last letter of a keyword: NFKC composes it and the folded name loses the match
     "agent" + chr(0x0308), "automation" + chr(0x0301), "reagent" + chr(0x0323) + "-1",
     # service accounts the person-shaped exclusion of the previous head let through (wave2-engineer, re-measured on main)
-    "chatai-prod@proj.iam.gserviceaccount.com", "moonshotai-etl", "teamai-prod", "dataai-etl", "corpai_ingest",
+    "chatai-prod@proj.iam.gserviceaccount.example", "moonshotai-etl", "teamai-prod", "dataai-etl", "corpai_ingest",
     "svcai-prod", "prodai-1", "CORP|chatai-prod", "CORP%5Cchatai-prod",
     # a vendor name INSIDE a fused token, no service word after it: not person-shaped
     "bedrockopenai-x", "fooperplexityai.q", "barmistralai_y",
