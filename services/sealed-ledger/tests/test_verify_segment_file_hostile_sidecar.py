@@ -117,6 +117,40 @@ def test_nesting_at_the_cap_is_parsed_and_then_refused_for_its_type_not_its_dept
     assert "anchor is not an object" in reason and "nesting" not in reason
 
 
+@pytest.mark.parametrize("codec", ["utf-16-le", "utf-16-be", "utf-16", "utf-32-le", "utf-32"])
+def test_a_sidecar_in_another_encoding_is_a_failed_verification(tmp_path, codec):
+    """json.loads(bytes) would pick UTF-16/32 itself; the sidecar is decoded strictly as UTF-8 once, for scan and parser."""
+    two, side_path = _two(tmp_path)
+    side_path.write_bytes(side_path.read_text(encoding="utf-8").encode(codec))
+    assert "invalid" in _assert_failed_not_crashed(two)["reason"]
+
+
+@pytest.mark.parametrize("codec", ["utf-16-le", "utf-32-le"])
+def test_an_encoding_that_blinds_a_utf8_scan_does_not_hide_a_deep_value(tmp_path, codec):
+    """U+0122 is bytes 22 01 in UTF-16-LE: read as UTF-8 it opens a string and the deep run after it is never counted,
+    while a UTF-16 parser is outside any string. Refused on the encoding, whatever the stack."""
+    two, side_path = _two(tmp_path)
+    side = json.loads(side_path.read_text(encoding="utf-8"))
+    deep = "[" * 100_000 + "]" * 100_000
+    text = json.dumps({**side, "Ģ": 1}, ensure_ascii=False)[:-1] + f', "closed_at": {deep}' + "}"
+    side_path.write_bytes(text.encode(codec))
+    assert "invalid" in _assert_failed_not_crashed(two)["reason"]
+
+
+def test_a_utf8_bom_sidecar_is_refused_as_before_the_cap_is_a_text_rule(tmp_path):
+    """Choice: the sidecar is decoded as strict UTF-8 and parsed as text, and json.loads refuses a BOM on text. The writer
+    never emits one (store.py writes the sidecar without a BOM)."""
+    two, side_path = _two(tmp_path)
+    side_path.write_bytes(b"\xef\xbb\xbf" + side_path.read_bytes())
+    assert "invalid" in _assert_failed_not_crashed(two)["reason"]
+
+
+def test_a_wide_shallow_sidecar_value_is_not_counted_as_deep():
+    from sealed_ledger.store import json_depth_exceeds
+    assert json_depth_exceeds("[]" * 1000) is False and json_depth_exceeds("[" + "[]," * 1000 + "[]]") is False
+    assert json_depth_exceeds(b'{"a": [1, {"b": [2]}]}') is False
+
+
 def test_the_depth_scan_ignores_brackets_inside_strings():
     from sealed_ledger.store import json_depth_exceeds
     assert json_depth_exceeds("[" * 501) and not json_depth_exceeds("[" * 500 + "]" * 500)

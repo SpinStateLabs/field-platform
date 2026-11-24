@@ -1437,7 +1437,7 @@ JSON_MAX_DEPTH = 500
 def json_depth_exceeds(data: bytes | str, limit: int = JSON_MAX_DEPTH) -> bool:
     """True when ``[``/``{`` nest deeper than ``limit`` outside string literals. A linear scan, no recursion, so the
     answer is the same on every Python and stack size. It does not validate the JSON: the decoder still does that."""
-    text = data.decode("utf-8", errors="replace") if isinstance(data, bytes) else data
+    text = data.decode("utf-8") if isinstance(data, bytes) else data     # strict: never a different text from the parser's
     depth = 0
     in_str = False
     esc = False
@@ -1514,9 +1514,13 @@ def verify_segment_file(path: str | Path, public_key_pem: str | None = None) -> 
         out["reason"] = f"no sidecar {sidecar_path_for(p).name!r} beside {str(p)!r}"
         return out
     try:
-        if json_depth_exceeds(side_raw):
+        # Decode strictly ONCE and give the same text to the scan and the parser. json.loads(bytes) picks its own
+        # encoding (UTF-16/32 by the NUL pattern), so a scan over a different decoding could be blind to a deep run the
+        # parser then reads. A UTF-8 BOM is refused here (json.loads refuses it on a str): the writer never emits one.
+        side_text = side_raw.decode("utf-8")        # UnicodeDecodeError is a ValueError: a failed verification
+        if json_depth_exceeds(side_text):
             raise ValueError(f"nesting is deeper than {JSON_MAX_DEPTH} levels")
-        side = json.loads(side_raw)
+        side = json.loads(side_text)
         missing = [k for k in _SIDECAR_KEYS if k not in side]
         if missing or side["format"] != SIDECAR_FORMAT:
             raise ValueError(f"missing {missing}" if missing else "format is not supported")   # never print the value (R2)
