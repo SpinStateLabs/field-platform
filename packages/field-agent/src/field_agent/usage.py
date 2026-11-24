@@ -162,6 +162,24 @@ def _get(obj: Any, key: str) -> Any:
     return getattr(obj, key, None)
 
 
+def _count(field: str, value: Any) -> int:
+    """A token count as an int, refusing only what would meter WRONG: a bool (``True`` would meter as 1), a non-integral
+    number (``1.9`` would meter as 1), a negative, and anything ``int()`` cannot read. A lossless coercion stays accepted
+    (``"7"``, ``3.0``): a proxied response may carry those. The message names the field and the type, never the value."""
+    kind = type(value).__name__
+    lossless = False
+    number = 0
+    if not isinstance(value, bool):
+        try:
+            number = int(value)
+            lossless = isinstance(value, (str, bytes, bytearray)) or number == value
+        except (TypeError, ValueError, OverflowError):
+            lossless = False
+    if not lossless or number < 0:
+        raise ValueError(f"usage {field} must be a non-negative whole number (got {kind})")
+    return number
+
+
 def extract_usage(response: Any) -> dict[str, Any]:
     """Pull ``{model, input_tokens, output_tokens, cache_read_tokens}`` from
     an Anthropic Messages response — dict or SDK object, no anthropic import.
@@ -183,9 +201,10 @@ def extract_usage(response: Any) -> dict[str, Any]:
         raise ValueError(
             "usage block lacks input_tokens/output_tokens — cannot report"
         )
+    cache_read = _get(usage, "cache_read_input_tokens")
     return {
         "model": str(model),
-        "input_tokens": int(input_tokens),
-        "output_tokens": int(output_tokens),
-        "cache_read_tokens": int(_get(usage, "cache_read_input_tokens") or 0),
+        "input_tokens": _count("input_tokens", input_tokens),
+        "output_tokens": _count("output_tokens", output_tokens),
+        "cache_read_tokens": 0 if cache_read is None else _count("cache_read_input_tokens", cache_read),
     }
