@@ -646,15 +646,38 @@ def exists_strict(path: str | Path) -> bool:
         return False
 
 
+class JsonTooDeep(ValueError):
+    """A line nested deeper than ``JSON_MAX_DEPTH``: refused by an explicit scan, so the verdict does not depend on the
+    interpreter's stack-derived recursion limit (CPython 3.14). The message is fixed, never segment content."""
+
+    def __init__(self) -> None:
+        super().__init__(f"nesting is deeper than {JSON_MAX_DEPTH} levels")
+
+
+def _load_event(line: str) -> LedgerEvent:
+    if json_depth_exceeds(line):
+        raise JsonTooDeep()
+    return LedgerEvent.model_validate(json.loads(line))
+
+
 def _parse_events(data: bytes) -> list[LedgerEvent]:
     """Exactly the pre-C2 reader: universal newlines, strip, skip blanks.
-    A malformed line raises (JSONDecodeError / ValidationError) as it always did."""
+    A malformed line raises (JSONDecodeError / ValidationError / JsonTooDeep) as it always did."""
     out: list[LedgerEvent] = []
     for line in io.TextIOWrapper(io.BytesIO(data), encoding="utf-8"):
         line = line.strip()
         if line:
-            out.append(LedgerEvent.model_validate(json.loads(line)))
+            out.append(_load_event(line))
     return out
+
+
+def _unparseable_text(exc: BaseException) -> str:
+    """B87: what a verification reason says about a line that does not parse. The exception CLASS and a fixed text, never
+    its message: a pydantic ValidationError prints each offending key and value (segment content, multi-line), and
+    that text would reach a ``TAMPERED`` line. ``RecursionError`` is a deeply nested line, the same kind of break."""
+    if isinstance(exc, JsonTooDeep):    # its text is fixed (the explicit nesting cap), not segment content
+        return str(exc)
+    return f"{type(exc).__name__} (the message is not echoed)"
 
 
 def _parse_events_located(data: bytes) -> tuple[list[LedgerEvent], tuple[int, str] | None]:
@@ -667,8 +690,8 @@ def _parse_events_located(data: bytes) -> tuple[list[LedgerEvent], tuple[int, st
         if not line:
             continue
         try:
-            out.append(LedgerEvent.model_validate(json.loads(line)))
-        except ValueError as exc:  # JSONDecodeError and pydantic ValidationError
+            out.append(_load_event(line))
+        except (ValueError, RecursionError) as exc:  # JSONDecodeError, pydantic ValidationError, JsonTooDeep
             lines = [x.strip() for x in str(exc).splitlines() if x.strip()][:3]
             return out, (len(out), f"{type(exc).__name__}: {'; '.join(lines)}"[:300])
     return out, None
@@ -1011,8 +1034,8 @@ def _closed_bytes_problem(
     start, end = entry["start_index"], entry["end_index"]
     try:
         events = _parse_events(data)
-    except ValueError as exc:
-        return start, f"unparseable line: {exc}"
+    except (ValueError, RecursionError) as exc:
+        return start, f"unparseable line: {_unparseable_text(exc)}"
     res = _verify_segment(events, genesis, start)
     if not res.ok:
         return (start if res.first_break_index is None else res.first_break_index), res.reason or ""
@@ -1359,7 +1382,13 @@ def verify_closed_segment(path: str | Path) -> tuple[dict[str, Any], ChainVerifi
         return None
     n, start, end = entry["n"], entry["start_index"], entry["end_index"]
     data = read_shared(path)
-    events = _parse_events(data) if data is not None else []
+    events: list[LedgerEvent] = []
+    parse_failure: BaseException | None = None
+    if data is not None:
+        try:
+            events = _parse_events(data)
+        except (ValueError, RecursionError) as exc:
+            parse_failure = exc
 
     def brk(index: int, reason: str) -> ChainVerification:
         return ChainVerification(ok=False, length=index + 1, first_break_index=index,
@@ -1367,6 +1396,8 @@ def verify_closed_segment(path: str | Path) -> tuple[dict[str, Any], ChainVerifi
                                  archived_segments=0, verified_events=len(events),
                                  break_segment=n)
 
+    if parse_failure is not None:
+        return entry, brk(start, f"unparseable line: {_unparseable_text(parse_failure)}")
     res = _verify_segment(events, entry["genesis_prev_hash"], start)
     if not res.ok:
         return entry, brk(res.first_break_index or start, res.reason or "")
@@ -1565,8 +1596,8 @@ def verify_segment_file(path: str | Path, public_key_pem: str | None = None) -> 
         return fail(f"file {str(p)!r} is missing (expected {end - start + 1} events)")
     try:
         events = _parse_events(data)
-    except ValueError as exc:
-        return fail(f"unparseable line: {exc}")
+    except (ValueError, RecursionError) as exc:
+        return fail(f"unparseable line: {_unparseable_text(exc)}")
     out["events"] = len(events)
     if n == 1 and (start != 0 or side["genesis_prev_hash"] != GENESIS_HASH):
         return fail("segment 1 must start at global index 0 from the genesis hash")
@@ -1847,7 +1878,12 @@ class LedgerStore:
                     tail = data_open[data_open.rfind(b"\n") + 1:]
                     if tail.strip():
                         try:
-                            json.loads(tail)
+                            # decode once, scan for depth, parse that text: a deep unterminated line is refused by the
+                            # cap here (treated like any torn tail) on every stack, and no bytes reach json.loads
+                            tail_text = tail.decode("utf-8")
+                            if json_depth_exceeds(tail_text):
+                                raise JsonTooDeep()
+                            json.loads(tail_text)
                         except ValueError:
                             now = time.monotonic()
                             if torn is None or torn[0] != (len(data_open), tail):
@@ -1945,7 +1981,7 @@ class LedgerStore:
             if raw.endswith(b"\n") and data.startswith(raw):
                 try:
                     tail = _parse_events(data[len(raw):])
-                except ValueError:  # JSONDecodeError, ValidationError, UnicodeDecodeError
+                except (ValueError, RecursionError):  # JSONDecodeError, ValidationError, UnicodeDecodeError, a nested line
                     tail = None
                 if tail is not None:
                     grown = events + tuple(tail)
@@ -1955,7 +1991,7 @@ class LedgerStore:
             # reader must still raise on. On clean bytes the two parses are the same events.
             try:
                 out = _parse_events(data)
-            except ValueError:
+            except (ValueError, RecursionError):
                 events, bad = _parse_events_located(data)
                 return events, None, bad
         else:
@@ -2910,8 +2946,8 @@ class LedgerStore:
 
             try:
                 events = _parse_events(data)
-            except ValueError as exc:
-                raise refuse(f"unparseable line: {exc}") from exc
+            except (ValueError, RecursionError) as exc:
+                raise refuse(f"unparseable line: {_unparseable_text(exc)}") from exc
             res = _verify_segment(events, seg.genesis, seg.start_index)
             if not res.ok:
                 raise refuse(res.reason or "chain break")
