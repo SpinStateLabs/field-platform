@@ -7,8 +7,11 @@ section and pins what a careless edit would silently change. Every pin below was
 the runbook text and went red (the list is in the PR text). It pins WORDS in a document that no code reads: a
 rewording that keeps the meaning must change the pin in the same commit, which is the point.
 
-It does not pin that the procedure is right, that any stage is safe to arm, or any soak floor: this repository records
-none, and the section says so (`test_the_soak_floors_are_not_invented`)."""
+It does not pin that the procedure is right or that any stage is safe to arm. Soak floors: the section quotes the two
+the repository holds elsewhere, and the one floor inside a stage block is the Stage 2 entry's Stage 1 window of at least
+24 hours, which `tools/stage_controller.py` enforces as `G18_MIN_WINDOW_HOURS` (`test_the_soak_floors_are_not_invented`
+ties that number to the code). Pins rebuilt against the runbook on main for train rb99: the Stage 2 step 3 go-point mark,
+the Stage 3 identity rule that replaced the OPEN ITEM, and the 24-hour Stage 1 window."""
 
 from __future__ import annotations
 
@@ -75,14 +78,16 @@ def test_a_lane_is_told_to_never_arm_deploy_touch_an_estate_or_read_a_secret():
     assert "A lane never arms, never deploys, never touches an estate, and never reads or prints a secret." in flat
 
 
-def test_exactly_four_steps_carry_the_coordinator_go_point_mark():
-    """Stage 1 step 6, Stage 2 steps 4 and 5, Stage 3 step 4; the fifth occurrence is the sentence that defines the mark."""
+def test_exactly_five_steps_carry_the_coordinator_go_point_mark():
+    """Stage 1 step 6, Stage 2 steps 3 (its sub-item (e), the internal-secret file on each estate), 4 and 5, Stage 3 step
+    4; the sixth occurrence is the sentence that defines the mark."""
     sec = _section()
-    assert sec.count("COORDINATOR AT GO-POINT") == 5
+    assert sec.count("COORDINATOR AT GO-POINT") == 6
     marked = {n: [s for s in _steps(_stage(n)) if "COORDINATOR AT GO-POINT" in s] for n in STAGES}
-    assert {n: len(v) for n, v in marked.items()} == {"1": 1, "2": 2, "3": 1}
+    assert {n: len(v) for n, v in marked.items()} == {"1": 1, "2": 3, "3": 1}
     assert marked["1"][0].startswith("6. Install the operators file")
-    assert [s[:2] for s in marked["2"]] == ["4.", "5."] and marked["3"][0].startswith("4. `FIELD_OPERATOR_REQUIRE=1`")
+    assert [s[:2] for s in marked["2"]] == ["3.", "4.", "5."] and marked["3"][0].startswith("4. `FIELD_OPERATOR_REQUIRE=1`")
+    assert "(e) COORDINATOR AT GO-POINT (not code): the secret file exists on each estate" in _flat(marked["2"][0])
 
 
 def test_only_the_key_copy_step_is_dons_own_and_no_step_says_don_only():
@@ -142,12 +147,14 @@ def test_a_domain_kill_is_never_run_on_an_estate_to_look_for_the_symptom():
 # ---- entry checks that carry a decision --------------------------------------------------------------------------------
 
 
-def test_stage_three_entry_points_at_the_open_item_and_the_open_item_exists_below():
+def test_stage_three_entry_points_at_the_identity_rule_and_the_rule_exists_below():
+    """The OPEN ITEM (rows C1 and T6) was ruled (G21): Stage 3 step 2 now applies the "Stage 3 identity rule" below."""
     step2 = _flat(_steps(_stage("3"))[1])
-    assert "OPEN ITEM below (rows C1 and T6) resolved or ruled" in step2
+    assert 'the rule of "Stage 3 identity rule (rows C1 and T6, G21)" below applied' in step2
     text = _text()
-    heading = re.search(r"^\*\*OPEN ITEM \(rows C1 and T6", text, re.M)
-    assert heading and heading.start() > text.index(START), "the OPEN ITEM must come AFTER the checklist it is 'below' of"
+    heading = re.search(r"^\*\*Stage 3 identity rule \(rows C1 and T6", text, re.M)
+    assert heading and heading.start() > text.index(START), "the identity rule must come AFTER the checklist it is 'below' of"
+    assert not re.search(r"^\*\*OPEN ITEM \(rows C1 and T6", text, re.M), "the ruled OPEN ITEM came back"
 
 
 def test_stage_one_entry_checks_the_key_files_by_size_and_mode_and_never_prints_them():
@@ -162,13 +169,32 @@ def test_the_verifier_runs_as_the_machine_identity_never_with_dons_key():
 # ---- no soak number is invented ----------------------------------------------------------------------------------------
 
 
+def _g18_min_window_hours() -> float:
+    """``G18_MIN_WINDOW_HOURS`` as written in tools/stage_controller.py (read as text: importing the controller is not
+    needed to read one constant)."""
+    src = (ROOT / "tools" / "stage_controller.py").read_text(encoding="utf-8")
+    m = re.search(r"^G18_MIN_WINDOW_HOURS = (\d+(?:\.\d+)?)$", src, re.M)
+    assert m, "G18_MIN_WINDOW_HOURS moved or was renamed in tools/stage_controller.py"
+    return float(m.group(1))
+
+
 def test_the_soak_floors_are_not_invented():
-    """The section says the repo records no floor for Stages 1 to 3 and quotes only the two it does hold. A duration
-    that appears anywhere else in the section (other than the 6 s the exit evidence measures) is a new claim."""
+    """The section quotes only the two floors the repo holds elsewhere (5 min per phase-gate step, 25 h scheduler soak),
+    plus the 6 s the exit evidence measures. The ONE floor inside a stage block is the Stage 2 entry's Stage 1 window,
+    and it must be the number the code enforces (G18_MIN_WINDOW_HOURS). Any other duration is a new, invented claim."""
     sec = _section()
     flat = _flat(sec)
-    assert "this repo records no soak floor for Stages 1, 2 or 3" in flat
     assert "do not take a number from this list" in flat
     durations = re.findall(r"(?:≥|>=|at least)?\s*\d+(?:\.\d+)?\s*(?:h|hours?|min|minutes?|s|seconds?|days?)\b", sec)
-    assert {d.strip().lstrip("≥").strip() for d in durations} <= {"6 s", "5 min", "25 h"}, durations
-    assert not re.search(r"(?:≥|>=|at least)\s*\d+", "".join(_stage(n) for n in STAGES))   # no floor inside a stage block
+    window = _g18_min_window_hours()
+    assert window == 24.0
+    assert {d.strip().lstrip("≥").strip() for d in durations} <= {"6 s", "5 min", "25 h", "at least 24 hours"}, durations
+    blocks = _flat("".join(_stage(n) for n in STAGES))
+    # every floor inside a stage block is the G18 Stage 1 window, stated twice in the Stage 2 entry: the window itself
+    # and the G18 record's `window_hours` (stage_controller.py refuses a G18 row below G18_MIN_WINDOW_HOURS)
+    numbers = re.findall(r"(?:≥|>=|at least)\s*(\d+(?:\.\d+)?)", blocks)
+    assert numbers and all(float(n) == window for n in numbers), (numbers, window)
+    assert "The window is at least 24 hours" in blocks and "`window_hours` of at least 24" in blocks
+    assert len(numbers) == 2, "a floor appeared inside a stage block that is not the G18 Stage 1 window"
+    stage2_entry = _flat(_steps(_stage("2"))[0])
+    assert "The window is at least 24 hours" in stage2_entry and "its `--min-hours` default is 24" in stage2_entry
