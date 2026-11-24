@@ -9,15 +9,21 @@ the variable, never the value.
 from __future__ import annotations
 
 import json
+import math
 import os
+import re
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
 
 DEFAULT_KEY_FILE = "/run/claude-approver/api-key"
 DEFAULT_POLL_SECONDS = 2.0
 #: Floor on the poll interval: 0 would spin against the 600 RPM org limit.
 MIN_POLL_SECONDS = 0.5
+MAX_POLL_SECONDS = 3600.0  # one poll an hour is the slowest a poller may be set to
+MAX_HALT_WAIT_SECONDS = 600.0
 DEFAULT_HALT_WAIT_SECONDS = 20.0
 
 #: Built-in tools that act inside the sandbox map to this one FIELD scope
@@ -25,6 +31,8 @@ DEFAULT_HALT_WAIT_SECONDS = 20.0
 #: classified action).
 SANDBOX_ACTION = "run commands in sandbox"
 SANDBOX_TOOLS = frozenset({"bash", "write", "edit"})
+#: The Console event type of a tool served by an MCP server (its name is the server's, not a built-in).
+MCP_TOOL_USE = "agent.mcp_tool_use"
 
 ENV_KEY_FILE = "CLAUDE_APPROVER_API_KEY_FILE"
 ENV_AGENT_MAP = "CLAUDE_APPROVER_AGENT_MAP"
@@ -35,7 +43,9 @@ ENV_ENVIRONMENT = "CLAUDE_APPROVER_ENVIRONMENT_ID"
 ENV_HALT_WAIT = "CLAUDE_APPROVER_HALT_WAIT_SECONDS"
 
 
-def _float_env(name: str, default: float) -> float:
+def _float_env(name: str, default: float, ceiling: float = math.inf) -> float:
+    """A finite value in [0, ceiling]; anything else (blank, junk, negative, inf, nan, over the
+    ceiling) is the default. Event.wait(inf) raises OverflowError, which would kill the poller."""
     raw = os.environ.get(name, "").strip()
     if not raw:
         return default
@@ -43,15 +53,15 @@ def _float_env(name: str, default: float) -> float:
         value = float(raw)
     except ValueError:
         return default
-    return value if value >= 0 else default
+    return value if math.isfinite(value) and 0 <= value <= ceiling else default
 
 
 def poll_seconds() -> float:
-    return max(MIN_POLL_SECONDS, _float_env(ENV_POLL, DEFAULT_POLL_SECONDS))
+    return max(MIN_POLL_SECONDS, _float_env(ENV_POLL, DEFAULT_POLL_SECONDS, MAX_POLL_SECONDS))
 
 
 def halt_wait_seconds() -> float:
-    return _float_env(ENV_HALT_WAIT, DEFAULT_HALT_WAIT_SECONDS)
+    return _float_env(ENV_HALT_WAIT, DEFAULT_HALT_WAIT_SECONDS, MAX_HALT_WAIT_SECONDS)
 
 
 def environment_filter() -> str | None:
@@ -64,14 +74,18 @@ def key_file_path() -> Path:
 
 def read_secret_file(path: str | Path) -> str | None:
     """The trimmed content of a secret file, or ``None`` when it is missing,
-    unreadable, not UTF-8 or blank. Never raises; never says why in a way that
-    could carry the content."""
+    unreadable, not UTF-8, blank, or still holds a non-printable or non-ASCII
+    character (a header value httpx cannot encode). A leading BOM (Windows
+    PowerShell 5.1 ``Out-File`` / ``>``) is dropped. Never raises; never says
+    why in a way that could carry the content."""
     try:
-        text = Path(path).read_text(encoding="utf-8")
+        text = Path(path).read_text(encoding="utf-8-sig")
     except (OSError, UnicodeDecodeError, ValueError):
         return None
     text = text.strip()
-    return text or None
+    if not text or not (text.isascii() and text.isprintable()):
+        return None
+    return text
 
 
 def read_api_key() -> str | None:
@@ -157,6 +171,10 @@ def _str_map(value: object) -> dict[str, str] | None:
     return out
 
 
+#: an optional path prefix of plain segments (unreserved characters; no empty, "." or ".." segment, no escapes)
+_PLAIN_PREFIX = re.compile(r"(/[A-Za-z0-9._~-]+)*")
+
+
 def _parse_entry(console_id: str, raw: object) -> AgentEntry:
     def bad(problem: str) -> AgentEntry:
         return AgentEntry(console_agent_id=console_id, field_agent_id=None, problem=problem)
@@ -181,6 +199,9 @@ def _parse_entry(console_id: str, raw: object) -> AgentEntry:
             return bad("estate_base_url is not a string")
         base = base.strip().rstrip("/") or None
         if base is not None:
+            # urlsplit silently drops tab / CR / LF, so look for them before it runs
+            if any(ch.isspace() or unicodedata.category(ch) == "Cc" for ch in base):
+                return bad("estate_base_url must not contain whitespace or control characters")
             parts = urlsplit(base)
             if parts.scheme not in ("http", "https") or not parts.hostname:
                 return bad("estate_base_url is not an http(s) URL")
@@ -188,6 +209,15 @@ def _parse_entry(console_id: str, raw: object) -> AgentEntry:
             # the perimeter secret belongs in secret_file
             if parts.username is not None or parts.password is not None:
                 return bad("estate_base_url must not carry credentials")
+            # estate_for appends /sentinel, /killswitch, /governor: a query or fragment would swallow them
+            if "?" in base or "#" in base:
+                return bad("estate_base_url must not carry a query or fragment")
+            try:
+                parts.port
+            except ValueError:
+                return bad("estate_base_url has an invalid port")
+            if not _PLAIN_PREFIX.fullmatch(parts.path) or any(seg in (".", "..") for seg in parts.path.split("/")):
+                return bad("estate_base_url path must be a plain prefix")
     secret_file = raw.get("secret_file")
     if secret_file is not None:
         if not isinstance(secret_file, str):
@@ -204,12 +234,38 @@ def _parse_entry(console_id: str, raw: object) -> AgentEntry:
     )
 
 
+class _DuplicateKey(ValueError):
+    """A JSON object repeated a key: `json.loads` would keep the last silently."""
+
+
+def _no_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in out:
+            raise _DuplicateKey("duplicate JSON key")  # never the key itself
+        out[key] = value
+    return out
+
+
+def _no_constants(name: str) -> Any:
+    raise ValueError("non-standard JSON constant")
+
+
+def _strict_loads(text: str) -> Any:
+    """``json.loads`` that refuses a repeated key at any depth and NaN/Infinity
+    (the sealed-ledger witness pattern): an operator reading the first of two
+    entries must not get a policy that the last one silently replaced."""
+    return json.loads(text, object_pairs_hook=_no_duplicate_keys, parse_constant=_no_constants)
+
+
 def parse_agent_map(text: str) -> AgentMap:
     """Parse the JSON map. Structural garbage empties the WHOLE map (nothing
     is touched, error reported on ``/stats``); a single bad entry is kept as
     an unusable entry whose calls are denied."""
     try:
-        data = json.loads(text)
+        data = _strict_loads(text)
+    except _DuplicateKey:
+        return AgentMap({}, error="agent map has a duplicate key")
     except (ValueError, TypeError):
         return AgentMap({}, error="agent map is not valid JSON")
     if not isinstance(data, dict):
@@ -258,7 +314,9 @@ def load_tool_map() -> ToolMap:
     if not raw:
         return ToolMap({})
     try:
-        data = json.loads(raw)
+        data = _strict_loads(raw)
+    except _DuplicateKey:
+        return ToolMap({}, error="CLAUDE_APPROVER_TOOL_MAP has a duplicate key")
     except (ValueError, TypeError):
         return ToolMap({}, error="CLAUDE_APPROVER_TOOL_MAP is not valid JSON")
     parsed = _str_map(data)
@@ -267,15 +325,22 @@ def load_tool_map() -> ToolMap:
     return ToolMap(parsed)
 
 
-def resolve_action(tool_name: str, entry: AgentEntry, tool_map: ToolMap) -> str:
+def resolve_action(tool_name: str, entry: AgentEntry, tool_map: ToolMap,
+                   event_type: str | None = None) -> str:
     """Per-agent ``actions`` > global ``CLAUDE_APPROVER_TOOL_MAP`` > built-in
     default (``bash``/``write``/``edit`` -> ``run commands in sandbox``;
     anything else, MCP tools included, -> its own name, which the sentinel
-    BLOCKs ``D.scope`` unless it is in scope: fail closed by construction)."""
+    BLOCKs ``D.scope`` unless it is in scope: fail closed by construction).
+
+    The built-in sandbox default is for the agent's built-in tools only: an
+    ``agent.mcp_tool_use`` event that merely carries one of those NAMES is an
+    MCP server's tool, not the sandbox, and keeps its own name (S8-17). The
+    explicit maps still win for both event types. ``event_type`` None is the
+    pre-S8-17 behaviour (the default applies)."""
     if tool_name in entry.actions:
         return entry.actions[tool_name]
     if tool_name in tool_map.entries:
         return tool_map.entries[tool_name]
-    if tool_name in SANDBOX_TOOLS:
+    if tool_name in SANDBOX_TOOLS and event_type != MCP_TOOL_USE:
         return SANDBOX_ACTION
     return tool_name

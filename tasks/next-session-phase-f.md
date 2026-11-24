@@ -1,7 +1,7 @@
 # Continuation prompt — FIELD v1.2, Phase F (written 2026-09-14)
 
 Paste everything below the line into a new Claude Code session opened in
-`C:\Users\donal\My Drive\Spin State Labs\Projects\FORCE-FIELD\field-platform`.
+`<repo>`.
 
 ---
 
@@ -20,7 +20,7 @@ Continue the FIELD platform v1.2 production build with **Phase F**. Run under th
 - **Code:** `main` at `d2e59fc` or later, pushed to `origin` (GitHub SpinStateLabs/field-platform, public — read CI through `https://api.github.com/repos/SpinStateLabs/field-platform/actions/runs?head_sha=<sha>`) and the `gb10` remote.
 - **Done and live on both estates:** Phases A, B, C (incl. the one-time ledger rotation + A4 anchor keys), D, X0, X1 (A1 owners roster, A2 GB10 perimeter secret, A3 DOA roster), X4 (witness direction 1, A5). X3 + A6 are live on the GB10 only.
 - **GB10** (private, `ssh gx10`, `~/field-platform`, compose project `field-platform`, proxy `127.0.0.1:18080`):
-  - Deployed build `8f1c0df`.
+  - (Build ids live in STATE.md history, not here.)
   - Switches live in `integration/demo/.env`; compose ignores `~/field-platform/.env`. Never print that file: it holds secrets.
   - `COMPOSE_PROFILES=witness,x3`.
   - Perimeter secret file: `~/.field-local/estate-secret`.
@@ -33,8 +33,8 @@ Continue the FIELD platform v1.2 production build with **Phase F**. Run under th
   - `fly ssh sftp put` never overwrites: use fresh `/tmp` names. `fly secrets set` restarts the machine and clears `/tmp`.
 - **rog-command (this PC):**
   - Token renewal is installed: vt via GB10 cron 14:35 local; both ssl agents via Task Scheduler `\FIELD\` at 14:50/15:05, Interactive logon, `--secret-file`.
-  - The GB10 secret copy is `C:\Users\donal\.field-local\gb10-estate-secret`.
-  - Backups, anchors and public keys are in `C:\Users\donal\.field-local\backups\`.
+  - The GB10 secret copy is `<home>\.field-local\gb10-estate-secret`.
+  - Backups, anchors and public keys are in `<home>\.field-local\backups\`.
   - Last session's helper scripts (Fly D-gate, throttle, C-gate checks, usage report) are in `D:\claude-session-scripts\` (`usage_report.py` has the old session id hard-coded: edit it).
 
 ## Open items blocking or shaping Phase F (ask Don where marked)
@@ -57,7 +57,7 @@ Continue the FIELD platform v1.2 production build with **Phase F**. Run under th
 - **Soak evidence still to record:** the first scheduled lifecycle `swept_at` and a later witness anchor. Every recreate restarts both intervals; the last recreate was 2026-09-14 ~04:21Z (GB10) and ~04:25Z (Fly).
 
 ## Phase F — what to do
-Follow the plan text exactly: **F2 must ship first** (J1), then F1, F2b, F3 (REWORD), F4, the egress network, and arming A7 → A8 → A9 → A10 → A11 with a canary and a ≥ 1 h GB10 soak per step before Fly. Irreversible steps need Don's explicit go before they run:
+Follow the plan text exactly: **F2 must ship first** (J1), then F1, F2b, F3 (REWORD), F4, the egress network, and arming A7 → A8 → A9 → A10 → A11 with a canary and a ≥ 5 min GB10 soak per step before Fly. Irreversible steps need Don's explicit go before they run:
 - A7's first signed event makes pre-F2 ledger images unable to start;
 - A9 `REQUIRE_SIGNING=1`;
 - anything posting real spend.

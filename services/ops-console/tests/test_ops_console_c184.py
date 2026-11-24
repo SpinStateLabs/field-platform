@@ -168,10 +168,11 @@ def test_an_unreachable_ledger_is_counted_as_a_dropped_record():
 # --- F-C171-2: what reaches the browser on an upstream exception or error body ---------------------
 
 
-def test_service_client_returns_status_0_and_the_exception_text_never_none():
+def test_service_client_returns_status_0_and_the_exception_class_name_never_none_never_the_text():
+    """C-504: the name of what failed, never its text (a transport error's text can hold a URL or an address)."""
     for method in ("get", "post"):
         st, data = getattr(sc(Stub(exc=RuntimeError("upstream-said-xyz"))), method)("/p")
-        assert st == 0 and data == "upstream-said-xyz"
+        assert st == 0 and data == "RuntimeError"
 
 
 def _closed_port() -> int:
@@ -204,10 +205,11 @@ def test_an_upstream_error_status_and_body_pass_through_unchanged():
     assert r.status_code == 409 and r.json() == {"detail": {"detail": "already killed"}}  # HTTPException(detail=body)
 
 
-def test_an_upstream_exception_text_is_the_502_detail():
+def test_an_upstream_exception_class_name_is_the_502_detail():
+    """C-504: the class name, not the text of what failed."""
     ks = Stub(exc=ConnectionError("no route to upstream"))
     r = console(killswitch=sc(ks)).post("/api/agents/a1/kill", json={"operator": "Don", "reason": "r"})
-    assert r.status_code == 502 and r.json() == {"detail": "no route to upstream"}
+    assert r.status_code == 502 and r.json() == {"detail": "ConnectionError"}
 
 
 # --- F-C171-4: the manifest route and a registry error answer ---------------------------------------
@@ -227,11 +229,12 @@ def test_a_registry_error_answer_is_not_read_as_an_agent_record(dirs, status, ex
     assert r.status_code != 200
 
 
-def test_a_ledger_read_error_status_and_body_reach_the_page_and_an_exception_is_a_502():
+def test_a_ledger_read_error_status_reaches_the_page_without_the_5xx_body_and_an_exception_is_a_502():
+    # C-554 (reviewer C-523 F-C523-3): the status is relayed, the body of a 5xx is a fixed text (a 4xx body still passes)
     r = console(ledger=sc(Stub(503, {"detail": "ledger busy"}))).get("/api/events")
-    assert r.status_code == 503 and r.json() == {"detail": {"detail": "ledger busy"}}
+    assert r.status_code == 503 and r.json() == {"detail": {"message": "upstream error", "status": 503}}
     r = console(ledger=sc(Stub(exc=ConnectionError("ledger unreachable")))).get("/api/events")
-    assert r.status_code == 502 and r.json() == {"detail": "ledger unreachable"}
+    assert r.status_code == 502 and r.json() == {"detail": "ConnectionError"}
 
 
 def test_an_upstream_answer_of_200_or_201_is_returned_to_the_page():

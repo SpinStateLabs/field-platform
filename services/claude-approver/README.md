@@ -20,7 +20,11 @@ For every Console agent in the agent map:
    on another environment when `CLAUDE_APPROVER_ENVIRONMENT_ID` is set.
 2. For an `idle` session: the events after the session's cursor (`events.list(created_at_gte=
    <newest processed_at seen>, order="asc")`, deduplicated by event id; the first read takes
-   everything). The SDK's Session object has no `stop_reason`, so it is read off the latest
+   everything; the cursor is the newest `processed_at` that is a real time, stored normalised to UTC, and a time more
+   than one minute ahead of this process's clock is never the cursor: it is counted as `cursor_future_ignored` in
+   `/stats` (a sustained rise, and a log line after 10 in a row, points at THIS HOST'S CLOCK being behind the API's, not at
+   an attack; a time with no UTC form is counted as `cursor_time_unusable`), because the cursor is sent back to the API and a far-future one would silence the session). The SDK's
+   Session object has no `stop_reason`, so it is read off the latest
    `session.status_idle` event. When it is `requires_action`, each `agent.tool_use` /
    `agent.mcp_tool_use` with `evaluated_permission == "ask"`, no `user.tool_confirmation`
    naming it, and (when the idle carries `stop_reason.event_ids`) named in that list is checked:
@@ -82,9 +86,9 @@ custom tools) and counted `custom_tool_pending`.
 | `CLAUDE_APPROVER_API_KEY_FILE` | File holding the org API key (default `/run/claude-approver/api-key`; compose sets that). Re-read every poll, trimmed; a changed key rebuilds the client. Absent/unreadable/blank: no polling, `/health.key_file_present=false`, `/halt` 503 |
 | `CLAUDE_APPROVER_AGENT_MAP` | Inline JSON, or a path when the value names an existing file. `CLAUDE_APPROVER_AGENT_MAP_FILE` (a path) wins when set. Re-read every poll |
 | `CLAUDE_APPROVER_TOOL_MAP` | JSON tool name -> FIELD action string (global layer) |
-| `CLAUDE_APPROVER_POLL_SECONDS` | default 2.0, floor 0.5 (0 would spin against the rate limit) |
+| `CLAUDE_APPROVER_POLL_SECONDS` | default 2.0, floor 0.5 (0 would spin against the rate limit), ceiling 3600. A non-finite (`inf`, `nan`), negative, junk or over-ceiling value is the default |
 | `CLAUDE_APPROVER_ENVIRONMENT_ID` | optional: only sessions on this environment are approved (a `/halt` covers every session of the agent) |
-| `CLAUDE_APPROVER_HALT_WAIT_SECONDS` | default 20 |
+| `CLAUDE_APPROVER_HALT_WAIT_SECONDS` | default 20 s, ceiling 600 s. A non-finite, negative, junk or over-ceiling value is the default |
 | `FIELD_SENTINEL_URL`, `FIELD_KILLSWITCH_URL`, `FIELD_GOVERNOR_URL`, `FIELD_SHARED_SECRET`, `FIELD_DATA_DIR` | as every service; the default route for agents without an estate block |
 
 Agent map (keys starting with `_` are ignored; the shape of
@@ -117,10 +121,10 @@ it the env URLs and `field_core.authn.auth_headers()` apply (the GB10 stack). St
 
 ## Running it on the GB10 (pilot S2; nothing armed by this change)
 
-1. Don places the key (never an agent): `install -d -m 0700 /home/spinner/.field-local/claude-approver`,
+1. Don places the key (never an agent): `install -d -m 0700 <home>/.field-local/claude-approver`,
    then the key in `api-key` there, `0600`. The agent map goes in the same directory as
    `agent-map.json` (it holds a delegation token id: keep it there, not in `.env`).
-2. In `integration/demo/.env`: `CLAUDE_APPROVER_SECRETS_DIR=/home/spinner/.field-local/claude-approver`
+2. In `integration/demo/.env`: `CLAUDE_APPROVER_SECRETS_DIR=<home>/.field-local/claude-approver`
    and `CLAUDE_APPROVER_AGENT_MAP=/run/claude-approver/agent-map.json`. The default
    `./approver-secrets/` is a committed, git-ignored placeholder holding no key.
 3. Build and start only this service, **with `--no-deps`**:

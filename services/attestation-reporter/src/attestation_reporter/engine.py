@@ -22,11 +22,17 @@ C4 — the window, the canary row and the signature fields:
 
 from __future__ import annotations
 
+import os
+import time
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
+from decimal import ROUND_HALF_UP, Decimal, localcontext
 from typing import Any, Literal
 from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
+
+from field_core.http import get_retrying_once
 
 from attestation_reporter.window import InvalidWindow, Window, normalise_bound, resolve_window
 
@@ -138,6 +144,47 @@ def _target(path: str, params: dict[str, Any] | None = None) -> str:
     )
 
 
+#: Upstream clients (by id) that already failed with NO answer during the current ``build`` (S8-20). Only a
+#: transport failure counts: an HTTP status, even a 500, is an answer. None outside a build, so a direct
+#: ``_fetch`` behaves exactly as before.
+_DOWN: ContextVar[set[int] | None] = ContextVar("attestation_down_upstreams", default=None)
+
+
+#: B-GL-attest-pack-gate: a 503 with a Retry-After is waited out and asked again, inside a build only. It can only
+#: matter for the ledger's /verify (the one whole-ledger read a pack sends; its filtered /events are never gated) and
+#: only runs when the ledger answers the 503 itself: with its default one-thread read lane a slow read queues the
+#: filtered /events and the first one times out ("ledger unreachable", no retry). Each wait <= RETRY_AFTER_CAP_S, 3 per call,
+#: FIELD_ATTEST_RETRY_BUDGET_S seconds in all per build (default 20; 0 = never retry, even for a Retry-After of 0;
+#: not a whole number of at most 9 digits = 20). ``_sleep`` is a module name so a test can replace it.
+RETRY_BUDGET_ENV = "FIELD_ATTEST_RETRY_BUDGET_S"
+DEFAULT_RETRY_BUDGET_S = 20
+RETRY_AFTER_CAP_S = 10
+MAX_RETRIES_PER_CALL = 3
+_sleep = time.sleep
+#: [seconds of waiting left] for the current ``build``; None outside a build (a direct ``_fetch`` never retries).
+_RETRY_LEFT: ContextVar[list[float] | None] = ContextVar("attestation_retry_left", default=None)
+
+
+def retry_budget_s() -> int:
+    raw = os.environ.get(RETRY_BUDGET_ENV, "").strip()
+    return int(raw) if raw.isdecimal() and len(raw) <= 9 else DEFAULT_RETRY_BUDGET_S
+
+
+def _retry_wait(resp: Any) -> int | None:
+    """Seconds to wait before asking again when ``resp`` is a 503 with an integer-seconds Retry-After, else None."""
+    if getattr(resp, "status_code", None) != 503:
+        return None
+    headers = getattr(resp, "headers", None)
+    try:
+        raw = headers.get("Retry-After") if headers is not None else None
+    except Exception:  # noqa: BLE001 - an odd headers object is simply no header
+        return None
+    raw = raw.strip() if isinstance(raw, str) else ""
+    if not raw.isdecimal() or len(raw) > 9:
+        return None
+    return min(int(raw), RETRY_AFTER_CAP_S)
+
+
 def _fetch_answer(client, base: str, path: str, params: dict[str, Any] | None = None):
     """Return (raw_json, query, ok, http_status): ``_fetch`` plus the HTTP
     status the service answered with — None when no answer came back (not
@@ -146,10 +193,26 @@ def _fetch_answer(client, base: str, path: str, params: dict[str, Any] | None = 
     query = f"GET {base}{target}"
     if client is None:
         return None, query, False, None
-    try:
-        resp = client.get(target)
-    except Exception:
+    down = _DOWN.get()
+    if down is not None and id(client) in down:
+        # This upstream already failed with no answer in this build: say so at once, with the same
+        # literal query, instead of waiting out the timeout again for every remaining metric.
         return None, query, False, None
+    left = _RETRY_LEFT.get()
+    retries = 0
+    while True:
+        try:
+            resp = get_retrying_once(client, target)   # B16: one more GET on a dead pooled connection only
+        except Exception:
+            if down is not None:
+                down.add(id(client))
+            return None, query, False, None
+        wait = _retry_wait(resp) if left is not None and retries < MAX_RETRIES_PER_CALL else None
+        if wait is None or left[0] <= 0 or wait > left[0]:
+            break
+        left[0] -= wait
+        retries += 1
+        _sleep(wait)
     if resp.status_code != 200:
         return None, query, False, resp.status_code
     try:
@@ -187,14 +250,54 @@ def _without_canaries(data: Any) -> tuple[Any, int]:
     """Drop gate-verification records (any dict whose ``agent_id`` is a canary)."""
     if not isinstance(data, list):
         return data, 0
-    kept = [x for x in data if not (isinstance(x, dict) and x.get("agent_id") in CANARY_AGENTS)]
+    # ``isinstance(..., str)``: a list or object agent_id is unhashable, and ``in`` on a frozenset would
+    # raise TypeError out of build (S8-19). Such a row is simply not a canary.
+    kept = [x for x in data if not (isinstance(x, dict) and isinstance(x.get("agent_id"), str)
+                                    and x["agent_id"] in CANARY_AGENTS)]
     return kept, len(data) - len(kept)
+
+
+class RevokedFlagNotBoolean(ValueError):
+    """A token whose ``revoked`` is present and is not a JSON boolean (a string, a number, a list, null). The metric
+    that needed the flag is unavailable (``_metric`` names this class in its note): a signed governance figure is
+    never built on truthiness (S5-16)."""
+
+
+def _revoked(token: dict) -> bool:
+    """The token's ``revoked`` flag, read strictly: ``True`` and ``False`` only; an absent key is ``False`` (a token
+    list from before the flag existed); any other value raises."""
+    flag = token.get("revoked", False)
+    if flag is True or flag is False:
+        return flag
+    raise RevokedFlagNotBoolean(type(flag).__name__)
 
 
 def _non_records(data: list) -> str | None:
     """Names the element types when a counted list holds anything but records (dicts), else None."""
     kinds = sorted({type(x).__name__ for x in data if not isinstance(x, dict)})
     return ", ".join(kinds) or None
+
+
+def conformance_percent(allows: int, total: int) -> float | None:
+    """100 * allows / total rounded HALF UP to one decimal, exactly (R-15 F-R15-1, C-138).
+
+    Python's ``round(100 * a / b, 1)`` is half-to-even on a float, so an exact tie such as 1/16 = 6.25
+    printed 6.2 where a reader recomputing by hand gets 6.3. Decimal arithmetic with a precision far above any
+    count the ledger can hold keeps ties exact; ``None`` when there are no verdicts.
+
+    Input contract (C-555, reviewer C-543 F-C543-2): two non-negative ``int`` with ``allows <= total``. Anything else
+    raises (``TypeError`` for a non-int, ``bool`` included; ``ValueError`` for a negative or ``allows > total``)
+    instead of printing a rate like -6.3 or 150.0. The one call site passes ``int()`` of ledger list lengths and the
+    sum of them, so no reachable value changes."""
+    if isinstance(allows, bool) or isinstance(total, bool) or not isinstance(allows, int) or not isinstance(total, int):
+        raise TypeError(f"conformance_percent takes two ints, got {type(allows).__name__} and {type(total).__name__}")
+    if allows < 0 or allows > total:
+        raise ValueError(f"conformance_percent needs 0 <= allows <= total, got allows={allows} total={total}")
+    if not total:
+        return None
+    with localcontext() as ctx:
+        ctx.prec = 60
+        return float((Decimal(100) * allows / Decimal(total)).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP))
 
 
 def _join(*parts: str | None) -> str | None:
@@ -288,8 +391,19 @@ class PackEngine:
         if data.get("status") == "unavailable":
             return policy, unavailable(count_name, "manifests",
                                        "the ledger could not read the agent registry at generation time")
-        offending, n_off = _without_canaries(data.get("offending") or [])
-        unresolvable, n_unres = _without_canaries(data.get("unresolvable") or [])
+        # A missing key or null means "none listed"; any other value must be a list of
+        # records, falsy or not: `or []` turned {} / "" / 0 / False into a published zero.
+        raw_offending = [] if data.get("offending") is None else data["offending"]
+        raw_unresolvable = [] if data.get("unresolvable") is None else data["unresolvable"]
+        for raw in (raw_offending, raw_unresolvable):
+            # a wrong-shaped list fails this ONE metric closed (as _metric does), not build()
+            if not isinstance(raw, list) or _non_records(raw):
+                return policy, unavailable(
+                    count_name, "manifests",
+                    "the ledger's /retention/check answer is not a list of records; "
+                    "figure not published")
+        offending, n_off = _without_canaries(raw_offending)
+        unresolvable, n_unres = _without_canaries(raw_unresolvable)
         offending = sorted(offending, key=lambda o: str(o.get("agent_id")))
         unresolvable = sorted(unresolvable, key=lambda u: str(u.get("agent_id")))
         parts = []
@@ -329,10 +443,10 @@ class PackEngine:
         for event_type, count_name, what, distinct_name, key_label, key in (
             ("lifecycle.reattestation_due", "Re-attestation due (sweep events)", "agent",
              "Distinct agents flagged for re-attestation", "agent_id",
-             lambda e: e.get("agent_id")),
+             lambda e: e.get("agent_id") if isinstance(e.get("agent_id"), str) else None),
             ("lifecycle.expiring_authority", "Expiring authority (sweep events)", "token",
              "Distinct tokens flagged as expiring", "payload.token_id",
-             lambda e: (e.get("payload") or {}).get("token_id")),
+             lambda e: (e.get("payload") if isinstance(e.get("payload"), dict) else {}).get("token_id")),
         ):
             data, query, ok = _fetch(self.ledger, self.ledger_base, "/events",
                                      {"event_type": event_type, **window.params()})
@@ -348,7 +462,9 @@ class PackEngine:
                                        "not records — figure not published"))
                 continue
             events, excluded = _without_canaries(data)
-            keys = [key(e) for e in events]
+            # A key that is not a str (a list or dict a caller wrote into the payload) is
+            # unhashable and not an identifier: count it as missing, never as a distinct key.
+            keys = [k if isinstance(k := key(e), str) else None for e in events]
             missing = sum(1 for k in keys if k is None)
             rows.append(Metric(
                 name=count_name, value=len(events), unit="events", source_query=query,
@@ -406,6 +522,12 @@ class PackEngine:
             return Metric(name=name, source_query=query, status="unavailable",
                           note=_verify_unanswered(answered))
         reason = v.get("reason")
+        if not isinstance(v.get("ok"), bool):
+            # Not a verification result: INTACT is only ever `ok is True`. A truthy
+            # string or number used to read as intact; a missing key read as broken.
+            return Metric(name=name, source_query=query, status="unavailable",
+                          note="the ledger's /verify answer carries no boolean ok "
+                               "— not a verification result; chain NOT verified")
         if not v.get("ok") and isinstance(reason, str) and reason.startswith("ledger busy:"):
             # "ledger busy: unreadable: ..." is a genuine permission refusal on every
             # attempt (sealed-ledger's LedgerUnreadable): retrying will not help, so
@@ -416,7 +538,7 @@ class PackEngine:
                                + ("" if unreadable else "; retry"))
         return Metric(
             name=name,
-            value="INTACT" if v.get("ok") else f"BROKEN — {reason}",
+            value="INTACT" if v["ok"] is True else f"BROKEN — {reason}",
             source_query=query,
             note=_join(f"chain length {v.get('length')}",
                        f"{POINT_IN_TIME} (the whole live chain, not the window)",
@@ -456,6 +578,19 @@ class PackEngine:
 
     def build(self, period: str | None = None, now: datetime | None = None, *,
               since: str | None = None, until: str | None = None) -> BoardPack:
+        """The pack. A transport failure to one upstream makes that upstream's remaining metrics
+        unavailable at once (same query text and note as before), so a dropped host costs one
+        timeout per build, not one per metric. See ``_build`` for the window arguments."""
+        token = _DOWN.set(set())
+        retry_token = _RETRY_LEFT.set([float(retry_budget_s())])
+        try:
+            return self._build(period, now, since=since, until=until)
+        finally:
+            _RETRY_LEFT.reset(retry_token)
+            _DOWN.reset(token)
+
+    def _build(self, period: str | None = None, now: datetime | None = None, *,
+               since: str | None = None, until: str | None = None) -> BoardPack:
         """``period`` ("2026-Q3" / "Q3 2026") and ``since``/``until`` are
         mutually exclusive; neither ⇒ all-time. A bad window raises
         ``InvalidWindow`` before any service is queried."""
@@ -501,7 +636,7 @@ class PackEngine:
         rate_query = " ; ".join(m.source_query for m in verdicts)
         if all(m.status == "ok" for m in verdicts):
             total = sum(int(m.value) for m in verdicts)
-            pct = round(100 * int(allows.value) / total, 1) if total else None
+            pct = conformance_percent(int(allows.value), total)
             shadow_total = int(shadow_blocks.value) + int(shadow_escalates.value)
             note = (f"= {allows.value} / ({allows.value}+{blocks.value}"
                     f"+{escalates.value}+{shadow_blocks.value}"
@@ -509,6 +644,7 @@ class PackEngine:
             if shadow_total:
                 note += (f"; includes {shadow_total} log-only shadow "
                          f"verdict(s) — violations observed, NOT enforced")
+            note += "; rounded half up to one decimal"
             conformance = Metric(
                 name="Conformance rate (ALLOW / all verdicts incl. shadow)",
                 value=pct if pct is not None else "n/a — no verdicts in ledger",
@@ -541,7 +677,7 @@ class PackEngine:
         revoked = self._metric(
             "Tokens revoked (all time)", self.delegation,
             self.delegation_base, "/tokens", unit="tokens",
-            transform=lambda toks: sum(1 for t in toks if t.get("revoked")),
+            transform=lambda toks: sum(1 for t in toks if _revoked(t)),
             note="computed client-side from the token list: revoked == true; "
                  f"{POINT_IN_TIME}, not windowed",
         )
@@ -552,7 +688,7 @@ class PackEngine:
             self.delegation_base, "/tokens", unit="tokens",
             transform=lambda toks: sum(
                 1 for t in toks
-                if not t.get("revoked")
+                if not _revoked(t)
                 and now <= datetime.fromisoformat(
                     t["expires_at"].replace("Z", "+00:00")
                 ) <= now + timedelta(days=30)

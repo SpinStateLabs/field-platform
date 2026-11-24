@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 
 import pytest
 
@@ -75,9 +76,9 @@ def _clean(monkeypatch):
     monkeypatch.delenv(oa.ENV_REQUIRE, raising=False)
     monkeypatch.delenv(oa.ENV_REGISTRY, raising=False)
     monkeypatch.setattr(oa, "clock", lambda: T0)
-    oa.reset_retired_memory()
+    oa._reset_retired_memory()
     yield
-    oa.reset_retired_memory()
+    oa._reset_retired_memory()
 
 
 @pytest.fixture()
@@ -402,7 +403,10 @@ def test_rule_the_breakglass_alias_is_refused_next_to_the_real_row_too():
 
 
 def test_the_sealed_breakglass_row_is_still_accepted():
-    assert oa.parse_registry(doc(), require_active=True) is not None
+    rows = oa.parse_registry(doc(), require_active=True)
+    assert [r["operator_id"] for r in rows] == ["don", "svc-killswitch", "don-breakglass", "old"]
+    sealed = next(r for r in rows if r["operator_id"] == "don-breakglass")
+    assert sealed["status"] == "active" and tuple(sealed["scopes"]) == ("kill", "revive", "bypass_operator_list")
 
 
 @pytest.mark.parametrize("scopes", [["*"], ["kill", "mint"], ["drill"]])
@@ -482,6 +486,18 @@ def test_rule_duplicate_credential_id():
 def test_rule_passkey_fields(bad):
     d = doc()
     row(d, "don")["passkeys"] = [passkey(**bad)]
+    assert "passkey" in unavailable(d)
+
+
+def test_the_passkey_label_cap_is_exactly_64():
+    """The 64 lives only as a literal in the label pattern: accepted at 64,
+    refused at 65 (C-837 F-C837-2)."""
+    d = doc()
+    row(d, "don")["passkeys"] = [passkey(label="l" * 64)]
+    r = next(x for x in oa.parse_registry(d) if x["operator_id"] == "don")
+    assert r["passkeys"][0]["label"] == "l" * 64
+    d = doc()
+    row(d, "don")["passkeys"] = [passkey(label="l" * 65)]
     assert "passkey" in unavailable(d)
 
 
@@ -812,7 +828,7 @@ def test_retired_memory_is_per_process_and_per_path(enforce_file, tmp_path):
     other = tmp_path / "other.json"
     other.write_text(json.dumps(doc()), encoding="utf-8")
     assert oa._verify("svc-killswitch", K_KS, oa.load_registry(str(other)))[0]
-    oa.reset_retired_memory()                             # a restart forgets
+    oa._reset_retired_memory()                             # a restart forgets
     enforce_file(doc())
     assert ok("svc-killswitch", K_KS)
 
@@ -874,3 +890,138 @@ def test_generation_one_is_the_smallest_accepted_and_zero_is_refused():
     assert oa.parse_registry(d)
     d["generation"] = 0
     assert "generation" in unavailable(d)
+
+
+# --- C-1048 F-C1048-1: the format-2 loader runs the verifier rules (C-805, C-1003) -----------------------------
+
+K_VER = "fok_test-verifier-not-a-real-key"
+
+
+def _with_verifier_row(scopes, oid="svc-verifier-gb10", status="active"):
+    d = doc()
+    d["operators"].append({"operator_id": oid, "status": status, "scopes": scopes, "names": [],
+                           "created_at": "2026-10-26T01:15:00Z", "rotation": "auto", "key_sha256": h(K_VER),
+                           "key_created_at": "2026-10-26T01:15:00Z", "key_not_after": EXPIRY})
+    return d
+
+
+def test_format2_refuses_a_verifier_prefixed_row_holding_bypass_operator_list():
+    msg = unavailable(_with_verifier_row(["kill", "revive", "bypass_operator_list"]))
+    assert "bypass_operator_list" in msg and "svc-verifier-gb10" in msg and "C-1003" in msg
+
+
+def test_format2_loads_the_verifier_row_without_the_scope():
+    d = _with_verifier_row(["kill", "revive", "drill", "attest", "mint", "revoke"])
+    rows = oa.parse_registry(d, require_active=True)
+    assert any(r["operator_id"] == "svc-verifier-gb10" for r in rows)
+
+
+def test_format2_refuses_the_verifier_scope_set_under_a_non_prefixed_id():
+    msg = unavailable(_with_verifier_row(["kill", "revive", "revoke", "mint"], oid="verifier-gb10"))
+    assert "machine verifier" in msg and "C-805" in msg
+
+
+def test_format2_does_not_refuse_a_revoked_prefixed_row_with_the_scope():
+    d = _with_verifier_row(["kill", "bypass_operator_list"], status="revoked")
+    oa.parse_registry(d, require_active=False)
+
+
+# --- C-51 (reviewer C-37): format 2 ambiguity rules through the format 2 parser -------------------
+# The format 1 and shared-alias cases are pinned elsewhere (stage0, C-178); these three rules are
+# only pinned for format 1, so a format 2 parser that stopped calling `validate_rows` for them
+# (or called an older copy) would still pass the suite.
+
+
+def test_format2_duplicate_operator_id_is_refused_as_ambiguous():
+    d = doc()
+    clone = copy.deepcopy(row(d, "don"))
+    clone["names"] = []                                      # only the id repeats
+    clone["key_sha256"] = h("fok_test-clone-not-a-real-key")  # a repeated hash would trip another rule first
+    d["operators"].append(clone)
+    msg = unavailable(d)
+    assert "ambiguous" in msg and "duplicate operator_id 'don'" in msg
+
+
+def test_format2_alias_equal_to_another_rows_id_is_refused_as_ambiguous():
+    d = doc()
+    row(d, "svc-killswitch")["names"] = ["don"]              # would let this row satisfy a list naming don
+    msg = unavailable(d)
+    assert "ambiguous" in msg and "equals an operator id" in msg
+
+
+def test_format2_alias_star_is_refused_as_ambiguous():
+    d = doc()
+    row(d, "don")["names"] = ["*"]                           # would match a list that says "*"
+    msg = unavailable(d)
+    assert "ambiguous" in msg and "alias '*'" in msg
+
+
+# --- C-51: MAX_RETIRED_HASHES boundary -------------------------------------------------------------
+
+
+def _retired_of(path) -> dict:
+    return oa._retired_state[os.path.abspath(str(path))]["retired"]
+
+
+def _ks_generation(d: dict, n: int) -> dict:
+    """The file at generation 41 + n, svc-killswitch holding its n-th current key (no NEXT)."""
+    d = copy.deepcopy(d)
+    d["generation"] = 41 + n
+    ks = row(d, "svc-killswitch")
+    ks.pop("next_key", None)
+    ks["key_sha256"] = h(f"fok_test-ks-{n}-not-a-real-key")
+    return d
+
+
+def _load_chain(tmp_path, monkeypatch, cap, steps):
+    monkeypatch.setattr(oa, "MAX_RETIRED_HASHES", cap)
+    p = tmp_path / "operators.json"
+    for n in range(steps + 1):
+        p.write_text(json.dumps(_ks_generation(doc(), n)), encoding="utf-8")
+        oa.load_registry(str(p))
+    return p
+
+
+def test_retired_memory_at_exactly_the_cap_keeps_every_entry(tmp_path, monkeypatch):
+    p = _load_chain(tmp_path, monkeypatch, cap=2, steps=2)           # retires two hashes
+    assert sorted(_retired_of(p).values()) == [42, 43]
+
+
+def test_retired_memory_over_the_cap_drops_the_oldest_generation_first(tmp_path, monkeypatch):
+    p = _load_chain(tmp_path, monkeypatch, cap=2, steps=3)           # retires three, room for two
+    assert sorted(_retired_of(p).values()) == [43, 44]               # generation 42 was evicted
+    assert h("fok_test-ks-0-not-a-real-key") not in _retired_of(p)
+
+
+# --- C-922 (reviewer C-847 F-C847-3): the sighting counter stops at MAX_RETIRED_HASHES -------------------------
+
+
+def _backup_at(generation):
+    d = copy.deepcopy(doc())
+    d["generation"] = generation
+    return d
+
+
+def _sightings(enforce_file, monkeypatch, cap, restores):
+    monkeypatch.setattr(oa, "MAX_RETIRED_HASHES", cap)
+    assert ok("svc-killswitch", K_KS)
+    enforce_file(_rotated(doc(), 42))                    # svc-killswitch's old key is retired at generation 42
+    assert ok("don", K_DON)
+    for g in restores:                                   # the old key comes back in files at lower generations
+        enforce_file(_backup_at(g))
+        refused("svc-killswitch", K_KS)
+    return oa.retired_hash_seen
+
+
+def test_each_distinct_sighting_of_a_retired_hash_is_counted_up_to_the_cap(enforce_file, monkeypatch):
+    assert _sightings(enforce_file, monkeypatch, cap=3, restores=[41, 40, 39]) == 3
+
+
+def test_sightings_beyond_the_cap_are_not_counted(enforce_file, monkeypatch):
+    """`_retired_seen` is bounded: with a cap of 2, the third distinct sighting is refused as before but no longer
+    counted (and no further record is kept)."""
+    assert _sightings(enforce_file, monkeypatch, cap=2, restores=[41, 40, 39, 38]) == 2
+
+
+def test_the_same_sighting_is_counted_once(enforce_file, monkeypatch):
+    assert _sightings(enforce_file, monkeypatch, cap=3, restores=[41, 41, 41]) == 1

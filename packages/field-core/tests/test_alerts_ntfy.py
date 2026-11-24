@@ -88,9 +88,9 @@ def ntfy():
 def _clean(monkeypatch):
     for k in ALL_ENV:
         monkeypatch.delenv(k, raising=False)
-    alerts.reset_stats()
+    alerts._reset_stats()
     yield
-    alerts.reset_stats()
+    alerts._reset_stats()
 
 
 def _env(ntfy, **extra):
@@ -192,22 +192,47 @@ def test_a_short_topic_is_allowed_with_a_token(ntfy):
 
 # ------------------------------------------------------------------ headers
 
-@pytest.mark.parametrize("cls,prio,tag", [
-    ("rotation_failed", "5", "rotating_light"),
-    ("rotation_overdue", "4", "hourglass"),
-    ("breakglass_used", "5", "sos"),
-    ("stage_transition", "4", "arrow_right"),
-    ("stage_aborted", "5", "rewind"),
-    ("rotation_halted", "5", "key"),
-    ("test", "3", "test_tube"),
+# The title column is LITERAL on purpose: the title is what the operator reads
+# on the lock screen, and comparing the header with ``alerts.CLASSES[cls].title``
+# (the table the code reads) let a changed title stay green (C-84, reviewer
+# C-81 finding 1, mutant S4).
+@pytest.mark.parametrize("cls,prio,tag,title", [
+    ("rotation_failed", "5", "rotating_light", "FIELD: key rotation FAILED"),
+    ("rotation_overdue", "4", "hourglass", "FIELD: key rotation overdue"),
+    ("breakglass_used", "5", "sos", "FIELD: break-glass key used"),
+    ("stage_transition", "4", "arrow_right", "FIELD: Phase G stage transition"),
+    ("stage_aborted", "5", "rewind", "FIELD: Phase G stage ABORTED, rolled back"),
+    ("rotation_halted", "5", "key", "FIELD: key rotation HALTED - action needed"),
+    ("test", "3", "test_tube", "FIELD TEST ALERT - no action needed"),
 ])
-def test_priority_and_tags_per_alert_class(ntfy, cls, prio, tag):
+def test_priority_tags_and_title_per_alert_class(ntfy, cls, prio, tag, title):
     assert alerts.send(cls, estate="gb10", env=_env(ntfy), **_fast()).ok
     h = ntfy.requests[0]["headers"]
     assert h["Priority"] == prio
     assert tag in h["Tags"].split(",") and "field" in h["Tags"].split(",")
-    assert h["Title"] == alerts.CLASSES[cls].title
+    assert h["Title"] == title
     assert "Authorization" not in h
+
+
+#: The ntfy emoji short codes the classes use. Each was found as its own row of
+#: https://docs.ntfy.sh/emojis/ on 2026-11-01 (C-84, reviewer C-81 finding 2).
+#: A code outside this set is not an error at ntfy: it shows as plain text,
+#: which is why a new code must be checked and added here, not just used.
+CHECKED_NTFY_EMOJI_CODES = frozenset({
+    "arrow_right", "hourglass", "key", "rewind", "rotating_light", "sos",
+    "test_tube", "warning",
+})
+#: Tags that are meant to show as plain text.
+PLAIN_TAGS = frozenset({"field", "test"})
+
+
+def test_every_class_tag_is_a_checked_emoji_code_or_a_plain_tag():
+    for cls in alerts.CLASSES.values():
+        for tag in cls.tags:
+            assert tag in CHECKED_NTFY_EMOJI_CODES or tag in PLAIN_TAGS, (cls.name, tag)
+    # every checked code is in use: a stale entry here would hide a removed code
+    used = {tag for cls in alerts.CLASSES.values() for tag in cls.tags}
+    assert CHECKED_NTFY_EMOJI_CODES <= used
 
 
 def test_token_is_sent_as_bearer_and_read_file_first(tmp_path, ntfy):
@@ -336,6 +361,36 @@ def test_the_module_default_opener_ignores_a_proxy_set_before_import():
                          text=True, timeout=60)
     assert out.returncode == 0, out.stderr[-500:]
     assert out.stdout.strip() == "0"
+
+
+def test_send_with_the_default_opener_reaches_the_target_and_never_the_proxy(ntfy):
+    """C-79 (reviewer C-75 mutant E): the whole path, `send()` with NO opener
+    argument, in a process whose proxy variables were set before import. The
+    handler-count test above looks at `_OPENER` only; this one fails if `send()`
+    stops using it. The proxy and the target are real local listeners."""
+    import subprocess
+    import sys
+    proxy = _Ntfy()
+    try:
+        env = dict(os.environ)
+        env["PYTHONPATH"] = os.pathsep.join(p for p in sys.path if p)
+        for k in ("http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"):
+            env[k] = proxy.base
+        env.pop("no_proxy", None)
+        env.pop("NO_PROXY", None)
+        env[alerts.ENV_TOPIC] = FAKE_TOPIC
+        env[alerts.ENV_BASE_URL] = ntfy.base
+        code = ("from field_core import alerts; "
+                "r = alerts.send('test', estate='gb10', timeout_s=2.0, max_attempts=1); "
+                "print(r.ok, r.reason)")
+        out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True,
+                             text=True, timeout=60)
+        assert out.returncode == 0, out.stderr[-500:]
+        assert out.stdout.strip() == "True None"
+        assert len(ntfy.requests) == 1
+        assert proxy.requests == []
+    finally:
+        proxy.close()
 
 
 def test_the_opener_registers_no_proxy_handler_even_with_a_proxy_in_the_environment(monkeypatch):

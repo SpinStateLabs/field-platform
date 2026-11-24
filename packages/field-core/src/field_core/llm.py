@@ -13,7 +13,7 @@ variable, ``FORCE_GATEWAY_URL``:
   when ``FORCE_GATEWAY_URL`` is the target, the platform headers:
   ``x-force-passthrough: judge`` (the gateway forwards the call uninstrumented,
   so a judge's call is never re-injected, re-sampled or counted as hygiene
-  traffic) and ``auth_headers()`` (so a secret estate's gateway accepts it).
+  traffic) and ``perimeter_headers()`` (so a secret estate's gateway accepts it).
   Neither platform header is sent to ``ANTHROPIC_BASE_URL`` or the default
   host: the shared secret must never reach a third party, and there is no way
   to tell whether an ``ANTHROPIC_BASE_URL`` is a gateway.
@@ -42,15 +42,13 @@ bearer at the egress and must never reach a third party.
 
 from __future__ import annotations
 
-import ipaddress
 import logging
 import os
-import re
-import socket
 from urllib.parse import urlparse
 
 from field_core import posture_flag
-from field_core.authn import auth_headers
+from field_core.guarded_operator import perimeter_headers
+from field_core.hosts import is_internal_host
 
 DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 ANTHROPIC_VERSION = "2023-06-01"
@@ -106,19 +104,18 @@ def self_identity_headers() -> dict[str, str]:
 
 def anthropic_headers(key: str, version: str = ANTHROPIC_VERSION) -> dict[str, str]:
     """Headers for a platform caller's Messages call (read per call, like
-    ``auth_headers``). Platform headers — passthrough, the F1 self-identity
+    ``perimeter_headers``). Platform headers — passthrough, the F1 self-identity
     pair, the perimeter secret — ride only to ``FORCE_GATEWAY_URL``."""
     headers = {"x-api-key": key, "anthropic-version": version}
     if via_force_gateway():
         headers[PASSTHROUGH_HEADER] = PASSTHROUGH_JUDGE
         headers.update(self_identity_headers())
-        headers.update(auth_headers())
+        headers.update(perimeter_headers())
     return headers
 
 
 REQUIRE_TLS_ENV = "FORCE_GATEWAY_REQUIRE_TLS_UPSTREAM"   # the same opt-in the gateway's real_upstream reads
 _log = logging.getLogger(__name__)
-_NUMERIC_HOST = re.compile(r"[0-9a-fA-FxX.]+")
 _warned: set[str] = set()
 _flag_logged = False
 
@@ -140,36 +137,19 @@ class InsecureBaseURLError(RuntimeError):
 
 def cleartext_ok(base: str) -> bool:
     """True when ``base`` is https, or plain http to an estate-internal host: loopback, a private
-    or link-local IP, ``localhost``, a single-label name (a compose service such as ``forcegw``),
+    IP (``field_core.hosts``: not ``is_private``), ``localhost``, a single-label name (a compose service such as ``forcegw``),
     or a ``.internal`` / ``.local`` name (Fly private network, mDNS). Anything else over http would
     put the key on a network we do not control. (C-117, reviewer C-187 F-C187-1.)"""
-    u = urlparse(base)
+    try:
+        u = urlparse(base)
+        u.port                            # raises ValueError for a port out of range
+    except ValueError:                    # an unbalanced bracket ('http://[::1') or a bad port: refused, not raised
+        return False
     if u.scheme == "https":
         return True
     if u.scheme != "http":
         return False                      # an unrecognised scheme is refused, not guessed at
-    host = (u.hostname or "").lower()
-    if not host:
-        return False
-    try:
-        ip = ipaddress.ip_address(host)
-        return ip.is_private or ip.is_loopback or ip.is_link_local
-    except ValueError:
-        pass
-    if not _NUMERIC_HOST.fullmatch(host):
-        # not a numeric spelling: a name (single-label, .internal, .local) or something else.
-        # glibc inet_aton accepts trailing whitespace and text ("127.0.0.1 .evil.test"), so it
-        # must never see a host with characters outside [0-9a-fx.] (reviewer C-213 F-C213-1).
-        return host == "localhost" or "." not in host or host.endswith((".internal", ".local"))
-    try:
-        # inet_aton also reads decimal (134744072), hex (0x08080808) and octal (01001001010) spellings
-        # of an IPv4 address, which the resolver turns into a public address (reviewer C-197
-        # F-C197-1): normalise them first, never let them reach the single-label rule below.
-        ip = ipaddress.ip_address(socket.inet_ntoa(socket.inet_aton(host)))
-        return ip.is_private or ip.is_loopback or ip.is_link_local
-    except (OSError, ValueError):
-        pass
-    return host == "localhost" or "." not in host or host.endswith((".internal", ".local"))
+    return is_internal_host(u.hostname)
 
 
 def make_http_client(key: str, *, timeout: float = 30.0):
@@ -180,8 +160,18 @@ def make_http_client(key: str, *, timeout: float = 30.0):
     import httpx
 
     base = anthropic_base_url()
-    if not cleartext_ok(base):
+    # the variable that decided the base URL: the only thing a refusal about a malformed value may name
+    var = GATEWAY_URL_ENV if via_force_gateway() else BASE_URL_ENV
+    try:
         u = urlparse(base)
+        u.port                            # raises ValueError for a port out of range
+        usable = u.scheme in ("http", "https") and bool(u.hostname)
+    except ValueError:
+        u, usable = None, False
+    if not usable:
+        # unparseable, no host, or not http(s): the URL may hold credentials, so the text names the variable only
+        raise InsecureBaseURLError(f"{var} is not a usable http(s) base URL: refusing to send the Anthropic key")
+    if not cleartext_ok(base):
         what = f"{u.scheme or 'an unknown scheme'} to host {u.hostname!r}"
         if via_force_gateway():
             # the platform headers (perimeter secret, token id) ride here: never in clear
@@ -200,5 +190,9 @@ def make_http_client(key: str, *, timeout: float = 30.0):
             _warned.add(base)
             _log.warning("ANTHROPIC_BASE_URL is plain %s to host %r: the key is sent unencrypted",
                          u.scheme or "unknown", u.hostname)
-    return httpx.Client(base_url=base, timeout=timeout, headers=anthropic_headers(key),
-                        trust_env=False)
+    try:
+        return httpx.Client(base_url=base, timeout=timeout, headers=anthropic_headers(key),
+                            trust_env=False)
+    except (ValueError, httpx.InvalidURL):   # a port out of range, a bad authority: httpx refuses it here
+        raise InsecureBaseURLError(
+            f"{var} is not a usable http(s) base URL: refusing to send the Anthropic key") from None

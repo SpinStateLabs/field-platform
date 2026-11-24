@@ -21,7 +21,7 @@ can re-verify offline.
 - `since`/`until` filters compare ISO 8601 instants (`datetime.fromisoformat`,
   naive ⇒ UTC), both bounds inclusive; an unparseable bound is refused (422).
 - C1 auditor export: `POST /export` and `ledger export` take `since`, `until`,
-  `agent_id`, `event_type` and write `out_dir/<stamp>/` with `events.jsonl`
+  `agent_id`, `event_type` and write `out_dir/<stamp>/` (served `POST /export` under operator auth: `out_dir` must resolve inside `FIELD_EXPORT_ROOT`, default `<ledger dir>/exports`; auth off: any writable path) with `events.jsonl`
   (pure `LedgerEvent` lines), `summary.json` (+ `indices`, `first_index`,
   `last_index`, `head_index`), `chain_proof.json` (`first_prev_hash`,
   `head_hash`, verification of the full live chain, filters, and a hash spine
@@ -98,8 +98,10 @@ can re-verify offline.
   `FIELD_LEDGER_URL` is set, else refuse unless `--offline`.
 
 **Explicit non-goals (v0.1)**
-- No Merkle proofs and no per-event signatures (the export signs a bundle,
-  anchors sign an anchor record; events themselves are unsigned until F2).
+- No Merkle proofs. Per-event signatures are optional (F2: the ledger signs an
+  append when it holds a key; F2b: a caller's own signature); an event without a
+  key, or appended with `FIELD_LEDGER_REQUIRE_SIGNING=0` and no key, is
+  unsigned. The export signs a bundle and anchors sign an anchor record.
 - No proof that a filtered export is complete, and no proof of ledger
   contents from an unsigned bundle (internal consistency only).
 - No per-agent retention and no deletion: retention is estate-level (one

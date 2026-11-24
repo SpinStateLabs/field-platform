@@ -36,7 +36,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+import secrets
+import re
 import threading
+import unicodedata
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -48,17 +51,21 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 # operator_auth: the guards below are operator_auth.guard behind operator_health
 # (tools/tests/test_operator_plumbing.py finds operator-auth services by this import)
 from field_core import operator_auth, operator_health  # noqa: F401
+from field_core.startup import warn_open
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
-from field_core.authn import auth_headers
+from field_core.http_errors import install_validation_handler
 from field_core.authn import install as install_authn
 from field_core.buildinfo import build_sha
 from field_core.clients import LedgerClient, RegistryClient
+from field_core.guarded_operator import (DELEGATION_GUARDED, KILLSWITCH_GUARDED, Routes, perimeter_headers,
+                                          request_headers)
 from lifecycle_manager import __version__
 from lifecycle_manager.engine import (
     LifecycleEngine,
     SweepConfig,
     SweepReport,
+    SweepUpstreamError,
     parse_roster,
 )
 
@@ -66,6 +73,11 @@ log = logging.getLogger("lifecycle_manager")
 
 ROSTER_ENV = "FIELD_LIFECYCLE_ROSTER"
 EVERY_ENV = "FIELD_LIFECYCLE_EVERY"
+#: The largest scheduler interval accepted, 9 ASCII digits (about 31 years). A longer one is not a
+#: schedule, and a float this large makes ``Event.wait`` raise ``OverflowError`` in the daemon thread.
+#: There is deliberately no floor: soak runs and the tests set a few seconds.
+MAX_EVERY_SECONDS = 999_999_999
+_EVERY_RE = re.compile(r"[0-9]{1,9}")
 NO_ROSTER_DETAIL = "no roster configured — set FIELD_LIFECYCLE_ROSTER or send roster_csv"
 SCHEDULED_OPERATOR = "lifecycle-manager (scheduled)"
 #: Phase G C-11: the scope a served sweep that arms auto-kill needs under
@@ -86,8 +98,10 @@ ROSTER_BODY_AUTO_KILL_DETAIL = (
 
 class PerRequestAuthClient(httpx.Client):
     """An ``httpx.Client`` that holds NO fixed auth headers: every request it
-    builds gets ``auth_headers()`` read at that moment (key-rotation R3, F11;
-    the same rule as field-core's C-4 ``_request_auth``).
+    builds gets its headers read at that moment (key-rotation R3, F11; the same
+    rule as field-core's C-4 ``_request_auth``): ``x-field-auth`` always, and
+    the operator pair (``auth_headers()``) ONLY on a route of the target listed
+    in ``guarded_routes`` (C-511: a read never carries it).
 
     ``auth_headers()`` reads ``FIELD_SHARED_SECRET``, ``FIELD_OPERATOR`` and the
     key (``FIELD_OPERATOR_KEY_FILE`` on every call, else ``FIELD_OPERATOR_KEY``)
@@ -101,11 +115,63 @@ class PerRequestAuthClient(httpx.Client):
     (``httpx.Client(headers=auth_headers())``): the auth headers are merged at
     the client-header position, after httpx's defaults and before any
     per-request headers, and a per-request header of the same name still
-    replaces them as it did before."""
+    replaces them as it did before.
+
+    C-486: the client never reads the process's proxy environment (``trust_env``
+    is always False) and never follows a redirect (``send`` forces ``follow_redirects=False`` for
+    every call, whatever the caller or a later assignment says; reviewer C-547, C-569), because a request it builds can carry the
+    perimeter secret and, on a guarded write, the operator pair, which a followed redirect could resend.
+
+    A redirect is therefore never followed and the caller gets the 3xx answer itself (C-668 F-C668-4). The only
+    callers are ``delegation_client()`` and ``killswitch_client()`` and the engine's ``get`` / ``post`` calls on
+    relative paths; none sets ``follow_redirects`` (grep of ``services`` and ``packages``, not exhaustive beyond it)."""
+
+    def send(self, request: httpx.Request, **kwargs: Any) -> httpx.Response:
+        # every request path (get, post, request, stream, send) ends here: a per-call follow_redirects=True and
+        # `client.follow_redirects = True` set later are both ignored, so a redirect never carries the secrets to
+        # another host (reviewer C-569 F-C569-1)
+        kwargs["follow_redirects"] = False
+        return super().send(request, **kwargs)
+
+    def __init__(self, *args: Any, guarded_routes: Routes = (), **kwargs: Any) -> None:
+        # C-511: the operator pair rides only the routes of the target that guard it (a table from
+        # field_core.guarded_operator); with no table it rides nothing, only the perimeter secret.
+        # C-486/C-547: the client never reads the process's proxy environment and never follows a redirect
+        # (an explicit True for either is ignored): every request it builds can carry the perimeter secret
+        # and the operator pair, which neither a proxy nor a redirect target may receive.
+        kwargs.pop("trust_env", None)
+        kwargs.pop("follow_redirects", None)
+        self._guarded_routes = guarded_routes
+        super().__init__(*args, trust_env=False, follow_redirects=False, **kwargs)
+
+    def _origin_and_path(self, url: Any) -> tuple[bool, str | None]:
+        """(is the URL on this client's origin, its path relative to the base URL or None when it is outside
+        the base path)."""
+        u = url if isinstance(url, httpx.URL) else httpx.URL(str(url))
+        if not u.is_absolute_url:                          # a client with no base URL: httpx already added the slash
+            return True, u.path
+        base = self.base_url
+        if (u.scheme, u.host, u.port) != (base.scheme, base.host, base.port):
+            return False, None
+        prefix = base.path.rstrip("/")
+        if prefix:
+            return True, (u.path[len(prefix):] if u.path.startswith(prefix + "/") else None)
+        return True, u.path
 
     def build_request(self, method: str, url: Any, *, headers: Any = None,
                       **kwargs: Any) -> httpx.Request:
-        merged = httpx.Headers(auth_headers())
+        # C-660 F-C624-1: decide on the URL httpx puts on the wire (dot segments resolved, relative paths joined
+        # to the base, percent-decoded as the receiver sees it), never on the caller's raw string. Building the
+        # request once without credentials only to learn that URL is cheap and has no side effect.
+        wire = super().build_request(method, url, params=kwargs.get("params"))
+        same_origin, path = self._origin_and_path(wire.url)
+        if not same_origin:
+            auth: dict[str, Any] = {}                      # C-586 F-C586-3: another origin gets no credential
+        elif path is None:
+            auth = perimeter_headers()                     # this origin, outside the base path: the secret only
+        else:
+            auth = request_headers(method, path, self._guarded_routes)
+        merged = httpx.Headers(auth)
         if headers is not None:
             merged.update(headers)
         return super().build_request(method, url, headers=merged, **kwargs)
@@ -116,18 +182,19 @@ def delegation_client() -> httpx.Client:
     every request (R3), never captured here."""
     return PerRequestAuthClient(
         base_url=os.environ.get("FIELD_DELEGATION_URL", "http://127.0.0.1:8003"),
-        timeout=10.0,
+        timeout=10.0, guarded_routes=DELEGATION_GUARDED,
     )
 
 
 def killswitch_client() -> httpx.Client:
-    """The ONLY place a kill-switch client is built. Callers must guard it
+    """The only place the served routes build a kill-switch client (the CLI verbs
+    build theirs in ``cli._service_client``). Callers must guard it
     behind the explicit auto-kill flag (CLI ``--auto-kill-orphans`` or the
     literal ``True`` body flag) — never a default, never an env var. Its auth
     headers are read on every request (R3), never captured here."""
     return PerRequestAuthClient(
         base_url=os.environ.get("FIELD_KILLSWITCH_URL", "http://127.0.0.1:8005"),
-        timeout=10.0,
+        timeout=10.0, guarded_routes=KILLSWITCH_GUARDED,
     )
 
 
@@ -157,22 +224,57 @@ def build_engine(
 # Request model
 # --------------------------------------------------------------------------
 
+_OPERATOR_REFUSED = frozenset({"Cc", "Cf", "Zl", "Zp", "Cs"})
+_NOTHING_EXTRA = frozenset(chr(c) for c in (0x034F, 0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800))
+
+
+def _draws_nothing(ch: str) -> bool:
+    cp = ord(ch)
+    return (ch.isspace() or unicodedata.category(ch) in ("Zs", "Co") or ch in _NOTHING_EXTRA
+            or 0xFE00 <= cp <= 0xFE0F or 0xE0100 <= cp <= 0xE01EF)
+
+
+#: Upper bound of a sweep window in days (ten years): `now +/- timedelta(days=N)` overflows near 10**9 (scout P-11).
+#: cli.py carries the same number; a test pins that they agree.
+MAX_SWEEP_DAYS = 3650
+
+ROSTER_CSV_MAX_CHARS = 1024 * 1024   # S7-11: 1 MiB in characters, the registry scanner's MAX_SCAN_BYTES
+
+
 class SweepRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     roster_csv: str | None = Field(
         default=None,
+        max_length=ROSTER_CSV_MAX_CHARS,
         description="owners.csv text (header with an 'owner' column). "
                     "Omit to use the file at FIELD_LIFECYCLE_ROSTER.",
     )
-    expiry_days: int = Field(default=30, ge=1)
-    reattest_days: int = Field(default=90, ge=1)
-    operator: str = Field(default="lifecycle-manager (served)", min_length=1)
+    expiry_days: int = Field(default=30, ge=1, le=MAX_SWEEP_DAYS)
+    reattest_days: int = Field(default=90, ge=1, le=MAX_SWEEP_DAYS)
+    operator: str = Field(default="lifecycle-manager (served)", min_length=1, max_length=200)
     auto_kill_orphans: StrictBool = Field(
         default=False,
         description="Kill active orphans via kill-switch. Must be the JSON "
                     "literal true — never a default, never an env var.",
     )
+
+    @field_validator("operator")
+    @classmethod
+    def _operator_stripped_not_blank(cls, v: str) -> str:
+        """Recorded on kill reasons and ledger rows: no blank, no padding, one line of visible text. A control (Cc), format
+        (Cf: zero-width, bidirectional marks, soft hyphen), line (Zl) or paragraph (Zp) separator character anywhere is
+        refused, and a value whose characters all draw nothing (spaces, the Hangul fillers, the braille blank, the combining
+        grapheme joiner, private use, variation selectors) is blank (R-PR659 C1; the same categories rule as the registry)."""
+        v = v.strip()
+        if not v:
+            raise ValueError("operator must not be blank")
+        for ch in v:
+            if unicodedata.category(ch) in _OPERATOR_REFUSED:
+                raise ValueError("operator must not hold a control, invisible or line-break character")
+        if all(_draws_nothing(ch) for ch in v):
+            raise ValueError("operator must not be blank")
+        return v
 
     @field_validator("roster_csv")
     @classmethod
@@ -180,6 +282,16 @@ class SweepRequest(BaseModel):
         if v is not None and not v.strip():
             raise ValueError("roster_csv must not be blank (omit it to use FIELD_LIFECYCLE_ROSTER)")
         return v
+
+
+class RosterInvalid(ValueError):
+    """The roster text is malformed (parse_roster's own message: a line number, never content).
+    ``from_body``: it came in the request (422); else the configured file (503)."""
+
+    def __init__(self, detail: str, from_body: bool):
+        self.detail = detail
+        self.from_body = from_body
+        super().__init__(detail)
 
 
 class RosterUnavailable(Exception):
@@ -208,16 +320,30 @@ def tick_path() -> Path:
 
 
 def _persist(path: Path, payload: dict[str, Any]) -> None:
+    """Write-then-replace through a temp file UNIQUE to this write: the scheduler thread and a served POST /sweep can
+    persist at once, and a shared temp name let the second os.replace raise FileNotFoundError (a 500 after the sweep,
+    and any auto-kill, had already run). The temp file is removed if anything fails."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
+    # unique per write (pid, thread, random), written with the ordinary umask-default mode: mkstemp would have made the
+    # persisted file 0600, a silent change for anything that reads it
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.{secrets.token_hex(4)}.tmp")
+    try:
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def _load(path: Path) -> dict[str, Any] | None:
+    """The persisted JSON OBJECT, None when the file is absent. Anything else (a list, a string, null, broken JSON, a
+    directory) raises, and the caller answers a fixed 'unreadable' without the path."""
     if not path.exists():
         return None
-    return json.loads(path.read_text(encoding="utf-8"))
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("lifecycle state is not a JSON object")
+    return data
 
 
 # --------------------------------------------------------------------------
@@ -239,7 +365,11 @@ def _resolve_roster(app: FastAPI, req: SweepRequest) -> str:
         if not path.is_file():
             raise RosterUnavailable(f"roster file not found: {path} ({ROSTER_ENV})")
         text, source = path.read_text(encoding="utf-8"), str(path)
-    if not parse_roster(text):
+    try:
+        owners = parse_roster(text)
+    except ValueError as exc:
+        raise RosterInvalid(str(exc), from_body=req.roster_csv is not None) from exc
+    if not owners:
         # An owner-less roster would orphan every agent — refuse loudly.
         raise RosterUnavailable(f"roster from {source} contains no owners — refusing an empty sweep")
     return text
@@ -273,7 +403,13 @@ def run_sweep(app: FastAPI, req: SweepRequest) -> SweepReport:
         ),
         now=app.state.clock() if app.state.clock else None,
     )
-    _persist(app.state.findings_path, report.model_dump(mode="json"))
+    try:
+        _persist(app.state.findings_path, report.model_dump(mode="json"))
+    except OSError as exc:
+        # The sweep, and any auto-kill, already ran: a full or read-only disk must not turn it into a
+        # 500 that loses the report. Say so in the report instead.
+        log.exception("lifecycle sweep: could not persist the report")
+        report.persist_error = type(exc).__name__
     return report
 
 
@@ -319,7 +455,29 @@ def scheduled_tick(app: FastAPI) -> dict[str, Any]:
         return marker
     except Exception as exc:  # noqa: BLE001 — the loop must survive anything
         log.exception("lifecycle tick failed")
-        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        # Not silent: GET /findings shows last_tick with the failure, and the ledger gets a note.
+        # Class name only (no message); both writes are best effort. A malformed roster is noted under its
+        # public base class, ValueError (S8-12): RosterInvalid is this module's internal 422/503 carrier.
+        error = "ValueError" if isinstance(exc, RosterInvalid) else type(exc).__name__
+        try:
+            _persist(app.state.tick_path, {
+                "failed": True,
+                "reason": "sweep failed",
+                "error": error,
+                "at": datetime.now(timezone.utc).isoformat(),
+                "operator": SCHEDULED_OPERATOR,
+            })
+        except Exception:
+            log.exception("lifecycle tick: could not persist failed marker")
+        try:
+            app.state.ledger.append(
+                "lifecycle.tick_failed",
+                payload={"error": error, "operator": SCHEDULED_OPERATOR},
+                agent_id=None,
+            )
+        except Exception:
+            log.warning("lifecycle tick: ledger unreachable for failed marker")
+        return {"ok": False, "error": exc.detail if isinstance(exc, SweepUpstreamError) else f"{error}: {exc}"}
 
 
 def run_every(
@@ -344,6 +502,19 @@ def run_every(
         except Exception:  # noqa: BLE001 — never let a tick kill the thread
             log.exception("lifecycle scheduler: tick raised; continuing")
     return ticks
+
+
+def _every_from_env() -> int:
+    """``FIELD_LIFECYCLE_EVERY`` as seconds. Blank is OFF silently; ASCII digits only (``str.isdigit``
+    accepts ``²`` and ``٣``, and ``int('²')`` raises): anything else that is not blank turns the
+    scheduler OFF and says so, naming the variable and never its value."""
+    raw = os.environ.get(EVERY_ENV, "").strip()
+    if not raw:
+        return 0
+    if _EVERY_RE.fullmatch(raw):
+        return int(raw)
+    log.warning("lifecycle scheduler OFF: %s is not 1 to 9 ASCII digits of seconds", EVERY_ENV)
+    return 0
 
 
 # --------------------------------------------------------------------------
@@ -371,10 +542,12 @@ def create_app(
     ``WitnessWatch`` (``lifecycle serve`` builds it from FIELD_WITNESS_EVERY);
     None (the default) = this estate runs no witness."""
     if every is None:
-        raw = os.environ.get(EVERY_ENV, "").strip()
-        every = int(raw) if raw.isdigit() else 0
+        every = _every_from_env()
     every = int(every or 0)
     if every < 0:
+        every = 0
+    if every > MAX_EVERY_SECONDS:  # an explicit value (CLI or library) past the bound: off, said once
+        log.warning("lifecycle scheduler OFF: the interval is above %d seconds", MAX_EVERY_SECONDS)
         every = 0
 
     @asynccontextmanager
@@ -404,6 +577,7 @@ def create_app(
         lifespan=_lifespan,
     )
     install_authn(app)
+    install_validation_handler(app)
 
     app.state.registry = registry or RegistryClient()
     app.state.delegation = delegation if delegation is not None else delegation_client()
@@ -454,6 +628,10 @@ def create_app(
             return run_sweep(app, req)
         except RosterUnavailable as exc:
             raise HTTPException(503, exc.detail)
+        except RosterInvalid as exc:
+            raise HTTPException(422 if exc.from_body else 503, exc.detail)
+        except SweepUpstreamError as exc:   # a registry or delegation failure: fixed text, no upstream text (S9-10)
+            raise HTTPException(502, exc.detail) from None
 
     @app.get("/findings")
     def findings() -> dict:
@@ -461,7 +639,7 @@ def create_app(
             data = _load(app.state.findings_path)
             tick = _load(app.state.tick_path)
         except (OSError, ValueError) as exc:
-            raise HTTPException(500, f"lifecycle state unreadable: {exc}")
+            raise HTTPException(500, f"lifecycle state unreadable: {type(exc).__name__}")
         if data is None:
             # A skipped tick is not a sweep: say so, and hand back why.
             raise HTTPException(404, {
@@ -472,4 +650,5 @@ def create_app(
             data = {**data, "last_tick": tick}
         return data
 
+    warn_open("lifecycle-manager", operator_layer=True)
     return app

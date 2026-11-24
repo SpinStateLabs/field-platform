@@ -31,12 +31,13 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote, unquote
@@ -44,10 +45,10 @@ from urllib.parse import quote, unquote
 import httpx
 
 from field_core.authn import HEADER as AUTH_HEADER
-from field_core.authn import auth_headers
+from field_core.guarded_operator import perimeter_headers
 
 from claude_approver import config
-from claude_approver.config import AgentEntry, AgentMap, ToolMap
+from claude_approver.config import AgentEntry, ToolMap
 
 log = logging.getLogger("claude_approver")
 
@@ -104,6 +105,18 @@ def _as_datetime(value: Any) -> datetime:
     else:
         raise TypeError(type(value).__name__)
     return moment if moment.tzinfo is not None else moment.replace(tzinfo=timezone.utc)
+
+
+#: C-570 (reviewer C-522 F-C522-1): a ``processed_at`` later than the wall clock by more than this is not a cursor
+#: value. The cursor goes back to the API as ``created_at_gte``, so one far-future time (year 2999) would be sent
+#: forever and the session would stop showing events. A little slack covers two clocks that differ.
+#: C-720 (reviewer C-687 F-C687-2): the slack is also the window of events a skewed or hostile value just inside it
+#: could hide (events before it are not requested again), so it is one MINUTE, not five: clocks synchronised by NTP
+#: differ by far less; a host clock more than a minute BEHIND the API's makes every fresh event "ahead", which
+#: fails toward re-reading (safe) and is reported: counted in `cursor_future_ignored` and logged once per streak of
+#: CURSOR_FUTURE_WARN_AFTER values.
+CURSOR_FUTURE_SLACK = timedelta(minutes=1)
+CURSOR_FUTURE_WARN_AFTER = 10
 
 
 def _time_or_none(value: Any) -> datetime | None:
@@ -204,7 +217,7 @@ class Estate:
     def headers(self) -> dict[str, str] | None:
         """``None`` when a configured secret file is unreadable or blank."""
         if not self.routed:
-            return auth_headers()
+            return perimeter_headers()   # sentinel /check, kill-switch /heartbeat and governor /usage: none is guarded
         if not self.secret_file:
             return {}
         secret = config.read_secret_file(self.secret_file)
@@ -231,6 +244,8 @@ class SessionState:
     #: an ask the latest requires_action idle did not list (an interrupted turn)
     stale: set[str] = field(default_factory=set)
     customs: dict[str, Any] = field(default_factory=dict)  # unanswered custom tool uses
+    #: custom tool use ids already counted in ``custom_tool_pending``; dies with the session (S11-18)
+    customs_counted: set[str] = field(default_factory=set)
     stop_reason: str | None = None
     #: ``stop_reason.event_ids`` of the latest status_idle; None when absent
     stop_event_ids: list[str] | None = None
@@ -262,13 +277,22 @@ class UsageCursor:
     def load(self) -> None:
         if self._loaded:
             return
-        self._loaded = True
+        try:
+            self._read()
+        except Exception:
+            self.data, self.error = {}, "usage cursor is corrupt"   # anything unforeseen disables posting too
+        self._loaded = True   # only after the outcome (data or error) is recorded: a failed first load is never an empty, error-free cursor
+
+    def _read(self) -> None:
         try:
             text = self.path.read_text(encoding="utf-8")
         except FileNotFoundError:
             return
         except OSError:
             self.error = "usage cursor unreadable"
+            return
+        except UnicodeDecodeError:
+            self.error = "usage cursor is corrupt"
             return
         try:
             raw = json.loads(text)
@@ -278,9 +302,14 @@ class UsageCursor:
             for sid, snap in raw.items():
                 if not isinstance(snap, dict):
                     raise ValueError
-                data[str(sid)] = {k: int(snap.get(k, 0)) for k in USAGE_FIELDS}
+                counters = {k: snap.get(k, 0) for k in USAGE_FIELDS}
+                # Same rule as _usage_snapshot: a counter is a non-negative int. int() coercion used to turn
+                # -5, true, 1.9 and "7" into numbers, and a stored -5 over-posted the next delta by 5.
+                if any(type(v) is not int or v < 0 for v in counters.values()):
+                    raise ValueError
+                data[str(sid)] = counters
             self.data = data
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, OverflowError):  # OverflowError: `1e999` is inf and int(inf) raises it
             self.error = "usage cursor is corrupt"
 
     def get(self, sid: str) -> dict[str, int]:
@@ -294,8 +323,26 @@ class UsageCursor:
         new[sid] = dict(snap)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_name(self.path.name + f".tmp-{os.getpid()}-{threading.get_ident()}")
-        tmp.write_text(json.dumps(new, sort_keys=True), encoding="utf-8")
-        os.replace(tmp, self.path)
+        try:
+            # Through an open handle so the bytes are on disk before the rename: a power loss
+            # must leave the old cursor or the new one, never an empty file (a re-post).
+            with tmp.open("w", encoding="utf-8") as fh:
+                fh.write(json.dumps(new, sort_keys=True))
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, self.path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)      # a full disk must not leave tmp-<pid>-<tid> files behind
+            raise
+        if os.name != "nt":                  # Windows cannot fsync a directory from Python
+            try:
+                dir_fd = os.open(self.path.parent, os.O_RDONLY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+            except OSError:
+                pass                         # best effort: the rename itself already happened
         self.data = new
 
 
@@ -324,6 +371,7 @@ class Approver:
         cursor_path: Path | None = None,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
+        wall_clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ):
         if client_factory is None:
             from claude_approver.client import make_client
@@ -337,6 +385,8 @@ class Approver:
         self.cursor = UsageCursor(cursor_path or default_cursor_path())
         self.sleep = sleep
         self.clock = clock
+        self.wall_clock = wall_clock
+        self._future_streak = 0       # C-720: consecutive processed_at values ahead of the clock (a sustained run = clock)
         self.sessions: dict[str, SessionState] = {}
         self._lock = threading.Lock()  # guards counters/decisions
         self._tick_lock = threading.Lock()  # one tick at a time
@@ -344,7 +394,7 @@ class Approver:
             "allowed": 0, "heartbeats": 0, "heartbeat_failures": 0, "usage_posts": 0,
             "usage_failures": 0, "ticks": 0, "tick_errors": 0, "send_failures": 0,
             "list_failures": 0, "custom_tool_pending": 0, "confirm_rejected": 0,
-            "asks_superseded": 0, "confirm_duplicate": 0, "confirm_duplicate_conflict": 0,
+            "asks_superseded": 0, "confirm_duplicate": 0, "confirm_duplicate_conflict": 0, "cursor_future_ignored": 0, "cursor_time_unusable": 0,
         }
         self.denied: dict[str, int] = {c: 0 for c in REASON_CLASSES}
         self.decisions: deque[dict[str, Any]] = deque(maxlen=DECISIONS_KEPT)
@@ -353,7 +403,6 @@ class Approver:
         self.last_tick_had_client = False
         self.map_error: str | None = None
         self.tool_map_error: str | None = None
-        self.custom_seen: set[str] = set()
         self.custom_pending_now = 0
         self.agents_mapped = 0
         self._thread: threading.Thread | None = None
@@ -610,9 +659,29 @@ class Approver:
             processed = _get(ev, "processed_at")
             # C-445 (reviewer C-443 F-C443-1): a value that is not a time is never stored as the cursor, not even
             # when nothing better is known yet: the cursor goes back to the API as `created_at_gte`
-            if (processed is not None and _time_or_none(processed) is not None
-                    and (state.cursor is None or _later(processed, state.cursor))):
-                state.cursor = processed
+            moment = _time_or_none(processed) if processed is not None else None
+            if moment is not None and moment > self.wall_clock() + CURSOR_FUTURE_SLACK:
+                # C-570 F-C522-1: counted, never stored; the next real time stays the cursor
+                self._count("cursor_future_ignored")
+                self._future_streak += 1
+                if self._future_streak == CURSOR_FUTURE_WARN_AFTER:
+                    log.warning("claude-approver: %d consecutive processed_at values are ahead of this host's clock by "
+                                "more than %d s: check the host clock (cursor_future_ignored in /stats)",
+                                CURSOR_FUTURE_WARN_AFTER, int(CURSOR_FUTURE_SLACK.total_seconds()))
+            elif moment is not None:
+                self._future_streak = 0
+                if state.cursor is None or _later(processed, state.cursor):
+                    # C-570 F-C522-2: the NORMALISED instant is stored (and so sent): a datetime as an aware UTC
+                    # datetime, a string as an ISO string in UTC, never the raw spelling (padded, date-only, basic ...)
+                    try:
+                        utc = moment.astimezone(timezone.utc)
+                    except (OverflowError, ValueError):
+                        # C-720 (reviewer C-687 F-C687-1): a time that parses but has no UTC form (the first instant of
+                        # year 1 with a positive offset) is not a cursor; without this the exception escaped
+                        # _read_events and the same event was re-read on every cycle (a poison event)
+                        self._count("cursor_time_unusable")
+                        continue
+                    state.cursor = utc if isinstance(processed, datetime) else utc.isoformat()
 
     def _approve_session(self, client: Any, session: Any, entry: AgentEntry,
                          tmap: ToolMap) -> int:
@@ -637,8 +706,8 @@ class Approver:
         if state.stop_reason == "requires_action" and state.stop_event_ids is not None:
             self._drop_superseded(state)
         for cid in state.customs:
-            if cid not in self.custom_seen:
-                self.custom_seen.add(cid)
+            if cid not in state.customs_counted:
+                state.customs_counted.add(cid)
                 self._count("custom_tool_pending")
         if state.stop_reason != "requires_action" or not state.asks:
             return 0
@@ -685,7 +754,7 @@ class Approver:
             elif not tool:
                 verdict = Verdict("deny", "sentinel_error", "claude-approver: tool event has no name")
             else:
-                action = config.resolve_action(tool, entry, tmap)
+                action = config.resolve_action(tool, entry, tmap, _get(ev, "type"))
                 context = {
                     "source": "claude-approver",
                     "console_session_id": sid,
@@ -842,7 +911,8 @@ class Approver:
         snap: dict[str, int] = {}
         for k, src in _USAGE_SOURCE.items():
             v = _get(usage, src)
-            snap[k] = int(v) if isinstance(v, (int, float)) and v >= 0 else 0
+            # `inf >= 0` is True and int(inf) raises OverflowError (nan fails the compare): treat both as 0.
+            snap[k] = int(v) if isinstance(v, (int, float)) and math.isfinite(v) and v >= 0 else 0
         return snap
 
     def _post_usage(self, client: Any, session: Any, entry: AgentEntry,
@@ -932,8 +1002,8 @@ class Approver:
                 r["interrupted"] = True
             except Exception as exc:
                 r["error"] = f"interrupt failed ({_exc_label(exc)})"
+        deadline = self.clock() + wait   # ONE deadline for every session: total wait is about ``wait``
         for r in targets:
-            deadline = self.clock() + wait
             status = r["final_status"]
             try:
                 while True:

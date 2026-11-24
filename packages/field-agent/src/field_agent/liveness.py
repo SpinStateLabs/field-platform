@@ -9,11 +9,13 @@ from __future__ import annotations
 
 from field_agent._transport import AuthedClient
 from field_agent.errors import HeartbeatUnreachable
+from field_core.errors import upstream_error
 
 import os
 from typing import Any
+from urllib.parse import quote
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, StrictBool
 
 
 class Heartbeat(BaseModel):
@@ -24,7 +26,9 @@ class Heartbeat(BaseModel):
 
     agent_id: str
     status: str
-    killed: bool
+    #: A real JSON boolean only. Lax pydantic parsing read "false", "no", "0", "off" and the integer 0 as False, i.e.
+    #: ALIVE, while FieldClient reads the same body as halted (``killed is False``): a mangled answer must halt.
+    killed: StrictBool
     checked_at: str
     #: Set only by ``checkin()`` — the instant the server recorded the
     #: check-in. ``None`` on a read-only ``heartbeat()`` poll.
@@ -37,9 +41,9 @@ class LivenessClient:
             "FIELD_KILLSWITCH_URL", "http://127.0.0.1:8005"
         )).rstrip("/")
         if client is None:
-            import httpx
+            from field_core import http as _fhttp
 
-            client = httpx.Client(timeout=5.0)
+            client = _fhttp.client(timeout=5.0)
         self._client = AuthedClient(client)
 
     def heartbeat(self, agent_id: str) -> Heartbeat:
@@ -56,15 +60,30 @@ class LivenessClient:
         return self._call("post", agent_id)
 
     def _call(self, verb: str, agent_id: str) -> Heartbeat:
+        if not isinstance(agent_id, str) or agent_id in ("", ".", ".."):
+            # nothing is sent: an empty id would call /heartbeat/, and '.' or '..' (which quoting leaves alone) are removed
+            # by the URL normaliser and re-route the call (S9-3). Liveness unknown means halt, as for any other failure.
+            raise HeartbeatUnreachable("no usable agent id — liveness unknown, halting")
         try:
-            resp = getattr(self._client, verb)(f"{self._base}/heartbeat/{agent_id}")
+            # one encoded path segment: 'x/../../kill/victim', '?' and '#' stay inside the id (as field_client.py does)
+            resp = getattr(self._client, verb)(f"{self._base}/heartbeat/{quote(agent_id, safe='')}")
         except Exception as exc:
+            # the exception TYPE only: its text can carry the URL, a proxy or an address (reviewer C-704 F-C704-1)
             raise HeartbeatUnreachable(
-                f"kill-switch unreachable — liveness unknown, halting: {exc}"
-            ) from exc
+                f"kill-switch unreachable ({type(exc).__name__}) — liveness unknown, halting"
+            ) from None
         if resp.status_code != 200:
+            # the status only: the body is the server's (or something on the path), never echoed
             raise HeartbeatUnreachable(
-                f"heartbeat returned {resp.status_code} — liveness unknown, "
-                f"halting: {resp.text}"
+                f"{upstream_error(resp, 'heartbeat')} — liveness unknown, halting"
             )
-        return Heartbeat.model_validate(resp.json())
+        try:
+            return Heartbeat.model_validate(resp.json())
+        except (ValueError, RecursionError) as exc:   # ValidationError and a JSON decode error are ValueErrors; a deeply
+            # nested 200 body is a RecursionError (don.reviewer, rebuild of PR 556): fail closed the same way
+            # the class only: the body is the server's (or something on the path), never echoed
+            bad = type(exc).__name__
+        # raised OUTSIDE the except block (C-729, rebuild of PR 556), and `from None` as main's strict-killed pin wants
+        raise HeartbeatUnreachable(
+            f"heartbeat answer unusable ({bad}) — liveness unknown, halting"
+        ) from None

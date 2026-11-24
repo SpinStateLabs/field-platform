@@ -26,9 +26,14 @@ for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
         _stream.reconfigure(encoding="utf-8")
 
+import json
+
 import httpx
 
 from field_core import authn
+from field_core.guarded_operator import KILLSWITCH_GUARDED
+from field_core.guarded_operator import GuardedOperatorAuth as _GuardedOperatorAuth
+from field_core.guarded_operator import is_guarded as _is_guarded
 from kill_switch import __version__
 
 # pretty_exceptions_show_locals=False: a verb holds the operator pair in a local, and an
@@ -47,12 +52,8 @@ def _base() -> str:
 
 #: (method, path relative to the kill-switch base URL) of every kill-switch route
 #: this CLI calls that carries an operator guard. Nothing else gets the pair.
-GUARDED_ROUTES: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("POST", re.compile(r"/kill/[^/]+")),
-    ("POST", re.compile(r"/kill/domain/[^/]+")),
-    ("POST", re.compile(r"/revive/[^/]+")),
-    ("POST", re.compile(r"/drill/[^/]+")),
-)
+#: The table and the allowlist mechanism live in field-core (C-511): the same ones the services' own clients use.
+GUARDED_ROUTES: tuple[tuple[str, re.Pattern[str]], ...] = KILLSWITCH_GUARDED
 _OPERATOR_ID = re.compile(r"[A-Za-z0-9._@-]{1,64}")
 _OPERATOR_KEY = re.compile(r"[A-Za-z0-9._~+/=-]{1,256}")
 _MAX_KEY_FILE_BYTES = 4096
@@ -128,26 +129,16 @@ def operator_pair(operator_id: str | None, key_file: Path | str | None) -> tuple
 def is_guarded(method: str, path: str, base: str,
                routes: tuple[tuple[str, re.Pattern[str]], ...] = GUARDED_ROUTES) -> bool:
     """True only for an allowlisted (method, path) under ``base``."""
-    prefix = urllib.parse.urlsplit(base).path.rstrip("/")
-    if prefix:
-        if not path.startswith(prefix + "/"):
-            return False
-        path = path[len(prefix):]
-    return any(m == method.upper() and rx.fullmatch(path) for m, rx in routes)
+    return _is_guarded(method, path, base, routes)
 
 
-class GuardedOperatorAuth(httpx.Auth):
+class GuardedOperatorAuth(_GuardedOperatorAuth):
     """Adds the operator pair to a request only when it is an allowlisted
     guarded route; every other request leaves without it."""
 
     def __init__(self, base: str, pair: tuple[str, str] | None,
                  routes: tuple[tuple[str, re.Pattern[str]], ...] = GUARDED_ROUTES):
-        self._base, self._pair, self._routes = base, pair, routes
-
-    def auth_flow(self, request):
-        if self._pair and is_guarded(request.method, request.url.path, self._base, self._routes):
-            request.headers["x-field-operator"], request.headers["x-field-operator-key"] = self._pair
-        yield request
+        super().__init__(base, pair, routes)
 
 
 def _perimeter() -> dict[str, str]:
@@ -158,7 +149,10 @@ def _perimeter() -> dict[str, str]:
 
 
 def _client(pair: tuple[str, str] | None = None, timeout: float = 10.0) -> httpx.Client:
-    return httpx.Client(timeout=timeout, headers=_perimeter(), auth=GuardedOperatorAuth(_base(), pair))
+    # a redirect is never followed: httpx keeps custom headers and the auth object's pair on a followed redirect
+    # (C-792 F-C792-3)
+    return httpx.Client(timeout=timeout, headers=_perimeter(), auth=GuardedOperatorAuth(_base(), pair),
+                        follow_redirects=False)
 
 
 def _fail(resp: httpx.Response) -> None:
@@ -168,6 +162,86 @@ def _fail(resp: httpx.Response) -> None:
         detail = resp.text
     typer.echo(f"error {resp.status_code}: {detail}", err=True)
     raise typer.Exit(code=1)
+
+
+def _domain_failure_report(resp: httpx.Response) -> None:
+    """The domain route answers 502 with the per-agent report as the `detail` when ANY agent errored. Print that report
+    (stdout, as for a 200) and the ids that were NOT halted (stderr, escaped), then exit 1. Anything else (no report in
+    the detail) returns, and the caller prints the usual error."""
+    try:
+        detail = resp.json().get("detail")
+    except Exception:
+        return
+    if not isinstance(detail, dict) or not isinstance(detail.get("results"), list):
+        return
+    typer.echo(json.dumps(detail))
+    failed = [r.get("agent_id") for r in detail["results"] if isinstance(r, dict) and r.get("outcome") == "error"]
+    ids = ", ".join(ascii(str(i))[1:-1] for i in failed)
+    typer.echo(f"error {resp.status_code}: {len(failed)} agent(s) NOT halted: {ids}", err=True)
+    raise typer.Exit(code=1)
+
+
+def _q(segment: str) -> str:
+    """One path segment: `/`, `?`, `#` and `%` in an id never change the route. `.` and `..` are refused before any
+    request (urllib leaves them unencoded and httpx would resolve them into another route; reviewer-2 B2)."""
+    if segment in (".", ".."):
+        typer.echo("error: an id may not be '.' or '..'; nothing was sent", err=True)
+        raise typer.Exit(code=2)
+    return urllib.parse.quote(segment, safe="")
+
+
+#: Errors raised before any request bytes reach the service: the call cannot have been applied.
+_NOT_SENT = (httpx.ConnectError, httpx.ConnectTimeout, httpx.UnsupportedProtocol)
+
+
+def _request(method: str, path: str, *, pair=None, timeout: float = 10.0,
+             write: bool = False, **kw) -> httpx.Response:
+    """One call; an unreachable service is one line and exit 1, never a traceback.
+    Prints only the exception CLASS (never the URL, headers or exception text)."""
+    try:
+        with _client(pair, timeout=timeout) as http:
+            return http.request(method, f"{_base()}{path}", **kw)
+    except httpx.HTTPError as exc:
+        if not write:
+            note = ""
+        elif isinstance(exc, _NOT_SENT):
+            note = "; nothing was changed"
+        else:   # the request may have been applied before the reply was lost (read timeout, dropped connection)
+            note = "; the outcome is unknown: read the agent's status (heartbeat) before you retry"
+        typer.echo(f"error: kill-switch unreachable ({type(exc).__name__}){note}", err=True)
+        raise typer.Exit(code=1)
+
+
+def _killed(resp: httpx.Response) -> bool:
+    """`killed` from a 200 body; a non-JSON or non-object body is exit 1, named."""
+    try:
+        body = resp.json()
+        if not isinstance(body, dict):
+            raise ValueError
+    except ValueError:
+        typer.echo("error: kill-switch returned a 200 that is not a JSON object", err=True)
+        raise typer.Exit(code=1)
+    return bool(body.get("killed"))
+
+
+def _exit_1_unless_every_agent_halted(resp: httpx.Response) -> None:
+    """The domain route answers 200 with per-agent outcomes, `error` among them, unless EVERY attempt errored (502).
+    A break-glass command that exits 0 while named agents are still active is a false all-clear: any `error` outcome is
+    exit 1, the ids on stderr (escaped: they come from the registry). A 200 that is not a domain report is exit 1."""
+    try:
+        body = resp.json()
+        if not isinstance(body, dict):
+            raise ValueError
+    except ValueError:
+        typer.echo("error: kill-switch returned a 200 that is not a JSON object", err=True)
+        raise typer.Exit(code=1)
+    results = body.get("results")
+    results = results if isinstance(results, list) else []   # no list, no outcome to read: nothing is reported failed
+    failed = [r.get("agent_id") for r in results if isinstance(r, dict) and r.get("outcome") == "error"]
+    if failed:
+        ids = ", ".join(ascii(str(i))[1:-1] for i in failed)
+        typer.echo(f"{len(failed)} agent(s) NOT halted: {ids}", err=True)
+        raise typer.Exit(code=1)
 
 
 _OP_ID = typer.Option(None, "--operator-id", help=OPERATOR_ID_HELP)
@@ -193,8 +267,8 @@ def agent(
     (the key is read from that file, never from argv).
     """
     pair = operator_pair(operator_id, operator_key_file)
-    with _client(pair) as http:
-        resp = http.post(f"{_base()}/kill/{agent_id}", json={"operator": operator, "reason": reason})
+    resp = _request("POST", f"/kill/{_q(agent_id)}", pair=pair, write=True,
+                    json={"operator": operator, "reason": reason})
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)
@@ -214,12 +288,13 @@ def domain(
     (the key is read from that file, never from argv).
     """
     pair = operator_pair(operator_id, operator_key_file)
-    with _client(pair, timeout=30.0) as http:
-        resp = http.post(f"{_base()}/kill/domain/{domain_name}",
-                         json={"operator": operator, "reason": reason})
+    resp = _request("POST", f"/kill/domain/{_q(domain_name)}", pair=pair, timeout=30.0,
+                    write=True, json={"operator": operator, "reason": reason})
     if resp.status_code != 200:
+        _domain_failure_report(resp)       # a 502 that carries the per-agent report: print it, name the agents, exit 1
         _fail(resp)
     typer.echo(resp.text)
+    _exit_1_unless_every_agent_halted(resp)
 
 
 @app.command()
@@ -235,9 +310,8 @@ def drill(
     (the key is read from that file, never from argv).
     """
     pair = operator_pair(operator_id, operator_key_file)
-    with _client(pair, timeout=30.0) as http:
-        resp = http.post(f"{_base()}/drill/{agent_id}",
-                         json={"operator": operator, "reason": "scheduled drill"})
+    resp = _request("POST", f"/drill/{_q(agent_id)}", pair=pair, timeout=30.0, write=True,
+                    json={"operator": operator, "reason": "scheduled drill"})
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)
@@ -246,12 +320,11 @@ def drill(
 @app.command()
 def heartbeat(agent_id: str = typer.Argument(...)) -> None:
     """Poll an agent's heartbeat; exit 1 if killed."""
-    with _client() as http:
-        resp = http.get(f"{_base()}/heartbeat/{agent_id}")
+    resp = _request("GET", f"/heartbeat/{_q(agent_id)}")
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)
-    if resp.json().get("killed"):
+    if _killed(resp):
         raise typer.Exit(code=1)
 
 
@@ -259,12 +332,11 @@ def heartbeat(agent_id: str = typer.Argument(...)) -> None:
 def checkin(agent_id: str = typer.Argument(...)) -> None:
     """Record a liveness check-in (POST); exit 1 if killed. Operator/debug
     verb — real agents call ``FieldAgent.checkin()``."""
-    with _client() as http:
-        resp = http.post(f"{_base()}/heartbeat/{agent_id}")
+    resp = _request("POST", f"/heartbeat/{_q(agent_id)}", write=True)
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)
-    if resp.json().get("killed"):
+    if _killed(resp):
         raise typer.Exit(code=1)
 
 
@@ -277,8 +349,7 @@ def liveness(
     """List registry-active agents with no check-in inside the window.
 
     Stale means no check-in, NOT evidence the process is dead."""
-    with _client(timeout=15.0) as http:
-        resp = http.get(f"{_base()}/liveness", params={"stale_after": stale_after})
+    resp = _request("GET", "/liveness", timeout=15.0, params={"stale_after": stale_after})
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)
@@ -298,8 +369,8 @@ def revive(
     (the key is read from that file, never from argv).
     """
     pair = operator_pair(operator_id, operator_key_file)
-    with _client(pair) as http:
-        resp = http.post(f"{_base()}/revive/{agent_id}", json={"operator": operator, "reason": reason})
+    resp = _request("POST", f"/revive/{_q(agent_id)}", pair=pair, write=True,
+                    json={"operator": operator, "reason": reason})
     if resp.status_code != 200:
         _fail(resp)
     typer.echo(resp.text)

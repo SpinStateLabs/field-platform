@@ -41,5 +41,36 @@ around a tool call.
 - No interception of un-checked actions (cooperative perimeter; gateway
   interception is Phase 3+).
 - No semantic understanding of scopes/triggers (exact/substring only).
+  Escalation triggers match as a case-insensitive substring in BOTH directions
+  (the trigger inside the action, or the action inside the trigger). Two edges
+  are decided, not accidental, and pinned by tests/test_escalation_trigger_edges.py:
+  an empty or single-space trigger is a substring of every multi-word action and
+  so escalates all of them (fail closed: an authoring slip raises reviews, it
+  never skips one), and a one-word action inside a longer trigger matches.
 - No verdict caching — every check hits live registry + introspection.
 - No LLM anywhere in the decision path.
+
+## Corrections
+
+### 2026-11-04 — v0.1 scope lines 25–26 are stale (item B-P-22)
+
+Verified against main cd3b76901f9aabfd45cee546f597177b8739d6ea. The v0.1
+scope lines above are left as written; where they disagree with this entry,
+this entry governs.
+
+- **CLI list (line 25, "`sentinel check | clauses | serve`") is incomplete.**
+  `services/conformance-sentinel/src/conformance_sentinel/cli.py` registers
+  these commands: `version` (line 28, prints
+  `conformance-sentinel <version>`), `check` (line 33), `self-manifest`
+  (line 59), `clauses` (line 91), `score` (line 98) and `serve` (line 203).
+  `pyproject.toml:20` binds the `sentinel` entry point to that app.
+- **Exit codes "0/2/1" belong to `sentinel check` only** (ALLOW / ESCALATE /
+  BLOCK, `cli.py:40`). `sentinel score` exits 0 when its gates pass and 3 when
+  they fail (`cli.py:115`). `sentinel self-manifest` exits 1 if the
+  self-manifest fails validation (`cli.py:61-62`).
+- **"15 tests" (line 26) is not the current test count.** A hard-coded count
+  goes stale with every test added, so none is copied here. Read the live
+  number with `pytest --collect-only -q` from `services/conformance-sentinel`.
+  The named adversarial cases (manifest unsealed on disk, token narrower than
+  manifest, ledger down, out-of-scope block) were not re-checked in this
+  entry.

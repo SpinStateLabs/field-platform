@@ -20,7 +20,9 @@ import io
 import json
 import logging
 import os
+import re
 import time
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from importlib import resources
@@ -30,10 +32,13 @@ from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from field_core import operator_auth, operator_health
+from field_core.startup import warn_open
 from field_core.authn import HEADER as AUTH_HEADER, install as install_authn, shared_secret
+from field_core.http import get_retrying_once, pooled_limits
+from field_core.http_errors import install_validation_handler
 from field_core.buildinfo import build_sha
 from field_core.clients import (
     CallerSigner,
@@ -79,6 +84,73 @@ def _console_headers() -> dict[str, str]:
     return {AUTH_HEADER: secret} if secret else {}
 
 
+def _seg(value: str) -> str:
+    """One URL path segment from a caller-chosen id (C-554, reviewer C-523 F-C523-1): every reserved character is
+    percent-encoded (an encoded ``?``, ``#`` or ``/`` stays inside the segment) and a pure-dot segment is encoded too,
+    so ``..`` can never collapse the upstream path."""
+    seg = quote(value, safe="")
+    return seg.replace(".", "%2E") if seg and set(seg) == {"."} else seg   # "." and ".." (httpx drops a "." segment)
+
+
+def _http_status(status: int) -> int:
+    """The status the console answers with for a failed upstream call: 0 (unreachable) and a 1xx-3xx (a redirect is
+    never followed and has no meaning to the page) are a 502 (C-936 F-C936-6a)."""
+    return status if status >= 400 else 502
+
+
+def _relay(status: int, data: Any, refusals: bool = True) -> Any:
+    """What a failed upstream call shows the caller (C-554, F-C523-3): a 4xx body is the refusal the operator needs and
+    is relayed; a 5xx body is a fixed text, because the body of a failing service can carry a traceback or an
+    environment line. An unreachable upstream (status 0) shows the class name of the failure and nothing else (C-504:
+    the exception text of a transport error can carry a URL, a proxy or an address). The 5xx body is not logged at any level (C-936 F-C936-2: the status only)."""
+    if status == 0 or (refusals and 400 <= status < 500):
+        return data
+    if status < 500:
+        # C-763 F-C763-1: a READ shows no 4xx body (a validation error can echo what the caller sent); only the
+        # status and a fixed text. The write routes keep ``refusals=True``: the refusal text is what the operator acts on.
+        return {"message": "upstream refused", "status": status}
+    logging.getLogger("ops_console").info("upstream answered %s (body not logged)", status)
+    return {"message": "upstream error", "status": status}
+
+
+def _error_text(status: int, data: Any) -> str:
+    """The same rule as ``_relay`` for a section or message string (C-651 F-C651-1): ``status N: <4xx body>``,
+    ``status N: upstream error`` for a 5xx, the failure's class name for an unreachable upstream (status 0)."""
+    shown = _relay(status, data, refusals=False)
+    if status == 0:
+        return str(shown)
+    return f"status {status}: {shown['message']}"
+
+
+#: What the page reads of a failed drill (console.html ``drillReportOf``): numbers, a boolean and a short status. The
+#: report's free-text ``note`` and ``endpoint_result`` are not relayed (C-651 F-C651-3).
+DRILL_REPORT_FIELDS = ("agent_id", "kill_confirmed_ms", "heartbeat_confirmed_ms", "restored", "restored_status", "restore_skipped", "total_ms")
+
+
+def _drill_report_only(status: int, data: Any) -> Any:
+    """A failed drill's answer: only the report fields above (still nested as ``{"detail": report}``, which the page
+    unwraps), anything else through ``_relay``."""
+    rep = data.get("detail") if isinstance(data, dict) else None
+    if isinstance(rep, dict) and "restored" in rep and rep.get("total_ms") is not None:
+        out = {k: rep[k] for k in DRILL_REPORT_FIELDS if k in rep}
+        if isinstance(out.get("restored_status"), str):
+            out["restored_status"] = out["restored_status"][:64]
+        return {"detail": out}
+    return _relay(status, data)
+
+
+def _decode(resp) -> tuple[int, Any]:
+    """An upstream answer as ``(status, body)``. A non-JSON answer keeps its HTTP status (C-644 F-C644-3): a 2xx that
+    is not JSON is still an error here (status 0 and the parse error's class name); any other status gets a fixed
+    body, so an HTML error page from a proxy is neither relayed nor mistaken for an unreachable upstream."""
+    try:
+        return resp.status_code, resp.json()
+    except ValueError as exc:
+        if 200 <= resp.status_code < 300:
+            return 0, type(exc).__name__
+        return resp.status_code, {"detail": "non-JSON answer"}
+
+
 class ServiceClient:
     """Thin httpx-compatible wrapper with graceful failure. A client built
     here carries ``x-field-auth`` only, never an operator identity (C-14)."""
@@ -90,23 +162,26 @@ class ServiceClient:
         if self._client is None:
             import httpx
 
+            # B16: idle connections expire before the upstream's keep-alive closes them
             self._client = httpx.Client(
-                base_url=self.base, timeout=10.0, headers=_console_headers()
+                base_url=self.base, timeout=10.0, headers=_console_headers(), limits=pooled_limits()
             )
 
     def get(self, path: str, **kw) -> tuple[int, Any]:
         try:
-            resp = self._client.get(path, **kw)
-            return resp.status_code, resp.json()
+            return _decode(get_retrying_once(self._client, path, **kw))   # B16: once more on a dead connection
         except Exception as exc:
-            return 0, str(exc)
+            return 0, type(exc).__name__
 
     def post(self, path: str, **kw) -> tuple[int, Any]:
         try:
-            resp = self._client.post(path, **kw)
-            return resp.status_code, resp.json()
+            return _decode(self._client.post(path, **kw))
         except Exception as exc:
-            return 0, str(exc)
+            return 0, type(exc).__name__
+
+
+#: the most per-agent usage rows one overview carries (S5-20)
+MAX_USAGE_ROWS = 200
 
 
 class Section(BaseModel):
@@ -128,17 +203,27 @@ class Overview(BaseModel):
     token_usage: Section
 
 
+#: The kill-switch's own bounds for the same two fields (its KillRequest: operator at most 200, reason at most 1000), so a bad
+#: value is one 422 here and not one refusal per agent or domain upstream (S9-31). ``resolved_by`` uses the operator bound.
+MAX_OPERATOR_CHARS = 200
+MAX_REASON_CHARS = 1000
+
+
 class OperatorAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    operator: str = Field(min_length=1, description="Human operator — recorded")
-    reason: str = Field(default="via ops-console", min_length=1)
+    operator: str = Field(min_length=1, max_length=MAX_OPERATOR_CHARS, description="Human operator — recorded")
+    reason: str = Field(default="via ops-console", min_length=1, max_length=MAX_REASON_CHARS)
 
 
 class ResolveAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    resolved_by: str = Field(min_length=1)
+    resolved_by: str = Field(min_length=1, max_length=MAX_OPERATOR_CHARS)
+
+
+#: The registry's agent id grammar (agent_registry/models.py), the only ids a bulk action may name.
+AGENT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
 
 class BulkAction(BaseModel):
@@ -146,28 +231,79 @@ class BulkAction(BaseModel):
 
     action: Literal["kill", "drill", "revive"]
     agent_ids: list[str] = Field(min_length=1, max_length=100)
-    operator: str = Field(min_length=1, description="Human operator — recorded")
-    reason: str = Field(default="via ops-console (bulk)", min_length=1)
+    operator: str = Field(min_length=1, max_length=MAX_OPERATOR_CHARS, description="Human operator — recorded")
+    reason: str = Field(default="via ops-console (bulk)", min_length=1, max_length=MAX_REASON_CHARS)
+
+    @field_validator("agent_ids")
+    @classmethod
+    def _registry_ids_only(cls, ids: list[str]) -> list[str]:
+        # C-936 F-C936-1: the upstream decodes an encoded "/", so the id ``domain/x`` would reach the whole-domain
+        # kill route. Only an id the registry can hold (its own grammar) is forwarded; this also refuses "".
+        bad = [i for i in ids if not AGENT_ID_RE.fullmatch(i)]
+        if bad:
+            raise ValueError("agent_ids must match " + AGENT_ID_RE.pattern)
+        return ids
 
 
 class FleetHalt(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    operator: str = Field(min_length=1, description="Human operator — recorded")
-    reason: str = Field(min_length=1)
+    operator: str = Field(min_length=1, max_length=MAX_OPERATOR_CHARS, description="Human operator — recorded")
+    reason: str = Field(min_length=1, max_length=MAX_REASON_CHARS)
     confirm: Literal["HALT"] = Field(
         description="Must be the literal word HALT — a typed confirmation")
     domains: list[str] | None = Field(
-        default=None, description="Default: every domain with a non-retired agent")
+        default=None, max_length=100,
+        description="Default: every domain with a non-retired agent")
+
+    @field_validator("domains")
+    @classmethod
+    def _no_slash_or_empty(cls, domains: list[str] | None) -> list[str] | None:
+        # C-936 F-C936-1: a domain is free text in the registry, but never "" and never a "/" (decoded upstream).
+        if domains is not None and any(not d or "/" in d for d in domains):
+            raise ValueError("a domain must be non-empty and contain no '/'")
+        # S3-19: one kill-switch POST per domain, so each string is bounded, and text that cannot be encoded
+        # (a lone surrogate) is refused here as a 422 instead of raising in _seg().
+        if domains is not None and any(len(d) > 128 for d in domains):
+            raise ValueError("a domain must be at most 128 characters")
+        if domains is not None:
+            for d in domains:
+                try:
+                    d.encode("utf-8")
+                except UnicodeEncodeError:
+                    raise ValueError("a domain must be valid text") from None
+        return domains
 
 
 class CheckRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    agent_id: str = Field(min_length=1)
-    action: str = Field(min_length=1)
-    token_id: str | None = None
+    # B-S11-31: bounded here because the sentinel does not bound them and the verdict lands on the ledger.
+    agent_id: str = Field(min_length=1, max_length=128)
+    action: str = Field(min_length=1, max_length=500)
+    token_id: str | None = Field(default=None, min_length=1, max_length=200)
     irreversible: bool = False
+
+    @field_validator("agent_id")
+    @classmethod
+    def _registry_id_only(cls, v: str) -> str:
+        if not AGENT_ID_RE.fullmatch(v):
+            raise ValueError("agent_id must match " + AGENT_ID_RE.pattern)
+        return v
+
+    @field_validator("action", mode="before")
+    @classmethod
+    def _strip_action(cls, v):
+        return v.strip() if isinstance(v, str) else v
+
+    @field_validator("action", "token_id")
+    @classmethod
+    def _one_line(cls, v: str | None) -> str | None:
+        # C0, DEL and C1 controls (Cc, NEL U+0085 included) and the line / paragraph separators (Zl U+2028, Zp U+2029):
+        # none can forge a ledger record, but each can start a new line in a viewer or a terminal (reviewer C1 on #1246)
+        if v is not None and (not v or any(unicodedata.category(c) in ("Cc", "Zl", "Zp") for c in v)):
+            raise ValueError("must be one line with no control characters")
+        return v
 
 
 #: Manifest viewer guard. The console reads a file named by a registrant-set
@@ -199,6 +335,8 @@ def guarded_manifest_path(manifest_dir: str | Path | None,
     """
     if not manifest_dir:
         raise ManifestRefused(403, "FIELD_MANIFEST_DIR is not configured")
+    if not isinstance(manifest_ref, str):
+        raise ManifestRefused(403, "manifest_ref is not text")
     try:
         base = Path(manifest_dir).resolve(strict=True)
     except (OSError, ValueError, RuntimeError):  # RuntimeError: a symlink loop on Python 3.12
@@ -239,6 +377,25 @@ def _csv_cell(value: Any) -> Any:
 DOMAIN_OUTCOMES = ("killed", "already_killed", "skipped_retired", "error")
 #: Errored agents listed per domain in a fleet-halt answer (the count is exact).
 MAX_LISTED_ERRORS = 50
+#: C-19 EXCEPTION to "no upstream 5xx body is shown" (C-936 F-C936-3): a fleet-halt row lists, per errored agent, the
+#: kill-switch's own one-line error text (``502: <detail>``), because the operator must know which agents were not
+#: stopped and why. It is the kill-switch's text, not a raw body, and it is cut to this many characters.
+MAX_ERROR_TEXT = 200
+
+
+#: the most skipped registry rows one fleet-halt answer (and its ledger row) lists
+MAX_LISTED_SKIPPED = 50
+
+
+def _result_ids(data: Any) -> set[str] | None:
+    """The agent ids a kill-switch domain report CONFIRMS as halted (outcome killed or already_killed), in the body or in
+    a non-2xx answer's ``detail``; None when there is no ``results`` list."""
+    for cand in (data, data.get("detail") if isinstance(data, dict) else None):
+        if isinstance(cand, dict) and isinstance(cand.get("results"), list):
+            return {r["agent_id"] for r in cand["results"]
+                    if isinstance(r, dict) and isinstance(r.get("agent_id"), str)
+                    and r.get("outcome") in ("killed", "already_killed")}
+    return None
 
 
 def _domain_outcomes(data: Any) -> tuple[dict[str, int] | None, list[dict]]:
@@ -258,22 +415,28 @@ def _domain_outcomes(data: Any) -> tuple[dict[str, int] | None, list[dict]]:
     errors: list[dict] = []
     for r in report["results"]:
         outcome = r.get("outcome") if isinstance(r, dict) else None
-        if outcome in counts and outcome != "error":
+        # isinstance first: `in counts` hashes the outcome, and a list or an object is unhashable (TypeError), which
+        # used to stop the whole fleet halt at this domain
+        if isinstance(outcome, str) and outcome in counts and outcome != "error":
             counts[outcome] += 1
             continue
         counts["error"] += 1
         if len(errors) < MAX_LISTED_ERRORS:
             r = r if isinstance(r, dict) else {}
+            fallback = f"outcome {outcome!r}" if isinstance(outcome, str) or outcome is None else "outcome is not a string"
             errors.append({"agent_id": r.get("agent_id"),
-                           "error": r.get("error") or f"outcome {outcome!r}"})
+                           "error": str(r.get("error") or fallback)[:MAX_ERROR_TEXT]})
     return counts, errors
 
 
 def _drill_not_restored(data: Any) -> str | None:
     """C-19: why a drill answer is a failure although it came back 2xx (the
     agent was not restored), or None when ``restored`` is true."""
-    if isinstance(data, dict) and data.get("restored") is True:
-        return None
+    if (isinstance(data, dict) and data.get("restored") is True
+            and data.get("restore_skipped", False) is False         # absent or exactly False: "true", 1, null contradict
+            and data.get("ok", True) is not False and "error" not in data
+            and data.get("restored_status") == "active"):           # an allowlist: only the status a drill restores to
+        return None                      # restored=True is only believed when nothing in the report contradicts it
     d = data if isinstance(data, dict) else {}
     return (f"drill did not restore the agent (restored={d.get('restored')}, "
             f"restored_status={d.get('restored_status')})")
@@ -289,6 +452,21 @@ def _overview_digest(overview: dict) -> str:
 def _page() -> str:
     root = resources.files("ops_console") / "static"
     return Path(str(root / "console.html")).read_text(encoding="utf-8")
+
+
+def _max_streams_from_env() -> int:
+    """FIELD_CONSOLE_MAX_STREAMS, default 8. A non-integer or negative value
+    refuses to start with a fixed message naming only the variable: the
+    value is operator input and is never echoed (no ``from`` chain either)."""
+    raw = os.environ.get("FIELD_CONSOLE_MAX_STREAMS", "8")
+    try:
+        value = int(raw)
+    except ValueError:
+        value = -1
+    if value < 0:
+        raise ValueError(
+            "FIELD_CONSOLE_MAX_STREAMS must be a non-negative integer") from None
+    return value
 
 
 def create_app(
@@ -324,6 +502,7 @@ def create_app(
     )
     # The HTML shell holds no data; /api/* requires the secret when set.
     install_authn(app, open_paths={"/"})
+    install_validation_handler(app)
     if operator_auth.operator_headers() and operator_auth.mode() != operator_auth.ENFORCE:
         # The console forwards the HUMAN's headers; its own FIELD_OPERATOR is
         # never used for a human action. Setting it without REQUIRE is a
@@ -361,17 +540,17 @@ def create_app(
     app.state.manifest_dir = (manifest_dir if manifest_dir is not None
                               else os.environ.get("FIELD_MANIFEST_DIR") or None)
     app.state.max_streams = (max_streams if max_streams is not None
-                             else int(os.environ.get("FIELD_CONSOLE_MAX_STREAMS", "8")))
+                             else _max_streams_from_env())
     app.state.open_streams = 0
 
     def _section(client: ServiceClient, path: str, label: str,
                  **kw) -> Section:
         status, data = client.get(path, **kw)
         if status == 200:
-            return Section(available=True, source=f"GET {client.base}{path}",
+            return Section(available=True, source=f"GET {path}",
                            data=data)
-        return Section(available=False, source=f"GET {client.base}{path}",
-                       error=f"status {status}: {data}" if status else str(data))
+        return Section(available=False, source=f"GET {path}",
+                       error=_error_text(status, data))
 
     # F2b: the console's caller key (FIELD_LEDGER_CALLER_ID / _KEY, GB10:
     # ``console``), loaded once here. Its operator.refused records are signed
@@ -413,19 +592,39 @@ def create_app(
     def _token_usage_section(agents_section: Section) -> Section:
         """Per-agent token usage + cost + rogue flags, from the governor."""
         gov = app.state.governor
-        source = f"GET {gov.base}/usage/{{agent_id}} (per registered agent)"
-        if not agents_section.available:
+        source = "GET /usage/{agent_id} (per registered agent)"
+        if not agents_section.available or not isinstance(agents_section.data, list):
+            # C-936 F-C936-6d: a 200 that is not a list is "unavailable", not a TypeError (a 500 from /api/overview).
             return Section(available=False, source=source,
                            error="agents unavailable")
         rows = []
+        unreadable = 0
+        capped = False
         for agent in agents_section.data:
-            status, data = gov.get(f"/usage/{agent['agent_id']}")
-            if status == 200 and (
-                data.get("total_input_tokens") or data.get("total_output_tokens")
-                or data.get("open_rogue_flags")
-            ):
+            agent_id = agent.get("agent_id") if isinstance(agent, dict) else None
+            if not isinstance(agent_id, str) or not agent_id:
+                continue
+            # C-936 F-C936-6c: a registry-supplied id is one path segment, whatever it holds.
+            status, data = gov.get(f"/usage/{_seg(agent_id)}")
+            if status != 200:
+                continue
+            if not isinstance(data, dict):
+                # S5-20: a 200 that is not an object (a list, a string, a number, null) is no usage row and no 500;
+                # it is counted so the section says so instead of showing the agent as idle
+                unreadable += 1
+                continue
+            if (data.get("total_input_tokens") or data.get("total_output_tokens")
+                    or data.get("open_rogue_flags")):
+                if len(rows) >= MAX_USAGE_ROWS:
+                    capped = True
+                    break
                 rows.append(data)
-        return Section(available=True, source=source, data=rows)
+        notes = []
+        if unreadable:
+            notes.append(f"{unreadable} agent usage answer(s) were not readable and are not shown")
+        if capped:
+            notes.append(f"only the first {MAX_USAGE_ROWS} agents with usage are shown")
+        return Section(available=True, source=source, data=rows, error="; ".join(notes) or None)
 
     def _build_overview() -> Overview:
         agents = _section(app.state.registry, "/agents", "agents")
@@ -492,7 +691,7 @@ def create_app(
 
     @app.get("/api/agents/{agent_id}")
     def agent_detail(agent_id: str) -> dict:
-        q = quote(agent_id, safe="")
+        q = _seg(agent_id)
         record = _section(app.state.registry, f"/agents/{q}", "agent")
         if not record.available and record.error and record.error.startswith("status 404"):
             raise HTTPException(404, detail=f"agent '{agent_id}' not registered")
@@ -510,13 +709,19 @@ def create_app(
     @app.get("/api/agents/{agent_id}/manifest")
     def agent_manifest(agent_id: str) -> dict:
         """Read-only view of the agent's FIELD manifest, behind the path guard."""
-        status, record = app.state.registry.get(f"/agents/{quote(agent_id, safe='')}")
+        status, record = app.state.registry.get(f"/agents/{_seg(agent_id)}")
         if status != 200:
-            raise HTTPException(status or 502, detail=record)
+            raise HTTPException(_http_status(status), detail=_relay(status, record, refusals=False))
+        if not isinstance(record, dict):  # a 200 of the wrong shape: fixed text, never the body
+            raise HTTPException(502, detail="registry answered an unexpected shape")
         ref = record.get("manifest_ref")
-        if not ref:
+        if ref is None or (isinstance(ref, str) and not ref):
             return {"agent_id": agent_id, "ref": None, "validation": "no_ref",
                     "raw": None}
+        if not isinstance(ref, str):  # the value is never echoed
+            raise HTTPException(403, detail={
+                "agent_id": agent_id, "ref": None, "validation": "refused",
+                "reason": "manifest_ref is not text"})
         try:
             path = guarded_manifest_path(app.state.manifest_dir, ref)
         except ManifestRefused as exc:
@@ -553,15 +758,15 @@ def create_app(
         def sec(key: str) -> Section:
             client, path = jobs[key]
             status, data = raw[key]
-            src = f"GET {client.base}{path}"
+            src = f"GET {path}"
             if status == 200:
                 return Section(available=True, source=src, data=data)
             if key == "lifecycle" and status == 404:
                 # Reachable, but no sweep has run yet: a fact, not an outage.
                 return Section(available=True, source=src,
-                               data={"no_sweep_yet": True, "detail": data})
+                               data={"no_sweep_yet": True})
             return Section(available=False, source=src,
-                           error=f"status {status}: {data}" if status else str(data))
+                           error=_error_text(status, data))
 
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -580,7 +785,10 @@ def create_app(
             "since": since, "until": until, "limit": limit}.items() if v}
         status, data = app.state.ledger.get("/events", params=params)
         if status != 200:
-            raise HTTPException(status or 502, detail=data)
+            raise HTTPException(_http_status(status), detail=_relay(status, data, refusals=False))
+        if not isinstance(data, list) or not all(isinstance(e, dict) for e in data):
+            # a 200 that is not a list of event dicts is a misbehaving or substituted upstream: a fixed text, never its body
+            raise HTTPException(502, detail={"message": "ledger answered an unexpected shape", "status": 200})
         return data
 
     @app.get("/api/events")
@@ -603,7 +811,7 @@ def create_app(
         if format == "json":
             body = {
                 "exported_at": datetime.now(timezone.utc).isoformat(),
-                "source": f"GET {app.state.ledger.base}/events",
+                "source": "GET /events",
                 "filters": {"agent_id": agent_id, "event_type": event_type,
                             "since": since, "until": until, "limit": limit},
                 "count": len(rows),
@@ -620,9 +828,10 @@ def create_app(
                     "hash", "prev_hash", "payload_json"])
         for e in rows:
             payload = e.get("payload") or {}
+            clause_id = payload.get("clause_id") if isinstance(payload, dict) else None
             w.writerow([_csv_cell(c) for c in (
                 e.get("ts"), e.get("event_id"), e.get("event_type"),
-                e.get("agent_id") or "", payload.get("clause_id") or "",
+                e.get("agent_id") or "", clause_id or "",
                 e.get("hash"), e.get("prev_hash"),
                 json.dumps(payload, sort_keys=True))])
         return Response(buf.getvalue(), media_type="text/csv; charset=utf-8",
@@ -653,26 +862,35 @@ def create_app(
         return {}
 
     def _proxy(client: ServiceClient, path: str, body: dict | None,
-               ok_codes=(200, 201), **kw) -> Any:
+               ok_codes=(200, 201), failure=_relay, **kw) -> Any:
+        """``failure(status, data)`` decides what a failing upstream shows: ``_relay`` (a 4xx body, a fixed text for a
+        5xx, C-554) for every route but the drill, whose 500 report the page reads (C-19) and which shows only the
+        report fields (C-651 F-C651-3)."""
         status, data = client.post(path, json=body, **kw)
         if status in ok_codes:
             return data
-        raise HTTPException(status or 502, detail=data)
+        raise HTTPException(_http_status(status), detail=failure(status, data))
 
     @app.post("/api/agents/{agent_id}/kill")
     def kill(agent_id: str, action: OperatorAction, request: Request) -> Any:
-        return _proxy(app.state.killswitch, f"/kill/{agent_id}",
+        return _proxy(app.state.killswitch, f"/kill/{_seg(agent_id)}",
                       action.model_dump(), **_operator_kw(request))
 
     @app.post("/api/agents/{agent_id}/revive")
     def revive(agent_id: str, action: OperatorAction, request: Request) -> Any:
-        return _proxy(app.state.killswitch, f"/revive/{agent_id}",
+        return _proxy(app.state.killswitch, f"/revive/{_seg(agent_id)}",
                       action.model_dump(), **_operator_kw(request))
 
     @app.post("/api/agents/{agent_id}/drill")
     def drill(agent_id: str, action: OperatorAction, request: Request) -> Any:
-        return _proxy(app.state.killswitch, f"/drill/{agent_id}",
-                      action.model_dump(), **_operator_kw(request))
+        data = _proxy(app.state.killswitch, f"/drill/{_seg(agent_id)}",
+                      action.model_dump(), failure=_drill_report_only, **_operator_kw(request))
+        failed = _drill_not_restored(data)
+        if failed:
+            # fail closed: a 2xx drill answer that does not say restored=true (an older kill-switch, a shape this
+            # console does not know) is an error on the page, never a success
+            raise HTTPException(502, detail=failed)
+        return data
 
     @app.post("/api/agents/bulk")
     def bulk(req: BulkAction, request: Request) -> dict:
@@ -683,11 +901,13 @@ def create_app(
         okw = _operator_kw(request)
         for agent_id in dict.fromkeys(req.agent_ids):  # de-dupe, keep order
             status, data = app.state.killswitch.post(
-                f"/{req.action}/{quote(agent_id, safe='')}",
+                f"/{req.action}/{_seg(agent_id)}",
                 json={"operator": req.operator, "reason": req.reason}, **okw)
             http_ok = status in (200, 201)
             row = {"agent_id": agent_id, "ok": http_ok, "status": status,
-                   "result" if http_ok else "error": data}
+                   "result" if http_ok else "error": (
+                       data if http_ok else
+                       (_drill_report_only if req.action == "drill" else _relay)(status, data))}
             if http_ok and req.action == "drill":
                 failed = _drill_not_restored(data)
                 if failed:
@@ -706,42 +926,120 @@ def create_app(
         kill-switch's own domain halt (POST /kill/domain/{d})."""
         okw = _operator_kw(request)
         domains = req.domains
+        explicit = bool(domains)                  # the caller named the domains: the registry is read per domain below
+        skipped: list[dict[str, Any]] = []        # registry rows that could not be placed in a domain (id when known)
+        fallback_ids: dict[str, None] = {}        # skipped rows with a VALID agent_id (AGENT_ID_RE): killed one by one
+        expected: dict[str, set[str]] = {}        # domain -> the non-retired agent ids the registry listed for it
         if not domains:
             status, agents = app.state.registry.get("/agents")
             if status != 200:
                 raise HTTPException(502, detail=f"registry unavailable — cannot "
-                                    f"enumerate domains: {agents}")
-            domains = sorted({a.get("domain") or "general" for a in agents
-                              if a.get("status") != "retired"})
+                                    f"enumerate domains: {_error_text(status, agents)}")
+            if not isinstance(agents, list):
+                raise HTTPException(502, detail="registry answered an unexpected body — cannot enumerate domains")
+            # One malformed row must never stop the halt of the others: it is skipped, REPORTED BY ID and ledgered (an
+            # error in the report, a banner that is not green), and every domain that can be named is still halted.
+            # A skipped row whose agent_id is usable is killed on its own (/kill/{id}) so a malformed domain cannot
+            # leave a live agent behind; that is reported separately from the domain halts.
+            found: set[str] = set()
+            for a in agents:
+                if not isinstance(a, dict):
+                    skipped.append({"agent_id": None, "reason": "row is not an object"})
+                    continue
+                if a.get("status") == "retired":
+                    continue
+                aid = a.get("agent_id")
+                # a usable id is ONE valid path segment (AGENT_ID_RE, at most 128 chars): anything else (a "/" would
+                # reach the whole-domain route, C-936 F-C936-1) is reported but never used to build a URL
+                aid = aid if isinstance(aid, str) and len(aid) <= 128 and AGENT_ID_RE.fullmatch(aid) else None
+                # a missing key or null is the default domain; any other non-string (0, False, [], {}) or a blank or
+                # slashed string is malformed, never silently "general"
+                d = a["domain"] if a.get("domain") is not None else "general"
+                if not isinstance(d, str) or not d.strip() or "/" in d:
+                    skipped.append({"agent_id": aid, "reason": "domain is not a usable string"})
+                    if aid is not None:
+                        fallback_ids[aid] = None
+                    continue
+                found.add(d)
+                if aid is None:
+                    # a good domain but no usable agent_id: the domain halt still covers the agent, but this row cannot
+                    # be named, so it is reported, ledgered and keeps the page not-green
+                    skipped.append({"agent_id": None, "reason": "agent_id is not usable"})
+                else:
+                    expected.setdefault(d, set()).add(aid)
+            domains = sorted(found)
+        bad_rows = len(skipped)
         results = []
         for domain in dict.fromkeys(domains):
+            expectation_failed = False
+            if explicit:
+                # Explicit domains: the registry still decides which agents a halt must account for. The halt itself is
+                # NEVER skipped for a failed read; the domain is just not ok (the answer cannot be checked).
+                st_e, rows_e = app.state.registry.get("/agents", params={"domain": domain})
+                if st_e == 200 and isinstance(rows_e, list):
+                    expected[domain] = {r["agent_id"] for r in rows_e
+                                        if isinstance(r, dict) and r.get("status") != "retired"
+                                        and isinstance(r.get("agent_id"), str) and r["agent_id"].strip()}
+                else:
+                    expectation_failed = True
             status, data = app.state.killswitch.post(
-                f"/kill/domain/{quote(domain, safe='')}",
+                f"/kill/domain/{_seg(domain)}",
                 json={"operator": req.operator, "reason": req.reason}, **okw)
             http_ok = status in (200, 201)
-            counts, errors = _domain_outcomes(data)
-            # C-19: a domain is halted only when the HTTP answer was 2xx AND no
-            # per-agent result is an error (a 200 with every agent errored is
-            # not a halt).
-            ok = http_ok and (counts is None or counts["error"] == 0)
-            results.append({"domain": domain, "ok": ok, "status": status,
-                            "counts": counts, "errors": errors,
-                            "result" if http_ok else "error": data})
+            try:
+                counts, errors = _domain_outcomes(data)
+                # C-19: a domain is halted only when the HTTP answer was 2xx AND it carries a valid per-agent results
+                # list AND no result is an error (a 200 with every agent errored is not a halt; neither is a 2xx
+                # that does not say what happened to any agent).
+                ids = _result_ids(data)
+                # A halt report must account for every agent the registry listed for the domain (an empty or short list,
+                # or one naming other ids, is not a halt). Only 200/201 count as a successful answer (never a 202).
+                complete = (ids is not None and len(ids) >= 1 and not expectation_failed
+                            and expected.get(domain, set()) <= ids)
+                ok = http_ok and counts is not None and counts["error"] == 0 and complete
+                row = {"domain": domain, "ok": ok, "status": status,
+                       "counts": counts, "errors": errors,
+                       "result" if http_ok else "error": data if http_ok else _relay(status, data)}
+            except Exception:  # noqa: BLE001 - nothing in ONE domain's answer may stop the kills still to be sent
+                row = {"domain": domain, "ok": False, "status": status, "counts": None, "errors": [],
+                       "error": "the kill-switch answer for this domain could not be read"}
+            results.append(row)
+        agent_kills = []
+        for aid in fallback_ids:   # (an ordered set: each id once)
+            st, data = app.state.killswitch.post(
+                f"/kill/{_seg(aid)}", json={"operator": req.operator, "reason": req.reason}, **okw)
+            good = st in (200, 201) and isinstance(data, dict) and data.get("agent_id") == aid
+            agent_kills.append({"agent_id": aid, "ok": good, "status": st})
+        if skipped:
+            # best effort, never a reason to stop: the halt already happened
+            try:
+                _RefusalLedger(app.state.ledger).append(
+                    "fleet.halt.skipped_rows",
+                    {"operator": req.operator, "reason": req.reason, "count": len(skipped),
+                     "skipped": skipped[:MAX_LISTED_SKIPPED],
+                     "fallback_kills": [{"agent_id": k["agent_id"], "ok": k["ok"]}
+                                        for k in agent_kills[:MAX_LISTED_SKIPPED]]},
+                    None)
+            except Exception:  # noqa: BLE001
+                pass
         return {"operator": req.operator, "domains": list(dict.fromkeys(domains)),
-                "all_ok": all(r["ok"] for r in results),
-                "agent_errors": sum(r["counts"]["error"] for r in results if r["counts"]),
+                "all_ok": bad_rows == 0 and all(r["ok"] for r in results) and all(k["ok"] for k in agent_kills),
+                "agent_errors": sum(r["counts"]["error"] for r in results if r["counts"]) + bad_rows,
+                "bad_rows": bad_rows,
+                "skipped_rows": skipped[:MAX_LISTED_SKIPPED],
+                "agent_kills": agent_kills,
                 "domains_failed": sum(1 for r in results if not r["ok"]),
                 "results": results}
 
     @app.post("/api/tokens/{token_id}/revoke")
     def revoke(token_id: str, request: Request) -> Any:
-        return _proxy(app.state.delegation, f"/tokens/{token_id}/revoke", None,
+        return _proxy(app.state.delegation, f"/tokens/{_seg(token_id)}/revoke", None,
                       **_operator_kw(request))
 
     @app.post("/api/escalations/{escalation_id}/resolve")
     def resolve(escalation_id: str, action: ResolveAction, request: Request) -> Any:
         return _proxy(app.state.governor,
-                      f"/escalations/{escalation_id}/resolve",
+                      f"/escalations/{_seg(escalation_id)}/resolve",
                       action.model_dump(), **_operator_kw(request))
 
     @app.post("/api/check")
@@ -750,4 +1048,5 @@ def create_app(
         is real and lands on the ledger like any other check."""
         return _proxy(app.state.sentinel, "/check", req.model_dump())
 
+    warn_open("ops-console", operator_layer=True)
     return app

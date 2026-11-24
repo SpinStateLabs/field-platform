@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -43,6 +44,15 @@ class TokenNotFoundError(Exception):
     pass
 
 
+def _finite_ceiling(value: float | None) -> float | None:
+    """A stored spend ceiling as the token model accepts it. DelegationToken refuses an infinite ceiling (S-A4), but a row
+    written before that (a roster row ``max_spend_usd: .inf``, "no cap") may still hold +inf; an infinite cap never trips, so it
+    reads as no ceiling instead of making every read of that token (and /health, which lists all tokens) fail. ONLY +inf: a
+    negative infinity means nothing may be spent, so reading it as unlimited would turn a damaged row into the opposite of its
+    meaning; it passes through and the token model refuses it loudly, like a finite negative (R-PR502 C2)."""
+    return None if value == math.inf else value
+
+
 class TokenStore:
     def __init__(self, path: str | Path):
         self.path = Path(path)
@@ -79,7 +89,7 @@ class TokenStore:
             revoked_at=(
                 datetime.fromisoformat(row["revoked_at"]) if row["revoked_at"] else None
             ),
-            max_spend_usd=row["max_spend_usd"],
+            max_spend_usd=_finite_ceiling(row["max_spend_usd"]),
         )
 
     def save(self, token: DelegationToken) -> DelegationToken:
@@ -87,7 +97,7 @@ class TokenStore:
 
         with self._lock, self._conn:
             self._conn.execute(
-                "INSERT OR REPLACE INTO tokens VALUES (?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO tokens VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(token_id) DO UPDATE SET agent_id=excluded.agent_id, granted_by=excluded.granted_by, scope=excluded.scope, issued_at=excluded.issued_at, expires_at=excluded.expires_at, revoked=MAX(tokens.revoked, excluded.revoked), revocation_id=COALESCE(tokens.revocation_id, excluded.revocation_id), revoked_at=COALESCE(tokens.revoked_at, excluded.revoked_at)",  # revocation is monotonic: a stale copy never un-revokes
                 (
                     token.token_id,
                     token.agent_id,
@@ -110,10 +120,25 @@ class TokenStore:
                 "SELECT max_spend_usd FROM token_spend_ceilings WHERE token_id = ?",
                 (token.token_id,),
             ).fetchone()
-        stored = ceiling[0] if ceiling is not None else None
+        stored = _finite_ceiling(ceiling[0]) if ceiling is not None else None
         if stored == token.max_spend_usd:
             return token
         return token.model_copy(update={"max_spend_usd": stored})
+
+    def save_revoked(self, token: DelegationToken) -> DelegationToken:
+        """Record ``token`` (already revoked, carrying its revocation id) ONLY if the stored row is not revoked yet, in
+        one statement. Returns the STORED token: a caller that lost the race gets the winner's row (its revocation id and
+        its ``revoked_at``), never a second one (C-625, reviewer C-527 F-C527-4). C-821 (reviewer C-692 F-C692-4): the
+        "did this call win" flag had no consumer and is gone."""
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                "UPDATE tokens SET revoked=1, revocation_id=?, revoked_at=? WHERE token_id=? AND revoked=0",
+                (token.revocation_id, token.revoked_at.isoformat() if token.revoked_at else None, token.token_id),
+            )
+            row = self._conn.execute(f"{_SELECT} WHERE t.token_id = ?", (token.token_id,)).fetchone()
+        if row is None:
+            raise TokenNotFoundError(token.token_id)
+        return self._row_to_token(row)
 
     def get(self, token_id: str) -> DelegationToken:
         with self._lock:
@@ -124,9 +149,14 @@ class TokenStore:
             raise TokenNotFoundError(token_id)
         return self._row_to_token(row)
 
+    def count(self) -> int:
+        """How many tokens are stored, revoked ones included: one COUNT, no row decoded."""
+        with self._lock:
+            return int(self._conn.execute("SELECT COUNT(*) FROM tokens").fetchone()[0])
+
     def list(self, agent_id: str | None = None) -> list[DelegationToken]:
         with self._lock:
-            if agent_id:
+            if agent_id is not None:  # "" is a filter that matches nothing, not "no filter" (scout P-9)
                 rows = self._conn.execute(
                     f"{_SELECT} WHERE t.agent_id = ? ORDER BY t.issued_at",
                     (agent_id,),
@@ -135,7 +165,11 @@ class TokenStore:
                 rows = self._conn.execute(
                     f"{_SELECT} ORDER BY t.issued_at"
                 ).fetchall()
-        return [self._row_to_token(r) for r in rows]
+        # The SQL order is on the ISO text, which is wrong across UTC offsets; sort by instant (stable, so ties keep SQL order).
+        # A naive issued_at (an old or directly written row) is read as UTC, as incident_replay does, so a table that holds
+        # naive and aware rows still lists instead of raising TypeError (R-PR496 C3).
+        return sorted((self._row_to_token(r) for r in rows),
+                      key=lambda t: t.issued_at if t.issued_at.tzinfo else t.issued_at.replace(tzinfo=timezone.utc))
 
     def active_tokens_for(
         self, agent_id: str, now: datetime | None = None

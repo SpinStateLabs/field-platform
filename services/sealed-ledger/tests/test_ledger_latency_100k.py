@@ -122,11 +122,57 @@ def test_health_is_o1_at_100k_events(fixture_100k, tmp_path):
     assert p95 < 50.0
 
 
+def test_health_never_recounts_for_an_append_held_in_flight_at_100k(fixture_100k, tmp_path, monkeypatch):
+    """J16, deterministic: one append is held after its bytes are written and
+    flushed but before the cache holds it (the fsync is gated), so the disk key
+    is the store's own in-flight key. /health, sampled 200 times in that window,
+    answers the cached count with no recount; after the append is released it
+    answers the new count, still with no recount. No scheduling decides this."""
+    p = tmp_path / "ledger" / "events.jsonl"
+    p.parent.mkdir()
+    shutil.copyfile(fixture_100k, p)
+    store = LedgerStore(p)
+    recounts: list = []
+    real = LedgerStore._take_snapshot
+    store._take_snapshot = lambda *a, **k: recounts.append(k) or real(store, *a, **k)
+    held, release = threading.Event(), threading.Event()
+    real_fsync = os.fsync
+
+    def gated_fsync(fd):
+        if threading.current_thread() is writer:
+            held.set()
+            assert release.wait(30)
+        return real_fsync(fd)
+
+    writer = threading.Thread(target=lambda: store.append("held", {"pad": "y" * 200}))
+    monkeypatch.setattr(os, "fsync", gated_fsync)
+    writer.start()
+    try:
+        assert held.wait(30)
+        assert store._inflight_key is not None  # the append really is in flight
+        for _ in range(200):
+            assert store.health_info()["event_count"] == N
+    finally:
+        release.set()
+        writer.join(30)
+    assert recounts == []
+    assert store.health_info()["event_count"] == N + 1
+    assert recounts == []
+
+
 def test_health_stays_o1_at_100k_while_this_process_appends(fixture_100k, tmp_path):
     """J16 under this process's own writes (C2 review C2PD-2): 4 threads append
-    to the SAME store while /health is sampled. An append in flight (written,
-    not yet in the cache) is not another process's write, so /health never
-    re-counts the 100k open segment for it."""
+    to the SAME store while /health is sampled. /health stays fast and exact.
+
+    The exact property (an append in flight is never re-counted) is pinned
+    deterministically by the held-append test above. This free-running form
+    cannot assert ``recounts == []``: /health reads the in-flight key, the
+    cache and the disk key in three steps and retries three times, so a reader
+    that loses the CPU to four writers in every retry takes one correct but
+    slower recount (measured on a 2-core, loaded host: 5 of 19 runs, 1 to 2
+    recounts of ~470 samples, max sample 165 to 310 ms, p95 0.05 ms). It bounds
+    the recount RATE instead: a regression that recounts for every in-flight
+    append would recount on about every sample, far above the bound."""
     p = tmp_path / "ledger" / "events.jsonl"
     p.parent.mkdir()
     shutil.copyfile(fixture_100k, p)
@@ -163,7 +209,8 @@ def test_health_stays_o1_at_100k_while_this_process_appends(fixture_100k, tmp_pa
     p95 = samples[int(len(samples) * 0.95) - 1]
     print(f"\nJ16 under in-process appends: {len(samples)} samples, {acks[0]} appends, "
           f"p95 {p95:.2f} ms, max {samples[-1]:.2f} ms, out-of-band recounts {len(recounts)}")
-    assert acks[0] > 0 and recounts == []
+    assert acks[0] > 0
+    assert len(recounts) <= max(5, len(samples) // 20), (len(recounts), len(samples))
     assert p95 < 50.0
     assert store.health_info()["event_count"] == N + acks[0]
 

@@ -39,19 +39,26 @@ unset, or under a row without the key, carries no ceiling.
 
 from __future__ import annotations
 
+import contextlib
+import threading
+import uuid
+
 import os
 import urllib.parse
+from typing import Annotated
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 
 from field_core import operator_auth, operator_health
+from field_core.startup import warn_open
 from starlette.concurrency import run_in_threadpool
 
 from field_core.authn import install as install_authn
+from field_core.http_errors import install_validation_handler
 from field_core.buildinfo import build_sha
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 
 from delegation_authority import __version__
 from delegation_authority.clients import (
@@ -73,14 +80,40 @@ from field_core.validation import parse_expiry
 MANIFEST_EXPIRED = "D.manifest_expired"
 
 
+#: Bounds on a mint request's scope list (a token's scope is matched by EXACT string, so a blank entry can only ever
+#: match a blank action) and on the /oauth/introspect form body.
+MAX_SCOPE_ENTRIES = 100
+MAX_SCOPE_ENTRY_CHARS = 200
+OAUTH_INTROSPECT_MAX_BODY = 16 * 1024
+
+
 class MintRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     agent_id: str = Field(min_length=1)
     granted_by: str = Field(min_length=1, description="Human grantor — never an agent")
-    scope: list[str] = Field(min_length=1)
+    scope: list[Annotated[str, StringConstraints(max_length=MAX_SCOPE_ENTRY_CHARS)]] = Field(
+        min_length=1, max_length=MAX_SCOPE_ENTRIES)
     ttl_seconds: int | None = Field(default=None, gt=0)
     expires_at: datetime | None = None
+
+    @field_validator("granted_by")
+    @classmethod
+    def _grantor_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value
+
+    @field_validator("scope")
+    @classmethod
+    def _clean_scope(cls, value: list[str]) -> list[str]:
+        """Refuse a blank entry and one with leading or trailing whitespace (an authority does not rewrite what it was
+        asked to grant, and scope is matched by exact string); drop exact duplicates, keeping the first one's place."""
+        if any(not entry.strip() for entry in value):
+            raise ValueError("scope entries must not be blank")
+        if any(entry != entry.strip() for entry in value):
+            raise ValueError("scope entries must not have leading or trailing whitespace")
+        return list(dict.fromkeys(value))
 
     @model_validator(mode="after")
     def _exactly_one_expiry(self) -> "MintRequest":
@@ -103,6 +136,23 @@ class HealthResponse(operator_health.OperatorHealthFields):
     build_sha: str | None = None  # FIELD_BUILD_SHA; "unknown" when unset
 
 
+async def _read_capped(request: Request, limit: int) -> bytes:
+    """The request body, or 413 once it is over `limit` bytes: a declared Content-Length over the cap is refused
+    before a byte is read, and a body with none (chunked) is counted as it streams and abandoned at the cap, so an
+    oversize body is never held in memory or decoded. Fixed text; the body is never echoed."""
+    declared = request.headers.get("content-length")
+    if declared is not None and declared.isdigit() and int(declared) > limit:
+        raise HTTPException(413, "request body too large")
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > limit:
+            raise HTTPException(413, "request body too large")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 def data_path() -> Path:
     root = Path(os.environ.get("FIELD_DATA_DIR", "./var"))
     return root / "delegation" / "tokens.sqlite3"
@@ -121,6 +171,38 @@ def _clause(status: int, clause_id: str, message: str) -> HTTPException:
     return HTTPException(status, {"clause_id": clause_id, "message": message})
 
 
+def stable_revocation_id(token_id: str) -> str:
+    """The revocation id of a token is a function of its id (C-725, reviewer C-701 objections 1 and 2). A revoke that is
+    retried after a crash between the ledger and the store, and the loser of a race between two processes, therefore
+    write the SAME id: the ledger may hold more than one `delegation.revoke` event for a token (at least once: the
+    ledger call precedes the write), but never two different revocation ids, and no event carries an id the token
+    does not store."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"field:delegation-revoke:{token_id}"))
+
+
+class _KeyedLocks:
+    """One lock per key, created on demand and dropped when nobody holds or waits for it (bounded by the revokes in
+    flight). A slow ledger append for one token no longer blocks the revoke of another (C-701 objection 3)."""
+
+    def __init__(self) -> None:
+        self._guard = threading.Lock()
+        self._entries: dict[str, list] = {}
+
+    @contextlib.contextmanager
+    def hold(self, key: str):
+        with self._guard:
+            entry = self._entries.setdefault(key, [threading.Lock(), 0])
+            entry[1] += 1
+        try:
+            with entry[0]:
+                yield
+        finally:
+            with self._guard:
+                entry[1] -= 1
+                if entry[1] == 0:
+                    self._entries.pop(key, None)
+
+
 def create_app(
     store: TokenStore | None = None,
     ledger: LedgerClient | None = None,
@@ -132,16 +214,18 @@ def create_app(
         description="Scoped, expiring, revocable delegation tokens (FIELD letter D).",
     )
     install_authn(app)
+    install_validation_handler(app)
     app.state.store = store or TokenStore(data_path())
     app.state.ledger = ledger or LedgerClient()
     app.state.registry = registry or RegistryClient()
+    app.state.revoke_locks = _KeyedLocks()    # C-725: one revoke of a TOKEN at a time in this process (not of all tokens)
 
     def _store() -> TokenStore:
         return app.state.store
 
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
-        return HealthResponse(ok=True, token_count=len(_store().list()),
+        return HealthResponse(ok=True, token_count=_store().count(),
                               build_sha=build_sha(), **op_health.health_fields())
 
     op_health = operator_health.install(app, ledger_getter=lambda a: a.state.ledger)
@@ -371,21 +455,38 @@ def create_app(
                 raise op_health.http_refusal(exc, action="revoke", path=f"/tokens/{token_id}/revoke",
                                              headers={}, claimed=auth.claimed,
                                              agent_id=token.agent_id) from None
-        if token.revoked:
-            return token  # idempotent
-        revoked = token.revoke()
-        try:
-            app.state.ledger.append(
-                "delegation.revoke",
-                payload={
-                    "token_id": token.token_id,
-                    "revocation_id": revoked.revocation_id,
-                },
-                agent_id=token.agent_id,
-            )
-        except LedgerUnreachableError as exc:
-            raise HTTPException(502, f"ledger unreachable — refusing to revoke: {exc}")
-        return _store().save(revoked)
+        # C-625 (reviewer C-527 F-C527-4) and C-725 (reviewer C-701): the check, the ledger event and the write are one
+        # step per token in this process (a per-token lock, re-read under it; the write is conditional on the row still
+        # being unrevoked, `save_revoked`). GUARANTEE, stated as it holds: at most one revocation id per token, and it
+        # is the same id on every attempt (`stable_revocation_id`); the ledger gets AT LEAST ONE `delegation.revoke`
+        # event, because the ledger call precedes the write (ledger-first): a crash between the two, or a second
+        # process, can add a repeat event with the same id, never a different one. So `delegation.revoke` means
+        # "revoke REQUESTED" (C-821, reviewer C-692 F-C692-1): until the write lands (a crash window) the token still
+        # introspects active; a retry finishes it. No sweep finishes it for you: named out of scope.
+        with app.state.revoke_locks.hold(token_id):
+            try:
+                token = _store().get(token_id)
+            except TokenNotFoundError:
+                raise HTTPException(404, f"token '{token_id}' not found")
+            if token.revoked:
+                return token  # idempotent: the first revocation id, no second event
+            revoked = token.revoke().model_copy(update={"revocation_id": stable_revocation_id(token.token_id)})
+            try:
+                app.state.ledger.append(
+                    "delegation.revoke",
+                    payload={
+                        "token_id": token.token_id,
+                        "revocation_id": revoked.revocation_id,
+                    },
+                    agent_id=token.agent_id,
+                )
+            except LedgerUnreachableError as exc:
+                # C-821 (reviewer C-692 F-C692-3): an answer from the ledger (401, 403, 422, 500 ...) is a refusal, not
+                # an outage: say which (the status only, never the body); fail closed either way (502, token unrevoked)
+                if exc.status_code is not None:
+                    raise HTTPException(502, f"ledger refused (HTTP {exc.status_code}) — refusing to revoke")
+                raise HTTPException(502, f"ledger unreachable — refusing to revoke: {exc}")
+            return _store().save_revoked(revoked)
 
     @app.post("/introspect", response_model=IntrospectionResult)
     def introspect(req: IntrospectRequest) -> IntrospectionResult:
@@ -431,10 +532,12 @@ def create_app(
         * revoked, expired and unknown all return exactly ``{"active": false}``
           and nothing else: an introspection response must not leak WHY.
         """
-        raw = await request.body()
+        raw = await _read_capped(request, OAUTH_INTROSPECT_MAX_BODY)
         fields = urllib.parse.parse_qs(raw.decode("utf-8", errors="replace"))
-        token_id = (fields.get("token") or [""])[0].strip()
-        if not token_id:
+        # C-625 F-C527-5: the token id is matched EXACTLY, as POST /introspect matches it: a padded id is a different
+        # string, so it is an unknown token (`{"active": false}`); only an empty or all-blank field is a 400
+        token_id = (fields.get("token") or [""])[0]
+        if not token_id.strip():
             raise HTTPException(
                 400,
                 "form field 'token' is required "
@@ -461,4 +564,5 @@ def create_app(
             "token_type": "opaque",
         }
 
+    warn_open("delegation-authority", operator_layer=True)
     return app

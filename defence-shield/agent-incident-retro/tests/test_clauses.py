@@ -39,7 +39,11 @@ def sess(reqs):
 
 def test_pivot_needs_same_path_and_param():
     s = sess([req(1, 0, "/search", "q=books"), req(2, 30, "/search", "q=%27%20OR%20%271%27%3D%271")])
-    assert s_pivot(s, 300.0) is not None
+    hit = s_pivot(s, 300.0)
+    assert hit is not None
+    assert hit.clause == "S.pivot"
+    assert hit.detail == "1 benign→tampered pivot(s) on the same path and parameter within 300 s"
+    assert [r.line for r in hit.lines] == [1, 2]            # the benign line and the tampered line (C-1045)
 
 
 def test_pivot_different_path_does_not_fire():
@@ -66,7 +70,11 @@ def test_escalate_on_block_fires_on_new_family_after_block():
         req(1, 0, "/x", "q=books", status=404),
         req(2, 10, "/x", "q=%3Cscript%3Ealert(1)%3C/script%3E", status=200),
     ])
-    assert s_escalate_on_block(s, 300.0) is not None
+    hit = s_escalate_on_block(s, 300.0)
+    assert hit is not None
+    assert hit.clause == "S.escalate-on-block"
+    assert hit.detail == "1 block→escalation step(s) within 300 s"
+    assert [r.line for r in hit.lines] == [1, 2]            # the block and the escalation (C-1045)
 
 
 def test_human_404s_do_not_escalate():
@@ -173,3 +181,17 @@ def test_allow_ip_cidr_matches_an_ipv4_mapped_client():
     # and a bare-address allowlist entry in the mapped spelling matches too
     findings, _, _ = evaluate(sessions, RetroConfig(allow_ips=["::ffff:203.0.113.5"]))
     assert [f.verdict for f in findings] == [Verdict.AUTHORIZED]
+
+
+def test_exactly_twenty_benign_requests_before_the_first_hostile_one_are_kept():
+    # reviewer-8 on 166db1c (mutants B4, B5): CONTEXT_BENIGN is a calibrated number outside RetroConfig; pin it
+    from agent_incident_retro.clauses import CONTEXT_BENIGN, _kept_requests
+
+    assert CONTEXT_BENIGN == 20
+    benign = [req(n, n, f"/page{n}") for n in range(1, 22)]                      # 21 benign requests
+    hostile = req(22, 30, "/search", "q=%27%20OR%20%271%27%3D%271")
+    assert hostile.is_hostile and not any(r.is_hostile for r in benign)
+    kept = _kept_requests(sess(benign + [hostile]), [], include_raw=True)
+    assert [r.ref.line for r in kept] == list(range(2, 23))                      # lines 2..21 (20 benign) and the hostile 22
+    short = _kept_requests(sess(benign[:19] + [hostile]), [], include_raw=True)  # 19 benign: all kept
+    assert [r.ref.line for r in short] == list(range(1, 20)) + [22]

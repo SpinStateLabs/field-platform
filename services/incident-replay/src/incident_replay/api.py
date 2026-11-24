@@ -2,20 +2,25 @@
 
 from __future__ import annotations
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from field_core.authn import install as install_authn
+from field_core.http_errors import install_validation_handler
+from field_core.startup import warn_open
 from field_core.buildinfo import build_sha
 from fastapi.responses import PlainTextResponse
 
 from field_core.clients import ManifestResolver, RegistryClient
 from incident_replay import __version__
 from incident_replay.engine import (
+    LedgerBusyError,
     LedgerQueryClient,
     PostMortem,
     ReplayEngine,
     ReplayRequest,
     TokenQueryClient,
+    UpstreamUnavailable,
     render_markdown,
 )
 
@@ -27,12 +32,24 @@ def create_app(engine: ReplayEngine | None = None) -> FastAPI:
         description="Deterministic incident reconstruction (FIELD letter L).",
     )
     install_authn(app)
+    install_validation_handler(app)
+    @app.exception_handler(LedgerBusyError)
+    async def _ledger_busy(_request: Request, exc: LedgerBusyError) -> JSONResponse:
+        # The ledger kept refusing inside the replay's retry budget: say so, and when to ask again.
+        return JSONResponse({"detail": str(exc)}, status_code=503, headers={"Retry-After": str(exc.retry_after)})
+
     app.state.engine = engine or ReplayEngine(
         ledger=LedgerQueryClient(),
         registry=RegistryClient(),
         delegation=TokenQueryClient(),
         manifests=ManifestResolver(),
     )
+
+    def _replay(req: ReplayRequest) -> PostMortem:
+        try:
+            return app.state.engine.replay(req)
+        except UpstreamUnavailable as exc:   # fixed text: the dependency's name, never its status or body
+            raise HTTPException(502, f"{exc.dependency} unavailable") from None
 
     @app.get("/health")
     def health() -> dict:
@@ -41,10 +58,11 @@ def create_app(engine: ReplayEngine | None = None) -> FastAPI:
 
     @app.post("/replay", response_model=PostMortem)
     def replay(req: ReplayRequest) -> PostMortem:
-        return app.state.engine.replay(req)
+        return _replay(req)
 
     @app.post("/replay/markdown", response_class=PlainTextResponse)
     def replay_markdown(req: ReplayRequest) -> str:
-        return render_markdown(app.state.engine.replay(req))
+        return render_markdown(_replay(req))
 
+    warn_open("incident-replay")
     return app
