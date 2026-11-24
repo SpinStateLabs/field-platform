@@ -282,7 +282,8 @@ def verifier_refused_on(e: Estate, agent: str) -> None:
 def test_only_the_canary_manifests_name_the_verifier_alias_and_both_keep_don():
     for name in ("canary-gb10", "canary-fly"):
         m = yaml.safe_load((REPO / "manifests" / f"{name}.yaml").read_text(encoding="utf-8"))
-        assert m["enforcement"]["kill_switch"]["authorized_operators"] == [DON, ALIAS], name
+        # S3-3 (G21 1b): every canary list also names the real login id don-admin
+        assert m["enforcement"]["kill_switch"]["authorized_operators"] == [DON, ALIAS, "don-admin"], name
         assert m["identity"]["principal"] == ALIAS, name
     for path in sorted((REPO / "manifests").glob("*.yaml")):
         if path.stem in ("canary-gb10", "canary-fly"):
@@ -297,7 +298,9 @@ def test_phase_g_check_probes_every_canary_manifest_name_as_a_login_id_by_defaul
     """The verifier's alias is a display name like Don's: phase_g_check's default alias probes cover it."""
     for name in ("canary-gb10", "canary-fly"):
         m = yaml.safe_load((REPO / "manifests" / f"{name}.yaml").read_text(encoding="utf-8"))
-        assert set(m["enforcement"]["kill_switch"]["authorized_operators"]) <= set(phase_g_check.DEFAULT_ALIASES)
+        # don-admin (S3-3) is a real operator id, not a display name: the alias probes cover display names only
+        names = set(m["enforcement"]["kill_switch"]["authorized_operators"]) - {"don-admin"}
+        assert names <= set(phase_g_check.DEFAULT_ALIASES)
 
 
 def test_the_verifier_row_is_valid_and_narrow(vest):

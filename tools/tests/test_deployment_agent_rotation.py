@@ -1119,7 +1119,8 @@ def test_halts_that_deliberately_leave_the_new_credential_do_not_block_clear_hal
 def test_every_halted_row_carries_the_flag(tmp_path):
     for i, scen in enumerate(MUST_BE_REVOKED + LEAVES_NEW):
         fake, old, rot = scen(tmp_path / str(i))
-        assert isinstance(_last_halt(rot)["leaves_new_in_place"], bool)
+        # B-23 (reviewer C-541): the flag is a bool AND the right bool: only the LEAVES_NEW halts keep the new credential
+        assert _last_halt(rot)["leaves_new_in_place"] is (scen in LEAVES_NEW), scen.__name__
 
 
 def test_the_hashed_handle_is_findable_by_sha256_of_the_provider_id(tmp_path):

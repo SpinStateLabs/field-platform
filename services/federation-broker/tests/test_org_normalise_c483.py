@@ -34,7 +34,11 @@ BASE = dict(allowed_scopes=["exchange invoice status"], allowed_data_classes=["i
 
 
 def contract(cid, org="Acme Corp", active=True):
-    return FederationContract(contract_id=cid, counterparty_org=org, active=active, **BASE)
+    """C-553: a contract WRITE now refuses a blank, control, zero-width or over-long org name (422), but these tests
+    exercise how the STORE compares names, including the spellings a legacy row can still hold, so the model is built
+    the way a stored row is (STORED_ROW context, which skips only the new name rule)."""
+    return FederationContract.model_validate(
+        dict(contract_id=cid, counterparty_org=org, active=active, **BASE), context={engine_module.STORED_ROW: True})
 
 
 @pytest.fixture()
@@ -75,7 +79,8 @@ def test_different_orgs_stay_different(a, b):
 def test_a_whitespace_only_name_normalises_to_nothing_and_matches_nothing(store):
     assert normalize_org("  \t ") == ""
     store.save(contract("FED-1", org="Acme Corp"))
-    store.save(contract("FED-BLANK", org="   "))           # accepted as before; it can never be looked up
+    with pytest.raises(ValueError):                         # S4-14: refused at the model now (it could never match)
+        contract("FED-BLANK", org="   ")
     assert store.for_org("   ") is None
     assert _lists_org([{"org": "Acme Corp"}], "   ") is False
 
@@ -472,8 +477,9 @@ for r in range(rounds):
     time.sleep(max(0.0, t0 + r * 1.0 - time.time()))        # every worker starts round r at the same wall-clock moment
     org = spell[worker % len(spell)].format(r=r)
     try:
-        store.save(FederationContract(contract_id=f"FED-W{worker}-R{r}", counterparty_org=org,
-                                      allowed_scopes=["s"], allowed_data_classes=["d"]))
+        store.save(FederationContract.model_validate(
+            dict(contract_id=f"FED-W{worker}-R{r}", counterparty_org=org, allowed_scopes=["s"],
+                 allowed_data_classes=["d"]), context={"federation_broker.stored_row": True}))
         out.append("ok")
     except ContractConflict:
         out.append("conflict")

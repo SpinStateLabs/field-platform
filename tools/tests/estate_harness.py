@@ -674,7 +674,7 @@ async def operator_env(request: Request):
 
 
 # Sentinel B: identical service, but its registry URL is wrong (dead port), so
-# every /check BLOCKs R.unregistered regardless of kill state.
+# every /check BLOCKs R.registry_unreachable (R.unregistered before B16) regardless of kill state.
 _saved = os.environ["FIELD_REGISTRY_URL"]
 os.environ["FIELD_REGISTRY_URL"] = "http://127.0.0.1:9/registry"
 sentinel_b = sentinel()
@@ -709,4 +709,12 @@ routes = [
     Route("/", console),
     Route("/health", console),
 ]
-uvicorn.run(Starlette(routes=routes), host="127.0.0.1", port=port, log_level="warning")
+#: Every service in this process reaches the others over HTTP through this one server, with long-lived pooled
+#: clients (the sentinel's RegistryClient, the ledger and delegation clients). uvicorn's default keep-alive (5 s)
+#: closes an idle pooled connection, and a request sent on it as the close lands fails as a transport error: the
+#: sentinel then answers BLOCK R.unregistered ("registry unreachable") for one /check while the canary is
+#: registered and active (main 7e14f136, test_renew_token, CI "tests (3.13)"). A test module's idle gaps are
+#: seconds, so the server never closes an idle connection while the harness lives.
+KEEP_ALIVE_S = 3600
+uvicorn.run(Starlette(routes=routes), host="127.0.0.1", port=port, log_level="warning",
+            timeout_keep_alive=KEEP_ALIVE_S)

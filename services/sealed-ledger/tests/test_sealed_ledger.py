@@ -308,3 +308,39 @@ def test_verify_inside_a_rename_window_with_events_found_is_never_refused(tmp_pa
     assert "no ledger" not in r.output, r.output
     m = re.search(r"OK — chain intact over (\d+) events", r.output)
     assert (m and int(m.group(1)) >= 4) or (r.exit_code == 4 and "BUSY" in r.output), (r.exit_code, r.output)
+
+
+# S6-10: the offline writer refuses what POST /events refuses: a blank event_type seals nothing.
+
+
+def _cli_append(path, *args):
+    from typer.testing import CliRunner
+
+    from sealed_ledger import cli as ledger_cli
+
+    return CliRunner().invoke(ledger_cli.app, ["append", *args, "--path", str(path)])
+
+
+@pytest.mark.parametrize("blank", ["", " ", "  ", "\t", "\n"])
+def test_the_store_refuses_a_blank_event_type_and_writes_nothing(store, blank):
+    store.append("action", {"n": 1})
+    with pytest.raises(ValueError, match="event_type must not be blank"):
+        store.append(blank, {"n": 2})
+    assert [e.event_type for e in store.events()] == ["action"]
+    assert store.verify().ok
+
+
+@pytest.mark.parametrize("blank", ["", " ", "  "])
+def test_cli_append_of_a_blank_event_type_exits_2_and_the_chain_length_is_unchanged(tmp_path, blank):
+    path = tmp_path / "events.jsonl"
+    assert _cli_append(path, "action").exit_code == 0
+    before = path.read_bytes()
+    r = _cli_append(path, blank)
+    assert r.exit_code == 2 and "error:" in r.output
+    assert path.read_bytes() == before
+    assert LedgerStore(path).verify().ok
+
+
+def test_a_blank_event_type_over_http_is_still_refused_not_a_500(client):
+    r = client.post("/events", json={"event_type": " ", "payload": {}})
+    assert r.status_code == 422
