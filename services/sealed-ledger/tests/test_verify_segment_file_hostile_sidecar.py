@@ -93,17 +93,92 @@ def test_a_valid_sidecar_still_verifies(tmp_path):
 def test_C1_a_deeply_nested_sidecar_is_a_failed_verification_not_a_recursion_error(tmp_path):
     two, side_path = _two(tmp_path)
     side_path.write_text("[" * 200_000 + "]" * 200_000, encoding="utf-8")
-    assert "invalid" in _assert_failed_not_crashed(two)["reason"]
+    assert "nesting is deeper than" in _assert_failed_not_crashed(two)["reason"]
 
 
 @pytest.mark.parametrize("key", ["anchor", "logical"])
-def test_C1_deep_nesting_inside_a_field_is_a_failed_verification(tmp_path, key):
+@pytest.mark.parametrize("depth", [501, 100_000])
+def test_C1_deep_nesting_inside_a_field_is_refused_by_the_explicit_cap(tmp_path, key, depth):
+    """The cap is a scan before json.loads, so the answer does not depend on the interpreter's stack-derived recursion
+    limit (CPython 3.14: a 100000-deep list raises at an 8 MiB stack and parses at 16 MiB)."""
     two, side_path = _two(tmp_path)
-    deep = "[" * 100_000 + "]" * 100_000
+    deep = "[" * depth + "]" * depth
     text = side_path.read_text(encoding="utf-8").rstrip()
     assert text.endswith("}")
     side_path.write_text(text[:-1] + f', "{key}": {deep}' + "}", encoding="utf-8")   # a duplicate key: the last value wins
-    _assert_failed_not_crashed(two)
+    assert "nesting is deeper than 500 levels" in _assert_failed_not_crashed(two)["reason"]
+
+
+def test_nesting_at_the_cap_is_parsed_and_then_refused_for_its_type_not_its_depth(tmp_path):
+    two, side_path = _two(tmp_path)
+    text = side_path.read_text(encoding="utf-8").rstrip()
+    side_path.write_text(text[:-1] + ', "anchor": ' + "[" * 499 + "]" * 499 + "}", encoding="utf-8")
+    reason = _assert_failed_not_crashed(two)["reason"]
+    assert "anchor is not an object" in reason and "nesting" not in reason
+
+
+@pytest.mark.parametrize("codec", ["utf-16-le", "utf-16-be", "utf-16", "utf-32-le", "utf-32"])
+def test_a_sidecar_in_another_encoding_is_a_failed_verification(tmp_path, codec):
+    """json.loads(bytes) would pick UTF-16/32 itself; the sidecar is decoded strictly as UTF-8 once, for scan and parser."""
+    two, side_path = _two(tmp_path)
+    side_path.write_bytes(side_path.read_text(encoding="utf-8").encode(codec))
+    assert "invalid" in _assert_failed_not_crashed(two)["reason"]
+
+
+@pytest.mark.parametrize("codec", ["utf-16-le", "utf-32-le"])
+def test_an_encoding_that_blinds_a_utf8_scan_does_not_hide_a_deep_value(tmp_path, codec):
+    """U+0122 is bytes 22 01 in UTF-16-LE: read as UTF-8 it opens a string and the deep run after it is never counted,
+    while a UTF-16 parser is outside any string. Refused on the encoding, whatever the stack."""
+    two, side_path = _two(tmp_path)
+    side = json.loads(side_path.read_text(encoding="utf-8"))
+    deep = "[" * 100_000 + "]" * 100_000
+    text = json.dumps({**side, "Ģ": 1}, ensure_ascii=False)[:-1] + f', "closed_at": {deep}' + "}"
+    side_path.write_bytes(text.encode(codec))
+    assert "invalid" in _assert_failed_not_crashed(two)["reason"]
+
+
+def test_a_utf8_bom_sidecar_is_refused_as_before_the_cap_is_a_text_rule(tmp_path):
+    """Choice: the sidecar is decoded as strict UTF-8 and parsed as text, and json.loads refuses a BOM on text. The writer
+    never emits one (store.py writes the sidecar without a BOM)."""
+    two, side_path = _two(tmp_path)
+    side_path.write_bytes(b"\xef\xbb\xbf" + side_path.read_bytes())
+    assert "invalid" in _assert_failed_not_crashed(two)["reason"]
+
+
+def test_a_wide_shallow_sidecar_value_is_not_counted_as_deep():
+    from sealed_ledger.store import json_depth_exceeds
+    assert json_depth_exceeds("[]" * 1000) is False and json_depth_exceeds("[" + "[]," * 1000 + "[]]") is False
+    assert json_depth_exceeds(b'{"a": [1, {"b": [2]}]}') is False
+
+
+def test_the_depth_scan_ignores_brackets_inside_strings():
+    from sealed_ledger.store import json_depth_exceeds
+    assert json_depth_exceeds("[" * 501) and not json_depth_exceeds("[" * 500 + "]" * 500)
+    assert not json_depth_exceeds('{"a": "' + "[" * 5000 + '"}')
+    assert not json_depth_exceeds('{"a": "\\"' + "[" * 5000 + '"}')           # an escaped quote stays inside the string
+    assert json_depth_exceeds('{"a": "\\\\", "b": ' + "[" * 600)               # escaped backslash, then a real bracket run
+    assert json_depth_exceeds(b"{" * 501) and json_depth_exceeds("[" * 3, 2) and not json_depth_exceeds("[" * 2, 2)
+
+
+@pytest.mark.parametrize("bad", [[], "x", 7, [[1]], 1.5, True, False, 0])
+def test_a_non_object_anchor_is_a_failed_verification_with_or_without_a_key(tmp_path, bad):
+    """CI on Python 3.14.10 parsed a 100000-deep list (no RecursionError) and the unsigned path never looked at the anchor:
+    ok True. The type is checked before the unsigned OK path, so no Python version or key decides it."""
+    two, side_path = _two(tmp_path)
+    _edit(side_path, anchor=bad)
+    out = _assert_failed_not_crashed(two)
+    assert "anchor is not an object" in out["reason"]
+    assert verify_segment_file(two, public_key_pem="not a key")["ok"] is False   # a key supplied: still refused, same reason
+    assert "anchor is not an object" in verify_segment_file(two, public_key_pem="not a key")["reason"]
+
+
+def test_a_null_anchor_means_no_anchor_unsigned_ok_signed_refused(tmp_path):
+    """null is kept as before: no anchor object, so the unsigned check passes, and any signed check fails (nothing to verify)."""
+    two, side_path = _two(tmp_path)
+    _edit(side_path, anchor=None)
+    assert verify_segment_file(two)["ok"] is True
+    signed = verify_segment_file(two, public_key_pem="not a key")
+    assert signed["ok"] is False and "signature does not verify" in signed["reason"]
 
 
 @pytest.mark.parametrize("key", ["genesis_prev_hash", "head_hash", "sha256", "file", "logical"])
