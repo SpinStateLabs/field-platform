@@ -406,13 +406,19 @@ class PackEngine:
         unresolvable, n_unres = _without_canaries(raw_unresolvable)
         offending = sorted(offending, key=lambda o: str(o.get("agent_id")))
         unresolvable = sorted(unresolvable, key=lambda u: str(u.get("agent_id")))
+        def ident(rec: dict) -> str:
+            # An id that is not a str (a dict or list a caller wrote into the record) is never
+            # printed into the signed note; the record stays counted and prints as missing, as the
+            # distinct-agents rows treat it.
+            return rec["agent_id"] if isinstance(rec.get("agent_id"), str) else "(no agent_id)"
+
         parts = []
         if offending:
             parts.append("offending: " + ", ".join(
-                f"{o.get('agent_id')} ({o.get('retention_days')} d)" for o in offending))
+                f"{ident(o)} ({o.get('retention_days')} d)" for o in offending))
         if unresolvable:
             parts.append("unresolvable: " + ", ".join(
-                f"{u.get('agent_id')} ({u.get('reason')})" for u in unresolvable))
+                f"{ident(u)} ({u.get('reason')})" for u in unresolvable))
             parts.append(f"a lower bound: {len(unresolvable)} manifest ref(s) could not be read")
         if not parts:
             parts.append(f"none among {data.get('manifests_checked', 0)} resolvable manifest(s)")
