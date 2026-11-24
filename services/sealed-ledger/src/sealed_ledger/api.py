@@ -25,7 +25,7 @@ from field_core.http_errors import install_validation_handler
 from field_core.buildinfo import build_sha
 from pydantic import BaseModel, Field, StrictBool, TypeAdapter, field_validator, model_serializer
 
-from field_core.ledger import ChainVerification, LedgerEvent, reject_non_finite
+from field_core.ledger import ChainVerification, LedgerEvent, reject_non_finite, reject_too_deep
 from sealed_ledger import __version__, operator_observer
 from sealed_ledger.retention import RetentionCheck, retention_check
 from sealed_ledger.store import (
@@ -133,6 +133,7 @@ class AppendRequest(BaseModel):
     @field_validator("payload")
     @classmethod
     def _payload_is_finite(cls, value: dict[str, Any]) -> dict[str, Any]:
+        reject_too_deep(value)    # B101: deeper than the serializer's own limit was a bare 500 (nothing written); now a 422
         reject_non_finite(value)  # NaN/Infinity would seal an event that cannot re-verify
         return value
 

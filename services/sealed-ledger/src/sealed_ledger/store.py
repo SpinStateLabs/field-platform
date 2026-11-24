@@ -67,7 +67,7 @@ from field_core.ledger import (
     LedgerEvent,
     ReadOnlyLedgerEvent,
     compute_event_hash,
-    make_event,
+    make_event, reject_non_finite, reject_too_deep,    # (one line: the env-var anchors in docs/ENVIRONMENT.md count lines)
     verify_chain,
 )
 
@@ -2355,6 +2355,10 @@ class LedgerStore:
     ) -> LedgerEvent:
         if not isinstance(event_type, str) or not event_type.strip():
             raise ValueError("event_type must not be blank")  # S6-10: no writer seals an event with a blank type
+        # B101: a payload make_event would refuse never takes the writer lock or triggers the reconciliation in
+        # _ensure_fresh_locked (the checks are repeated inside make_event; this walk is O(payload), bounded)
+        reject_too_deep(payload)
+        reject_non_finite(payload)
         self._require_appendable(event_type)  # before the writer lock: nothing to undo
         with self._writer():
             self._ensure_fresh_locked()
