@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import unicodedata
 from pathlib import Path
 
 import typer
@@ -85,6 +86,35 @@ def append(
         typer.echo(f"error: ledger corrupt: {exc}", err=True)
         raise typer.Exit(code=1)
     typer.echo(event.model_dump_json())
+
+
+REASON_MAX_CHARS = 500
+_NAMED_ESCAPES = {chr(10): "\\n", chr(13): "\\r", chr(9): "\\t", chr(27): "\\x1b"}
+
+
+def _one_line(text: object, cap: int = REASON_MAX_CHARS) -> str:
+    """B87: a verification reason as ONE printable line. A reason can carry content of the file under test (an index,
+    twelve characters of a stored hash, a name); a newline in it would let that content start a line of its own, for
+    example the OK-looking "(signed rotation anchor verified ...)" text, and an escape sequence could repaint the
+    terminal. Every control, format, line-separator, surrogate, private-use and unassigned character is written as
+    a visible escape, and the line is cut at ``cap`` characters with the number of characters left out."""
+    out: list[str] = []
+    for ch in str(text):
+        if ch in _NAMED_ESCAPES:
+            out.append(_NAMED_ESCAPES[ch])
+        elif unicodedata.category(ch)[0] == "C" or unicodedata.category(ch) in ("Zl", "Zp"):
+            o = ord(ch)
+            out.append(f"\\x{o:02x}" if o < 0x100 else f"\\u{o:04x}" if o < 0x10000 else f"\\U{o:08x}")
+        else:
+            out.append(ch)
+    line = "".join(out)
+    return line if len(line) <= cap else f"{line[:cap]}... ({len(line) - cap} more characters not shown)"
+
+
+def _tampered(reason: object) -> "typer.Exit":
+    """Print the one ``TAMPERED`` line for a failed verification and return the exit-1 to raise."""
+    typer.echo(f"TAMPERED — {_one_line(reason)}")
+    return typer.Exit(code=1)
 
 
 def _busy(message: str) -> None:
@@ -294,6 +324,7 @@ def verify(
     from sealed_ledger.store import (
         LedgerBusy,
         _parse_events,
+        _unparseable_text,
         journal_path_for,
         read_shared,
         sidecar_path_for,
@@ -321,13 +352,11 @@ def verify(
             raise typer.Exit(code=2)
         try:
             events = _parse_events(data)
-        except ValueError as exc:
-            typer.echo(f"TAMPERED — unparseable line: {exc}")
-            raise typer.Exit(code=1)
+        except (ValueError, RecursionError) as exc:
+            raise _tampered(f"unparseable line: {_unparseable_text(exc)}")
         result = verify_chain(events, genesis)
         if not result.ok:
-            typer.echo(f"TAMPERED — {result.reason}")
-            raise typer.Exit(code=1)
+            raise _tampered(result.reason)
         typer.echo(f"OK — chain intact over {result.length} events")
         _check_signatures(enumerate(events), event_pubkey_pem, keyring)  # indices local to the file
         return
@@ -343,8 +372,7 @@ def verify(
             target, public_key_pem=_read_public_pem(pubkey, "--pubkey")
         )
         if not side["ok"]:
-            typer.echo(f"TAMPERED — {side['reason']}")
-            raise typer.Exit(code=1)
+            raise _tampered(side["reason"])
         typer.echo(
             f"OK — segment {side['segment']} of {side['logical']} intact over "
             f"{side['events']} events (global {side['global_first']}..{side['global_last']})"
@@ -370,8 +398,7 @@ def verify(
                 )
                 raise typer.Exit(code=2)
             if not result.ok:
-                typer.echo(f"TAMPERED — {result.reason}")
-                raise typer.Exit(code=1)
+                raise _tampered(result.reason)
             logical = target.stem[: -len(f"-{entry['n']}")] + target.suffix
             typer.echo(
                 f"OK — segment {entry['n']} of {logical} intact over "
@@ -423,8 +450,7 @@ def verify(
                 f"{result.verified_events} events hash-verified)"
             )
     else:
-        typer.echo(f"TAMPERED — {result.reason}")
-        raise typer.Exit(code=1)
+        raise _tampered(result.reason)
     if event_pubkey_pem is not None or keyring is not None:
         # F2 / F2b: every LIVE event (global indices), after the chain walk
         try:
@@ -455,7 +481,7 @@ def verify(
                 typer.echo("note: no --min-anchors floor given: anchors removed from the END of the file are not detected "
                            "(the guarantee depends on this being the complete off-box copy)")
         else:
-            typer.echo(f"ANCHOR FAILURE — {anchor_result.first_failure}")
+            typer.echo(f"ANCHOR FAILURE — {_one_line(anchor_result.first_failure)}")
             raise typer.Exit(code=1)
 
 
@@ -580,7 +606,7 @@ def verify_export(
             if result.first_failing_index is not None
             else ""
         )
-        typer.echo(f"EXPORT FAILED — {where}{result.reason}")
+        typer.echo(f"EXPORT FAILED — {_one_line(where + str(result.reason))}")
         raise typer.Exit(code=1)
     if result.event_count:
         span = f"{result.event_count} event(s) at indices {result.first_index}..{result.last_index}"

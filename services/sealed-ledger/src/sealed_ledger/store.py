@@ -657,6 +657,13 @@ def _parse_events(data: bytes) -> list[LedgerEvent]:
     return out
 
 
+def _unparseable_text(exc: BaseException) -> str:
+    """B87: what a verification reason says about a line that does not parse. The exception CLASS and a fixed text, never
+    its message: a pydantic ValidationError prints each offending key and value (segment content, multi-line), and
+    that text would reach a ``TAMPERED`` line. ``RecursionError`` is a deeply nested line, the same kind of break."""
+    return f"{type(exc).__name__} (the message is not echoed)"
+
+
 def _parse_events_located(data: bytes) -> tuple[list[LedgerEvent], tuple[int, str] | None]:
     """``_parse_events`` for verification: the events before the first line
     that does not parse (non-JSON, or not a ledger event), and that line's
@@ -668,7 +675,7 @@ def _parse_events_located(data: bytes) -> tuple[list[LedgerEvent], tuple[int, st
             continue
         try:
             out.append(LedgerEvent.model_validate(json.loads(line)))
-        except ValueError as exc:  # JSONDecodeError and pydantic ValidationError
+        except (ValueError, RecursionError) as exc:  # JSONDecodeError, pydantic ValidationError, a too deeply nested line
             lines = [x.strip() for x in str(exc).splitlines() if x.strip()][:3]
             return out, (len(out), f"{type(exc).__name__}: {'; '.join(lines)}"[:300])
     return out, None
@@ -1011,8 +1018,8 @@ def _closed_bytes_problem(
     start, end = entry["start_index"], entry["end_index"]
     try:
         events = _parse_events(data)
-    except ValueError as exc:
-        return start, f"unparseable line: {exc}"
+    except (ValueError, RecursionError) as exc:
+        return start, f"unparseable line: {_unparseable_text(exc)}"
     res = _verify_segment(events, genesis, start)
     if not res.ok:
         return (start if res.first_break_index is None else res.first_break_index), res.reason or ""
@@ -1521,8 +1528,8 @@ def verify_segment_file(path: str | Path, public_key_pem: str | None = None) -> 
         return fail(f"file {str(p)!r} is missing (expected {end - start + 1} events)")
     try:
         events = _parse_events(data)
-    except ValueError as exc:
-        return fail(f"unparseable line: {exc}")
+    except (ValueError, RecursionError) as exc:
+        return fail(f"unparseable line: {_unparseable_text(exc)}")
     out["events"] = len(events)
     if n == 1 and (start != 0 or side["genesis_prev_hash"] != GENESIS_HASH):
         return fail("segment 1 must start at global index 0 from the genesis hash")
@@ -2866,8 +2873,8 @@ class LedgerStore:
 
             try:
                 events = _parse_events(data)
-            except ValueError as exc:
-                raise refuse(f"unparseable line: {exc}") from exc
+            except (ValueError, RecursionError) as exc:
+                raise refuse(f"unparseable line: {_unparseable_text(exc)}") from exc
             res = _verify_segment(events, seg.genesis, seg.start_index)
             if not res.ok:
                 raise refuse(res.reason or "chain break")
