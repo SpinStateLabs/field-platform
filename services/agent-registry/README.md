@@ -13,7 +13,7 @@ inventory and any text you can paste — into a review queue of
 
 | Endpoint | Method | Purpose |
 |---|---|---|
-| `/agents` | POST | Register an agent (id, name, human owner, domain, manifest ref). A SET `manifest_ref` that does not resolve ⇒ 422 `{error, reason: missing\|invalid, hint}` (v1.2 D3b; the caller's ref is not echoed, RT-HARD-4 F2) |
+| `/agents` | POST | Register an agent (id, name, human owner, domain, manifest ref). A SET `manifest_ref` that does not resolve ⇒ 422 `{error, reason: missing\|invalid, hint}` (v1.2 D3b; the caller's ref is not echoed, RT-HARD-4 F2). A `domain` (on POST and PATCH) must be ASCII letters and digits separated by single spaces, `.`, `_` or `-`. The 64-character limit applies after surrounding whitespace is stripped; the ASCII rule is checked after invisible characters at either end are also trimmed; anything else is a 422 that does not echo the value (backlog B80: a look-alike domain is missed by a domain halt). Rows stored before the rule are not re-checked |
 | `/agents` | GET | List (filter by `status`, `domain`; `domain` matches ignoring case and surrounding whitespace, so `FINANCE` finds `finance `; SQLite `lower` folds ASCII only) |
 | `/agents/{id}` | GET / PATCH | Read / update (incl. `status`: active·killed·retired). A PATCH may carry `if_updated_at` (the `updated_at` of an earlier read or write): applied only if the row has not been written since, otherwise **412**; `updated_at` is strictly increasing per row, so even two writes in one clock tick differ (kill-switch drill compare-and-set) |
 | `/agents/{id}/attest` | POST | Record a human re-attestation: body `{attested_by}` (stripped; blank ⇒ 422, unknown agent ⇒ 404) |

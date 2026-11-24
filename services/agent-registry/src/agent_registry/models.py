@@ -114,6 +114,26 @@ def _stripped_non_blank(v: str | None) -> str | None:
 MAX_AGENT_ID_LENGTH = 64
 _NEW_AGENT_ID = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
 
+#: What a NEW domain may be (backlog B80; Don, 2026-11-23: "Yes, ASCII only"): ASCII letters and digits in runs, separated
+#: by ONE space, '.', '_' or '-'; no leading, trailing or doubled separator; at most MAX_DOMAIN (64) characters. Checked
+#: AFTER the blank rule above has trimmed ignorable ends, so " finance " and a zero-width space before "finance" are still
+#: stored as "finance". Anything left inside (a zero-width or no-break space, a soft hyphen, a fullwidth or Cyrillic
+#: letter, a combining mark, a doubled space) is a 422 whose message is fixed and never quotes the value. Why: the
+#: registry's domain filter folds ASCII case and trims spaces only, so a look-alike domain is silently missed by a domain
+#: halt that names the real one. Stored rows are NOT re-checked on read (AgentRecord stays lenient, a legacy row must
+#: still read back); counting them is deploy precondition P21, and the ops console's named fleet halt reports them.
+_NEW_DOMAIN = re.compile(r"[A-Za-z0-9]+(?:[ ._-][A-Za-z0-9]+)*")
+DOMAIN_RULE = "domain must be ASCII letters and digits separated by single spaces, '.', '_' or '-'"
+
+
+def _new_domain(v: str | None) -> str | None:
+    """The B80 write rule for a domain: the blank rule first (trim ignorable ends, refuse empty), then the ASCII shape.
+    ``None`` (PATCH: not sent) passes."""
+    v = _stripped_non_blank(v)
+    if v is not None and not _NEW_DOMAIN.fullmatch(v):
+        raise ValueError(DOMAIN_RULE)
+    return v
+
 
 class AgentCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -135,6 +155,11 @@ class AgentCreate(BaseModel):
     @classmethod
     def _not_blank(cls, v: str) -> str:
         return _stripped_non_blank(v)  # type: ignore[return-value]
+
+    @field_validator("domain")
+    @classmethod
+    def _domain_shape(cls, v: str) -> str:
+        return _new_domain(v)  # type: ignore[return-value]
 
 
 class AgentUpdate(BaseModel):
@@ -166,6 +191,11 @@ class AgentUpdate(BaseModel):
     @classmethod
     def _not_blank(cls, v: str | None) -> str | None:
         return _stripped_non_blank(v)
+
+    @field_validator("domain")
+    @classmethod
+    def _domain_shape(cls, v: str | None) -> str | None:
+        return _new_domain(v)
 
 
 def parse_updated_at(value: str) -> datetime:
