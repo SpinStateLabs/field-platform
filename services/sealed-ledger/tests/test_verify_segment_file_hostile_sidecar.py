@@ -106,6 +106,27 @@ def test_C1_deep_nesting_inside_a_field_is_a_failed_verification(tmp_path, key):
     _assert_failed_not_crashed(two)
 
 
+@pytest.mark.parametrize("bad", [[], "x", 7, [[1]], 1.5, True, False, 0])
+def test_a_non_object_anchor_is_a_failed_verification_with_or_without_a_key(tmp_path, bad):
+    """CI on Python 3.14.10 parsed a 100000-deep list (no RecursionError) and the unsigned path never looked at the anchor:
+    ok True. The type is checked before the unsigned OK path, so no Python version or key decides it."""
+    two, side_path = _two(tmp_path)
+    _edit(side_path, anchor=bad)
+    out = _assert_failed_not_crashed(two)
+    assert "anchor is not an object" in out["reason"]
+    assert verify_segment_file(two, public_key_pem="not a key")["ok"] is False   # a key supplied: still refused, same reason
+    assert "anchor is not an object" in verify_segment_file(two, public_key_pem="not a key")["reason"]
+
+
+def test_a_null_anchor_means_no_anchor_unsigned_ok_signed_refused(tmp_path):
+    """null is kept as before: no anchor object, so the unsigned check passes, and any signed check fails (nothing to verify)."""
+    two, side_path = _two(tmp_path)
+    _edit(side_path, anchor=None)
+    assert verify_segment_file(two)["ok"] is True
+    signed = verify_segment_file(two, public_key_pem="not a key")
+    assert signed["ok"] is False and "signature does not verify" in signed["reason"]
+
+
 @pytest.mark.parametrize("key", ["genesis_prev_hash", "head_hash", "sha256", "file", "logical"])
 @pytest.mark.parametrize("bad", [0, 7, ["x"], {"a": 1}, None, True, 1.5])
 def test_C2_a_non_string_text_field_is_a_failed_verification(tmp_path, key, bad):

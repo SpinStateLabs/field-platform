@@ -1495,6 +1495,12 @@ def verify_segment_file(path: str | Path, public_key_pem: str | None = None) -> 
             _sidecar_text(side, k)
         for k in ("genesis_prev_hash", "head_hash", "sha256"):
             _sidecar_text(side, k, ascii_only=True)
+        # The anchor is read only when a key is supplied, so its type is checked here, before the unsigned OK path: the
+        # result must not depend on whether a key was given (nor on how deep a nested value the JSON decoder accepts).
+        # A real sidecar always holds the signed rotation anchor object. null is "no anchor": still accepted unsigned
+        # (a signed check then fails: nothing to verify), as before. Anything else that is not an object is refused.
+        if side["anchor"] is not None and not isinstance(side["anchor"], dict):
+            raise ValueError("anchor is not an object")
         # R1: ``logical`` is printed in the OK line, so it must be exactly what the writer put there: the ledger file's
         # own name, from which ``file`` was derived (closed_path_for(logical, n)). A free-text value with spaces could
         # otherwise read as part of the sentence ("... segment 1 of x (signed rotation anchor verified ...)") on an
