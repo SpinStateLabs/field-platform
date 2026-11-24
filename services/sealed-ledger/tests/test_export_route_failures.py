@@ -34,6 +34,7 @@ def store(tmp_path):
 @pytest.fixture(params=["unarmed", "armed"])
 def ctx(request, store, tmp_path, monkeypatch):
     headers = {}
+    monkeypatch.setenv("FIELD_EXPORT_ROOT", str(tmp_path))  # Backlog B10: unarmed is confined too
     if request.param == "armed":
         p = tmp_path / "operators.json"
         p.write_text(json.dumps([{"operator_id": "don", "key_sha256": oa.key_sha256(KEY),

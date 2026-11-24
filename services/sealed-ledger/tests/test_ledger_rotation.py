@@ -737,7 +737,8 @@ def test_torn_last_line_raises_as_today(tmp_path):
     assert r.returncode == 1 and "JSONDecodeError" in r.stderr
 
 
-def test_chain_verification_json_keys_single_file_and_segmented(tmp_path):
+def test_chain_verification_json_keys_single_file_and_segmented(tmp_path, monkeypatch):
+    monkeypatch.setenv("FIELD_EXPORT_ROOT", str(tmp_path))  # Backlog B10: out_dir is confined when unarmed too
     s = LedgerStore(tmp_path / "one" / "e.jsonl")
     fill(s, 2)
     client = TestClient(create_app(store=s))
@@ -804,6 +805,7 @@ def _never_consistent(monkeypatch, store_cls_timeout: float = 0.2):
 
 
 def test_busy_snapshot_is_never_reported_as_tampering(tmp_path, monkeypatch):
+    monkeypatch.setenv("FIELD_EXPORT_ROOT", str(tmp_path))  # Backlog B10: out_dir is confined when unarmed too
     s, p, hashes = three_segments(tmp_path)
     client = TestClient(create_app(store=s))
     _never_consistent(monkeypatch)
