@@ -658,7 +658,7 @@ apart from one the observer wrote. Read these events from an armed ledger.
   and stays one: a later run's event never vouches for a segment it did not
   archive itself unless an earlier live event already named it.
 - A store cannot be opened on an open segment with a line that does not
-  parse (as before C2: `test_torn_last_line_raises_as_today`), so a ledger
+  parse (as before C2: `test_torn_last_line_raises_on_open_and_the_cli_prints_one_tampered_line`), so a ledger
   process restarted on such a file does not start (reads get no answer). A
   running process reports the line as a break on `/verify` (HTTP 200). It
   refuses appends (500) when the edit changed the open segment's size; an
