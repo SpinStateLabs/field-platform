@@ -186,7 +186,7 @@ class _Hidden(str):
     copies to a fixed word, so a Destination turned into a dict or JSON does not hand out the URL, topic or token
     (B-RT2 F6). Everywhere else it is the plain string the sender needs."""
 
-    def __deepcopy__(self, memo):
+    def __deepcopy__(self, _memo):  # copy.deepcopy passes the memo positionally; this copy ignores it
         return "(redacted)"
 
     def __copy__(self):

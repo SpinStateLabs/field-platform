@@ -350,9 +350,9 @@ def test_real_descriptors_are_all_classified():
 
 def test_real_descriptors_pass_only_through_the_allowlist():
     """Clean with the committed allowlist; the three findings fail without it."""
-    # Pinned clock: the committed entries are dated 2026-10-23 and expire by
+    # Pinned clock: the committed entries are dated 2026-11-23 and expire by
     # design; this test checks the waiver logic, not the wall clock.
-    assert lint.main(["--root", str(REPO), "--today", "2026-10-23"]) == 0
+    assert lint.main(["--root", str(REPO), "--today", "2026-11-23"]) == 0
     reports = lint.analyse(REPO)
     errors, _ = lint.evaluate(reports, [], [])
     assert len(errors) == 3 and all(e.startswith("FAIL") for e in errors)
@@ -363,8 +363,8 @@ def test_committed_allowlist_records_evidence_and_verification():
     assert len(entries) == 3
     for e in entries:
         assert "known gap, tracked" not in e["reason"]
-        assert "values never read" in e["reason"] and "2026-10-23" in e["reason"]
-        assert lint._parse_verified_on(e["verified_on"]) == datetime.date(2026, 10, 23)
+        assert "values never read" in e["reason"] and "2026-11-23" in e["reason"]
+        assert lint._parse_verified_on(e["verified_on"]) == datetime.date(2026, 11, 23)
         assert "presence check" in e["verified_by"] and "operator to re-confirm" in e["verified_by"]
         assert str(e.get("comment", "")).strip()
 
@@ -1157,7 +1157,7 @@ def test_the_behavioural_result_decides_fly_status_in_analyse(bash, tmp_path):
 
 def test_cli_prints_that_the_behavioural_check_ran(bash, capsys, monkeypatch):
     monkeypatch.setenv("TOPOLOGY_LINT_BEHAVIOURAL", "1")
-    assert lint.main(["--root", str(REPO), "--today", "2026-10-23"]) == 0
+    assert lint.main(["--root", str(REPO), "--today", "2026-11-23"]) == 0
     assert "entrypoint behavioural check: RAN" in capsys.readouterr().out
 
 
@@ -1165,11 +1165,11 @@ def test_cli_fails_instead_of_skipping_in_ci_when_bash_is_missing(capsys, monkey
     monkeypatch.setenv("TOPOLOGY_LINT_BEHAVIOURAL", "1")
     monkeypatch.setattr(lint, "find_bash", lambda: None)
     monkeypatch.setenv("CI", "true")
-    assert lint.main(["--root", str(REPO), "--today", "2026-10-23"]) == 1
+    assert lint.main(["--root", str(REPO), "--today", "2026-11-23"]) == 1
     out = capsys.readouterr().out
     assert "entrypoint behavioural check: SKIPPED" in out and "CI" in out
     monkeypatch.delenv("CI")
-    assert lint.main(["--root", str(REPO), "--today", "2026-10-23"]) == 0
+    assert lint.main(["--root", str(REPO), "--today", "2026-11-23"]) == 0
     assert "entrypoint behavioural check: SKIPPED" in capsys.readouterr().out
 
 
@@ -1595,11 +1595,11 @@ def test_behavioural_off_in_ci_is_a_failure_and_outside_ci_a_loud_warning(capsys
     for value in ("0", "false", ""):
         monkeypatch.setenv("TOPOLOGY_LINT_BEHAVIOURAL", value)
         monkeypatch.setenv("CI", "true")
-        assert lint.main(["--root", str(REPO), "--today", "2026-10-23"]) == 1, value
+        assert lint.main(["--root", str(REPO), "--today", "2026-11-23"]) == 1, value
         out = capsys.readouterr().out
         assert "cannot be turned off in CI" in out
         monkeypatch.delenv("CI")
-        assert lint.main(["--root", str(REPO), "--today", "2026-10-23"]) == 0, value
+        assert lint.main(["--root", str(REPO), "--today", "2026-11-23"]) == 0, value
         out = capsys.readouterr().out
         assert "WARN entrypoint behavioural check NOT RUN" in out and "only tripwire-checked" in out
 
@@ -1607,7 +1607,7 @@ def test_behavioural_off_in_ci_is_a_failure_and_outside_ci_a_loud_warning(capsys
 def test_missing_bash_outside_ci_prints_the_warning(capsys, monkeypatch):
     monkeypatch.setenv("TOPOLOGY_LINT_BEHAVIOURAL", "1")
     monkeypatch.setattr(lint, "find_bash", lambda: None)
-    assert lint.main(["--root", str(REPO), "--today", "2026-10-23"]) == 0
+    assert lint.main(["--root", str(REPO), "--today", "2026-11-23"]) == 0
     assert "WARN entrypoint behavioural check NOT RUN (no bash found)" in capsys.readouterr().out
 
 
@@ -1618,7 +1618,7 @@ def test_the_test_module_does_not_leak_the_variable_to_the_process():
 
 def test_cli_asserts_the_exact_stub_count(bash, capsys, monkeypatch):
     monkeypatch.setenv("TOPOLOGY_LINT_BEHAVIOURAL", "1")
-    assert lint.main(["--root", str(REPO), "--today", "2026-10-23"]) == 0
+    assert lint.main(["--root", str(REPO), "--today", "2026-11-23"]) == 0
     assert "entrypoint behavioural check: RAN (14 service stubs, 9 scenarios)" in capsys.readouterr().out
 
 

@@ -1,6 +1,7 @@
 # C-505 boundary-echo allowlist: path::function::kind = count | tag | reason
 # tag allow: the count must equal the scan. tag pending-<N>: PR <N> fixes the site; the count may fall to 0, never rise.
 # Reasons say why a site stays; DEBT means the site echoes outside text to a caller and is a decision for the owner.
+packages/field-agent/src/field_agent/canary.py::main::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it (the setting NAME only, never its value); no reply leaves the host
 packages/field-agent/src/field_agent/cli.py::checkin::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 packages/field-agent/src/field_agent/cli.py::heartbeat::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 packages/field-agent/src/field_agent/cli.py::mint::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
@@ -16,7 +17,6 @@ packages/field-core/src/field_core/clients.py::LedgerClient.retention_check::err
 packages/field-core/src/field_core/clients.py::RegistryClient.get_agent::error = 1 | allow | DEBT: failure text is carried in the raised error; the caller may relay it
 packages/field-core/src/field_core/clients.py::RegistryClient.list_agents::error = 1 | allow | DEBT: failure text is carried in the raised error; the caller may relay it
 packages/field-core/src/field_core/clients.py::RegistryClient.set_status::error = 1 | allow | DEBT: failure text is carried in the raised error; the caller may relay it
-packages/field-core/src/field_core/errors.py::upstream_error::log = 1 | allow | log line on the service host; text is bounded and read by the operator only
 services/agent-registry/src/agent_registry/api.py::create_app.run_discovery::api-reply = 1 | allow | DEBT: text of an in-process or upstream failure reaches an API caller; decision for the owner
 services/agent-registry/src/agent_registry/cli.py::add::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/agent-registry/src/agent_registry/cli.py::scan::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
@@ -42,13 +42,14 @@ services/delegation-authority/src/delegation_authority/cli.py::list_cmd::cli = 1
 services/delegation-authority/src/delegation_authority/cli.py::mint::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/delegation-authority/src/delegation_authority/cli.py::oauth_introspect::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/delegation-authority/src/delegation_authority/cli.py::revoke::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
-services/delegation-authority/src/delegation_authority/doa.py::load_roster::error = 3 | allow | DEBT: failure text is carried in the raised error; the caller may relay it
+services/delegation-authority/src/delegation_authority/doa.py::load_roster::error = 4 | allow | DEBT: failure text is carried in the raised error; the caller may relay it. Of the four, the duplicate-key site (_DuplicateKey) names the key and its line number only, never a value: the private exception exists because yaml's own error prints the source line
 services/federation-broker/src/federation_broker/api.py::create_app.put_contract::api-reply = 1 | allow | DEBT: text of an in-process or upstream failure reaches an API caller; decision for the owner
 services/federation-broker/src/federation_broker/cli.py::_fail::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/federation-broker/src/federation_broker/cli.py::_pubkey_pem::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/federation-broker/src/federation_broker/cli.py::add_contract::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/federation-broker/src/federation_broker/cli.py::contracts::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/federation-broker/src/federation_broker/cli.py::crossing::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
+services/force-gateway/src/force_gateway/api.py::_authorize::log = 1 | allow | logs the transport exception's CLASS name only (SentinelUnavailable.failure is type(exc).__name__), never its text
 services/force-gateway/src/force_gateway/api.py::_authorize::reply-field = 1 | allow | not an echo since S12-28: the lint sees `str(exc)` passed to `_public_sentinel_reason`, which returns one fixed category (`sentinel unreachable`, `sentinel returned <3 digits>`, a non-JSON body, no verdict, else `sentinel check failed`) and never the text itself
 services/force-gateway/src/force_gateway/cli.py::telemetry::cli = 1 | allow | operator terminal: the command prints the failure to the person who ran it; no reply leaves the host
 services/force-gateway/src/force_gateway/hygiene_judge.py::AnthropicHygieneJudge.__init__::error = 1 | allow | DEBT: failure text is carried in the raised error; the caller may relay it

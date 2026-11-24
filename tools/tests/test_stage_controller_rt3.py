@@ -66,7 +66,7 @@ def _records(tmp_path):
     r = sc.Records(tmp_path / "records.jsonl")
     r.append("alerts_proven", ok=True, sha8=SHA[:8])
     r.append("gate", gate="G22", ok=True, sha8=SHA[:8])
-    r.append("gate", gate="G18", ok=True, sha8=SHA[:8])
+    r.append("gate", gate="G18", ok=True, sha8=SHA[:8], window_hours=30.0, window_end=1_790_000_000, services=8)
     r.append("gate", gate="G21", ok=True, sha8=SHA[:8])
     r.append("stage_done", stage=2)
     return r

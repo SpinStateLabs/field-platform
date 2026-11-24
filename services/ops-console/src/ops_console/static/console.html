@@ -687,7 +687,7 @@
         "An action inside the token's scope for a registered agent comes back ALLOW. An action outside it does not."
       ],
       "fail": [
-        {"code": "BLOCK / ESCALATE", "text": "the verdict names its reason: R.unregistered, D.scope, E.kill_switch, E.spend_cap, E.rate_limit, L.unreachable, and others."},
+        {"code": "BLOCK / ESCALATE", "text": "the verdict names its reason: R.unregistered, R.registry_unreachable, D.scope, E.kill_switch, E.spend_cap, E.rate_limit, L.unreachable, and others."},
         {"code": "note", "text": "a BLOCK is itself a ledger event."},
         {"code": "401", "text": "the estate's shared secret is required at its edge: enter it in the bar that appears above."},
         {"code": "422", "text": "the request was malformed (for example an empty agent_id or action)."}

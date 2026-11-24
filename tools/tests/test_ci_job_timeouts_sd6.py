@@ -9,7 +9,7 @@ import yaml
 
 CI = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
 CAPS = {"tests": 45, "compose-smoke": 20, "fly-image-smoke": 30,
-        "compose-upgrade-smoke": 20}
+        "compose-upgrade-smoke": 20, "commit-identity": 10}
 
 
 def _jobs():

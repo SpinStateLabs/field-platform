@@ -198,6 +198,23 @@ class FederationContract(BaseModel):
         return canonical_ed25519_public_pem(value)
 
 
+class StoredFederationContract(FederationContract):
+    """A contract as READ BACK from the store (B12, ported from PR 1299 into the S5-11 rebuild).
+
+    The write model caps every name at ``NAME_MAX``; a row stored before that cap existed may hold a longer one, and
+    validating it against the write model made ``GET /contracts`` answer 500 for every lister. Reads drop the length
+    caps (every other check still runs, the key check under ``STORED_ROW``); writes keep them — ``PUT /contracts``
+    still validates against ``FederationContract``. A well-formed legacy row therefore lists in full and keeps
+    working; only a row that cannot be rebuilt at all becomes the degraded, inactive entry (``ContractUnreadable``).
+    """
+
+    contract_id: str = Field(min_length=1)
+    counterparty_org: str = Field(min_length=1)
+    allowed_scopes: list[Annotated[str, Field(min_length=1)]] = Field(min_length=1)
+    allowed_data_classes: list[Annotated[str, Field(min_length=1)]] = Field(min_length=1)
+    contract_ref: str | None = Field(default=None, description="Where the signed instrument lives (GC's record)")
+
+
 Direction = Literal["inbound", "outbound"]
 
 #: Which request fields name which side, per direction. ``counterparty_*``
@@ -372,6 +389,43 @@ CREATE TABLE IF NOT EXISTS contracts (
 """
 
 
+class ContractUnreadable(Exception):
+    """A stored contract row that cannot be rebuilt (a scopes column that is not JSON, an empty list, ...). It is
+    NEVER read as keyless or as allowing anything: a crossing that resolves to it is a ledgered BLOCK (S5-11), and
+    ``list()`` shows it as a degraded, inactive entry so the operator can see which id to re-register."""
+
+    def __init__(self, contract_id: str):
+        super().__init__(f"contract {contract_id} is unreadable: re-register it")
+        self.contract_id = contract_id
+
+
+UNREADABLE_MARK = "UNREADABLE"
+
+
+def _unreadable_entry(row: sqlite3.Row) -> FederationContract:
+    """What ``GET /contracts`` shows for a row that cannot be rebuilt: INACTIVE, no key, and placeholder scopes that
+    name the problem. Built from the two text columns only, in full (a legacy id or org longer than ``NAME_MAX`` is
+    shown as stored, never cut, so the operator sees the real id to re-register).
+
+    Built with ``model_construct``: NO validator runs, so the entry cannot fail the way the row did, however the write
+    model's rules grow. R2 on #1315 merged with main: #1270's ``_org_name_is_clean`` is inherited by the read model, and
+    an entry validated without the ``STORED_ROW`` context raised for an org over 256 characters, so ``list()`` and
+    ``GET /contracts`` answered 500 again. Every field here is either a fixed placeholder or the stored text shown as
+    is, and the entry is inactive with no key, so nothing it holds is ever trusted."""
+    def text(column: str) -> str:
+        v = row[column]
+        return v if isinstance(v, str) and v.strip() else "(unreadable)"
+    return StoredFederationContract.model_construct(
+        contract_id=text("contract_id"),
+        counterparty_org=text("counterparty_org"),
+        allowed_scopes=[UNREADABLE_MARK],
+        allowed_data_classes=[UNREADABLE_MARK],
+        contract_ref=f"{UNREADABLE_MARK}: a stored column cannot be read; re-register this contract",
+        counterparty_pubkey_pem=None,
+        active=False,
+    )
+
+
 def _contract_from_row(row: sqlite3.Row) -> FederationContract:
     """Rebuild a contract from an already-fetched row (no connection use).
 
@@ -382,18 +436,22 @@ def _contract_from_row(row: sqlite3.Row) -> FederationContract:
     """
     import json
 
-    return FederationContract.model_validate(
-        {
-            "contract_id": row["contract_id"],
-            "counterparty_org": row["counterparty_org"],
-            "allowed_scopes": json.loads(row["allowed_scopes"]),
-            "allowed_data_classes": json.loads(row["allowed_data_classes"]),
-            "contract_ref": row["contract_ref"],
-            "counterparty_pubkey_pem": row["pubkey"],
-            "active": bool(row["active"]),
-        },
-        context={STORED_ROW: True},
-    )
+    try:
+        # B12: read with the read model (no length caps), so a well-formed legacy row with a long name lists and works
+        return StoredFederationContract.model_validate(
+            {
+                "contract_id": row["contract_id"],
+                "counterparty_org": row["counterparty_org"],
+                "allowed_scopes": json.loads(row["allowed_scopes"]),
+                "allowed_data_classes": json.loads(row["allowed_data_classes"]),
+                "contract_ref": row["contract_ref"],
+                "counterparty_pubkey_pem": row["pubkey"],
+                "active": bool(row["active"]),
+            },
+            context={STORED_ROW: True},
+        )
+    except (ValueError, TypeError, RecursionError):     # JSONDecodeError and ValidationError are ValueErrors
+        raise ContractUnreadable(str(row["contract_id"])) from None
 
 
 class ContractConflict(ValueError):
@@ -528,6 +586,8 @@ class ContractStore:
                 raise
 
     def for_org(self, org: str) -> FederationContract | None:
+        """The active contract for ``org``; raises ``ContractUnreadable`` when the row that wins cannot be read (the
+        caller must BLOCK: no fall-through to another row, never keyless)."""
         key = normalize_org(org)
         if not key:     # a whitespace-only name names no org
             return None
@@ -550,7 +610,13 @@ class ContractStore:
             rows = self._conn.execute(
                 "SELECT * FROM contracts ORDER BY contract_id"
             ).fetchall()
-        return [_contract_from_row(r) for r in rows]
+        out: list[FederationContract] = []
+        for r in rows:
+            try:
+                out.append(_contract_from_row(r))
+            except ContractUnreadable:
+                out.append(_unreadable_entry(r))
+        return out
 
     def close(self) -> None:
         with self._lock:
@@ -767,7 +833,10 @@ class BrokerEngine:
             )
 
         # 3. We must hold an active contract for that org.
-        contract = self.store.for_org(req.counterparty_org)
+        try:
+            contract = self.store.for_org(req.counterparty_org)
+        except ContractUnreadable as exc:
+            return self._verdict(req, Decision.BLOCK, "F.peer", [str(exc)])
         if contract is None:
             return self._verdict(
                 req, Decision.BLOCK, "F.peer",
@@ -850,7 +919,10 @@ class BrokerEngine:
 
         # 4. The same contract, by counterparty org: one GC instrument covers
         #    both directions.
-        contract = self.store.for_org(req.counterparty_org)
+        try:
+            contract = self.store.for_org(req.counterparty_org)
+        except ContractUnreadable as exc:
+            return self._verdict(req, Decision.BLOCK, "F.peer", [str(exc)])
         if contract is None:
             return self._verdict(
                 req, Decision.BLOCK, "F.peer",
