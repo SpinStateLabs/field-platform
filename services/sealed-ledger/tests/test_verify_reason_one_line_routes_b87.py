@@ -340,3 +340,21 @@ def test_the_nesting_cap_is_explicit_and_independent_of_the_stack(tmp_path):
         pass                                           # a list is not a ledger event: ValidationError, not the cap
     _events, bad = _parse_events_located(over)
     assert bad == (0, "JsonTooDeep: nesting is deeper than 500 levels")
+
+
+def test_a_segment_line_in_another_encoding_is_refused_not_scanned_blind(tmp_path):
+    """the line parsers hand the scan and json.loads the same UTF-8 decoded text; a UTF-16 line (U+0122 is bytes 22 01 in
+    UTF-16-LE) is a failed verification on any stack, never a parse of a deep value the scan could not see"""
+    from sealed_ledger.store import _parse_events, _parse_events_located
+
+    deep = "[" * 100_000 + "]" * 100_000
+    for codec in ("utf-16-le", "utf-16-be", "utf-32-le"):
+        data = ('{"\u0122": 1, "x": ' + deep + "}\n").encode(codec)
+        for fn in (_parse_events,):
+            try:
+                fn(data)
+                raise AssertionError(codec)
+            except ValueError:
+                pass
+        events, bad = _parse_events_located(data)
+        assert events == [] and bad is not None and bad[0] == 0
