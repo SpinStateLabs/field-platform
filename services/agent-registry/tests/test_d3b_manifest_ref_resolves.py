@@ -79,7 +79,7 @@ def test_an_unresolvable_set_ref_is_422_and_nothing_is_written(registry, ref, re
     r = client.post("/agents", json={**BODY, "manifest_ref": ref})
     assert r.status_code == 422, r.text
     detail = r.json()["detail"]
-    assert detail["reason"] in reasons and detail["manifest_ref"] == ref
+    assert detail["reason"] in reasons and "manifest_ref" not in detail      # RT-HARD-4 F2: the ref is not echoed
     with pytest.raises(AgentNotFoundError):
         store.get("invoicing-agent")
     assert ledger.events == []
