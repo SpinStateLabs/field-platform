@@ -117,13 +117,14 @@ def assert_detected(v: dict, index: int, reason_has: str) -> None:
 
 
 def assert_cli_fails_closed_on_unparseable(cli) -> None:
-    """DISCREPANCY vs the plan ('clear reason'): for a line that does not parse,
-    ``ledger verify`` does not print a ``TAMPERED`` line. It exits 1 with the
-    parser exception escaping (``cli.exception``). Failure is detected (fail
-    closed); the message is just not curated. Pinned to actual behaviour."""
+    """``ledger verify`` on a line that does not parse (B87): exit 1 with ONE ``TAMPERED`` line that names the exception
+    class and a fixed text, never the parser's message (segment content). Before B87 the parser's exception escaped as a
+    traceback whose pydantic text carried the content, and this helper pinned that. Fail closed, exit 1, no OK line."""
     assert cli.exit_code == 1
-    assert isinstance(cli.exception, ValueError)  # JSONDecodeError / ValidationError
-    assert not cli.stdout.startswith("OK")
+    assert cli.exception is None or isinstance(cli.exception, SystemExit)
+    lines = cli.stdout.splitlines()
+    assert len(lines) == 1 and lines[0].startswith("TAMPERED — unparseable line: "), cli.output
+    assert lines[0].endswith(" (the message is not echoed)")
 
 
 # --- positive control ---------------------------------------------------------
