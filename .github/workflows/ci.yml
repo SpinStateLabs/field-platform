@@ -709,6 +709,7 @@ jobs:
     # set it only to a domain that may be public.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 10  # a standard-library script over a full-history checkout; SD-6 caps every job
     permissions:
       contents: read
     env:
