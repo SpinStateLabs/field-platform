@@ -296,7 +296,7 @@ def test_C2_explicit_domains_a_200_naming_one_of_three_registry_agents_is_not_ok
     c, posts = _console(rows, kill_answer=lambda d: (200, {"results": [{"agent_id": "p1", "outcome": "killed"}]}))
     out = c.post("/api/fleet/halt", json={**HALT, "domains": ["prod"]}).json()
     assert posts == ["prod"] and out["all_ok"] is False and out["domains_failed"] == 1
-    assert posts.registry_reads == ["prod"]                        # the registry was read for that domain
+    assert posts.registry_reads == ["prod", "None"]                # read for that domain, then the B80 coverage read
 
 
 def test_C2_explicit_domains_a_complete_report_is_ok_and_retired_agents_are_not_expected():
