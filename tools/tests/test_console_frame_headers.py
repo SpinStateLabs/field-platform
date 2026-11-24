@@ -17,9 +17,14 @@ CADDY_BASE = REPO / "integration" / "demo" / "Caddyfile"
 CADDY_GB10 = REPO / "integration" / "demo" / "Caddyfile.gb10"
 CADDY_FLY = REPO / "integration" / "fly" / "Caddyfile"
 
+#: C-456 widened the policy from frame-ancestors alone to no other origin for any load, and added the referrer and
+#: cache headers (design note: operator key on the console, channels 13 and 15).
+CSP = "default-src 'none'; connect-src 'self'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; frame-ancestors 'none'; form-action 'none'; base-uri 'none'"
 WANT = ("X-Frame-Options DENY",
-        "Content-Security-Policy \"frame-ancestors 'none'\"",
-        "X-Content-Type-Options nosniff")
+        f"Content-Security-Policy \"{CSP}\"",
+        "X-Content-Type-Options nosniff",
+        "Referrer-Policy no-referrer",
+        "Cache-Control no-store")
 
 
 def _code(p: Path) -> list[str]:
@@ -65,7 +70,7 @@ def test_the_console_catch_all_sets_the_frame_and_sniffing_headers(caddy):
 
 
 @pytest.mark.parametrize("caddy", [CADDY_BASE, CADDY_FLY], ids=["base", "fly"])
-@pytest.mark.parametrize("drop", range(3))
+@pytest.mark.parametrize("drop", range(len(WANT)))
 def test_dropping_any_one_header_turns_the_check_red(caddy, drop):
     lines = [ln for ln in _code(caddy) if ln != WANT[drop]]
     assert _problems(lines) == [f"missing {WANT[drop]}"]
