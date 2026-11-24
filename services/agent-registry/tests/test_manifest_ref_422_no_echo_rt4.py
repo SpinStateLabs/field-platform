@@ -6,12 +6,15 @@ from __future__ import annotations
 
 import json
 
+import logging
+
 import pytest
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
 from agent_registry import api, cli
 from agent_registry.api import create_app
+from agent_registry.models import MAX_MANIFEST_REF
 from agent_registry.store import RegistryStore
 
 BODY = {"agent_id": "invoicing-agent", "name": "Invoice Drafting Copilot",
@@ -45,7 +48,7 @@ def test_the_422_body_is_error_reason_and_a_fixed_hint_only(registry):
     assert detail["error"] == "manifest_ref does not resolve" and detail["reason"] in ("missing", "invalid")
 
 
-@pytest.mark.parametrize("ref", ["nope.yaml", KEY_SHAPED, "sub/absent.yaml", "x" * 100_000, "../" * 40 + "etc"])
+@pytest.mark.parametrize("ref", ["nope.yaml", KEY_SHAPED, "sub/absent.yaml", "x" * 100_000, "x" * MAX_MANIFEST_REF, "../" * 40 + "etc"])
 def test_the_caller_text_is_never_echoed_and_the_body_is_bounded(registry, ref):
     client, _ = registry
     r = _post(client, ref)
@@ -58,6 +61,16 @@ def test_a_key_shaped_ref_is_not_reflected_in_any_form(registry):
     client, _ = registry
     text = _post(client, KEY_SHAPED).text
     assert KEY_SHAPED not in text and "fok_" not in text and "Q7w8E9r0" not in text
+
+
+@pytest.mark.parametrize("shape", ["{key}.yaml", "sub/{key}.yaml", "../{key}.yaml", "{abs}/{key}.yaml"])
+def test_a_key_shaped_ref_reaches_no_log_record(registry, tmp_path, caplog, shape):
+    """don.reviewer N2 on #1359: the refusal is quiet about the value at every level."""
+    client, _ = registry
+    key = "a1b2c3d4" * 8
+    with caplog.at_level(logging.DEBUG):
+        assert _post(client, shape.format(key=key, abs=tmp_path.as_posix())).status_code == 422
+    assert "a1b2c3d4" not in caplog.text
 
 
 def test_the_manifest_directory_is_not_disclosed(registry, tmp_path):
