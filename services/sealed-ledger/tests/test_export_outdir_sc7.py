@@ -14,6 +14,7 @@ from sealed_ledger.store import LedgerStore
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
+    monkeypatch.setenv("FIELD_EXPORT_ROOT", str(tmp_path))  # Backlog B10: out_dir is confined when unarmed too
     c = TestClient(create_app(store=LedgerStore(tmp_path / "events.jsonl")),
                    raise_server_exceptions=False)
     c.post("/events", json={"event_type": "x", "payload": {}})

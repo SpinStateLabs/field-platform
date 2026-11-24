@@ -662,7 +662,8 @@ def test_verify_export_passes_on_a_bundle_carrying_signed_events(tmp_path, keys)
     assert not v.ok and v.first_failing_index == 1
 
 
-def test_served_export_of_a_stamped_stop_event_verifies(tmp_path):
+def test_served_export_of_a_stamped_stop_event_verifies(tmp_path, monkeypatch):
+    monkeypatch.setenv("FIELD_EXPORT_ROOT", str(tmp_path))  # Backlog B10: out_dir is confined when unarmed too
     s = LedgerStore(tmp_path / "events.jsonl", signing=SigningConfig(require_signing=True))
     s.append("kill.agent", {"reason": "x"}, agent_id="a")
     client = TestClient(create_app(store=s))

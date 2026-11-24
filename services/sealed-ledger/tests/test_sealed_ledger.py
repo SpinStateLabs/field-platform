@@ -90,7 +90,8 @@ def test_adversarial_deleted_line_detected(store, tmp_path):
     assert "link break" in result.reason
 
 
-def test_export_summary_counts(client, store, tmp_path):
+def test_export_summary_counts(client, store, tmp_path, monkeypatch):
+    monkeypatch.setenv("FIELD_EXPORT_ROOT", str(tmp_path))  # Backlog B10: out_dir is confined when unarmed too
     client.post("/events", json={"event_type": "action", "agent_id": "a1"})
     client.post("/events", json={"event_type": "action", "agent_id": "a1"})
     client.post("/events", json={"event_type": "block", "agent_id": "a2"})
