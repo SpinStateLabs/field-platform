@@ -1135,7 +1135,7 @@ def test_heavy_read_gate_width(tmp_path, monkeypatch, setting, width):
 @pytest.mark.parametrize("method,path_fn", [
     ("GET", lambda tmp: "/verify"),
     ("GET", lambda tmp: "/events"),
-    ("POST", lambda tmp: f"/export?out_dir={tmp / 'bundles'}"),
+    ("POST", lambda tmp: "/export?out_dir=" + quote(str(tmp / "bundles"), safe="")),   # encoded: a "+" or "&" in the temp path must stay part of the value
 ])
 def test_every_served_heavy_read_waits_on_the_read_gate(tmp_path, monkeypatch, method, path_fn):
     """B-1075-TESTS: test_heavy_read_gate_width only drives store.snapshot(); a /verify, /events or /export that
