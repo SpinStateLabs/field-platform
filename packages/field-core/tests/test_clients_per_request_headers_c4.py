@@ -50,7 +50,7 @@ def wire(monkeypatch):
             return httpx.Response(200, json=[])
         if path.endswith("/retention/check"):
             return httpx.Response(200, json={"ok": True, "status": "ok"})
-        if path.endswith("/agents"):
+        if request.method == "GET" and path.endswith("/agents"):  # S4-2: a PATCH that httpx normalises to /agents is not the list
             return httpx.Response(200, json=[AGENT])
         return httpx.Response(200, json=AGENT)
 

@@ -64,6 +64,26 @@ class SeedResult:
     skip_reason: str | None = None
 
 
+def _toggle(ledger_toggle, down: bool) -> None:
+    """Run the ledger toggle; any failure is a MeasurementError naming only the exception TYPE
+    (never the command, its arguments or its output, which can carry paths or secrets)."""
+    try:
+        ledger_toggle(down)
+    except Exception as exc:  # noqa: BLE001 - reported by type, never raised raw
+        raise MeasurementError(
+            f"the ledger {'down' if down else 'up'} command failed ({type(exc).__name__}); "
+            "refusing to score.") from None
+
+
+def _wrong_shape(seed, part: str) -> MeasurementError:
+    return MeasurementError(
+        f"seed {seed.seed_id}: target answered a wrong-shaped verdict ({part}); refusing to score.")
+
+
+def _as_dict(value) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
 def run_suite(check, seeds, mode: str, ledger_toggle=None,
               judge_state: str = "off") -> list[SeedResult]:
     """Run every seed through ``check(seed) -> verdict dict``.
@@ -101,23 +121,32 @@ def run_suite(check, seeds, mode: str, ledger_toggle=None,
                                 "--ledger-down-cmd)"))
                 continue
             if seed.ledger_down and not ledger_is_down:
-                ledger_toggle(True)
+                _toggle(ledger_toggle, True)
                 ledger_is_down = True
             if not seed.ledger_down and ledger_is_down:
-                ledger_toggle(False)
+                _toggle(ledger_toggle, False)
                 ledger_is_down = False
 
             verdict = check(seed)
+            if not isinstance(verdict, dict):
+                raise _wrong_shape(seed, "verdict")
             decision = verdict.get("decision")
             if decision != ALLOW:
                 raise MeasurementError(
                     f"seed {seed.seed_id} returned a real {decision} — the "
                     f"target is not behaving log-only; refusing to score.")
-            ctx = verdict.get("context") or {}
+            ctx = verdict.get("context")
+            if ctx is None:
+                ctx = {}
+            if not isinstance(ctx, dict):
+                raise _wrong_shape(seed, "context")
+            would_be = ctx.get("would_be")
+            if would_be is not None and not isinstance(would_be, dict):
+                raise _wrong_shape(seed, "would_be")
             results.append(SeedResult(
                 seed=seed,
                 decision=decision,
-                would_be=ctx.get("would_be"),
+                would_be=would_be,
                 shadowed=bool(ctx.get("shadowed")),
                 routed=needs_semantic_judgment(seed.action, SEED_SCOPE),
             ))
@@ -182,10 +211,10 @@ def compute_metrics(results: list[SeedResult],
     skipped = [r.seed.seed_id for r in results if r.skipped]
 
     def wb_decision(r: SeedResult) -> str | None:
-        return (r.would_be or {}).get("decision")
+        return _as_dict(r.would_be).get("decision")
 
     def wb_clause(r: SeedResult) -> str | None:
-        return (r.would_be or {}).get("clause_id")
+        return _as_dict(r.would_be).get("clause_id")
 
     violations = [r for r in run if r.seed.is_violation]
     gated_caught = [r for r in violations
