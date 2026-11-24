@@ -1366,7 +1366,13 @@ def verify_closed_segment(path: str | Path) -> tuple[dict[str, Any], ChainVerifi
         return None
     n, start, end = entry["n"], entry["start_index"], entry["end_index"]
     data = read_shared(path)
-    events = _parse_events(data) if data is not None else []
+    events: list[LedgerEvent] = []
+    parse_failure: BaseException | None = None
+    if data is not None:
+        try:
+            events = _parse_events(data)
+        except (ValueError, RecursionError) as exc:
+            parse_failure = exc
 
     def brk(index: int, reason: str) -> ChainVerification:
         return ChainVerification(ok=False, length=index + 1, first_break_index=index,
@@ -1374,6 +1380,8 @@ def verify_closed_segment(path: str | Path) -> tuple[dict[str, Any], ChainVerifi
                                  archived_segments=0, verified_events=len(events),
                                  break_segment=n)
 
+    if parse_failure is not None:
+        return entry, brk(start, f"unparseable line: {_unparseable_text(parse_failure)}")
     res = _verify_segment(events, entry["genesis_prev_hash"], start)
     if not res.ok:
         return entry, brk(res.first_break_index or start, res.reason or "")
@@ -1908,7 +1916,7 @@ class LedgerStore:
             if raw.endswith(b"\n") and data.startswith(raw):
                 try:
                     tail = _parse_events(data[len(raw):])
-                except ValueError:  # JSONDecodeError, ValidationError, UnicodeDecodeError
+                except (ValueError, RecursionError):  # JSONDecodeError, ValidationError, UnicodeDecodeError, a nested line
                     tail = None
                 if tail is not None:
                     grown = events + tuple(tail)
@@ -1918,7 +1926,7 @@ class LedgerStore:
             # reader must still raise on. On clean bytes the two parses are the same events.
             try:
                 out = _parse_events(data)
-            except ValueError:
+            except (ValueError, RecursionError):
                 events, bad = _parse_events_located(data)
                 return events, None, bad
         else:

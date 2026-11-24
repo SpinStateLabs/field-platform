@@ -182,7 +182,7 @@ def _check_event_signatures(indexed, public_key_pem: str) -> None:
             continue
         if not verify_event_signature(event, public_key_pem):
             typer.echo(
-                f"SIGNATURE INVALID — index {index}: event {event.event_id} ({event.event_type}) "
+                f"SIGNATURE INVALID — index {index}: event {_one_line(event.event_id)} ({_one_line(event.event_type)}) "
                 "does not verify under --event-pubkey (mutated after signing, or another key)"
             )
             raise typer.Exit(code=1)
@@ -235,20 +235,22 @@ def _check_caller_signatures(indexed, keyring) -> None:
             pem = keyring.public_pem(event.caller_id)
         except CallerRefused as exc:
             typer.echo(
-                f"CALLER UNKNOWN — index {index}: event {event.event_id} ({event.event_type}) claims "
-                f"caller {event.caller_id!r} but the keyring has no usable key for it ({exc})"
+                f"CALLER UNKNOWN — index {index}: event {_one_line(event.event_id)} ({_one_line(event.event_type)}) "
+                f"claims caller {_one_line(repr(event.caller_id))} but the keyring has no usable key for it "
+                f"({_one_line(exc)})"
             )
             raise typer.Exit(code=1)
         if not verify_caller_signature(event, pem):
             typer.echo(
-                f"CALLER SIGNATURE INVALID — index {index}: event {event.event_id} ({event.event_type}) "
-                f"does not verify under {event.caller_id}.pub.pem (mutated after the caller signed, "
+                f"CALLER SIGNATURE INVALID — index {index}: event {_one_line(event.event_id)} "
+                f"({_one_line(event.event_type)}) does not verify under {_one_line(event.caller_id)}.pub.pem "
+                "(mutated after the caller signed, "
                 "or another key)"
             )
             raise typer.Exit(code=1)
         signed += 1
         per_caller[event.caller_id] = per_caller.get(event.caller_id, 0) + 1
-    listed = ", ".join(f"{k}: {v}" for k, v in sorted(per_caller.items()))
+    listed = ", ".join(f"{_one_line(k)}: {v}" for k, v in sorted(per_caller.items()))
     typer.echo(
         f"caller_signed {signed} caller_unsigned {unsigned} per_caller {{{listed}}} "
         f"first_caller_unsigned_after_signed "
@@ -406,7 +408,7 @@ def verify(
                 f"{entry['end_index']})"
             )
             if entry.get("state") == "pending-move":
-                typer.echo(f"(archived in the journal to {entry['archived_to']}: a pending move, "
+                typer.echo(f"(archived in the journal to {_one_line(entry['archived_to'])}: a pending move, "
                            "completed by the next retention apply)")
             elif entry.get("state") == "pending-rotation":
                 typer.echo(f"(rotation {entry['n']} is pending: the service or the next write "
@@ -430,6 +432,9 @@ def verify(
         store = _store(target)
     except LedgerBusy as exc:
         _busy(str(exc))
+    except (ValueError, RecursionError) as exc:
+        # opening the store takes a strict snapshot: a line that does not parse raises here, and its message is segment content
+        raise _tampered(f"unparseable line: {_unparseable_text(exc)}")
     result = store.verify()
     if not result.ok and (result.reason or "").startswith("ledger busy"):
         _busy(result.reason)
@@ -615,7 +620,7 @@ def verify_export(
     if result.spine_attested:
         typer.echo(
             f"OK — {span}; hashes recomputed; spine {result.first_index}..{result.head_index} "
-            f"links to head_hash; signature valid (key {result.key_fingerprint})"
+            f"links to head_hash; signature valid (key {_one_line(result.key_fingerprint)})"
         )
     elif result.signed:
         typer.echo(
@@ -626,7 +631,7 @@ def verify_export(
         typer.echo(
             f"OK — {span}; hashes recomputed; internally consistent; spine unverified (unsigned)"
         )
-    typer.echo(f"head_index {result.head_index} head_hash {result.head_hash}")
+    typer.echo(f"head_index {result.head_index} head_hash {_one_line(result.head_hash)}")
     if result.unfiltered:
         if result.head_index is None:
             covered = "the chain was empty"
@@ -643,7 +648,7 @@ def verify_export(
         recorded = ", ".join(
             f"{name}={value!r}" for name, value in (result.filters or {}).items() if value is not None
         )
-        typer.echo(f"filters: {recorded} — completeness of a filtered export is not provable")
+        typer.echo(f"filters: {_one_line(recorded)} — completeness of a filtered export is not provable")
     if result.contiguous:
         typer.echo(
             f"contiguous: every link from index {result.first_index} to head was recomputed "
@@ -1156,7 +1161,7 @@ def verify_witness_cmd(
         else:
             events = w.fetch_events(events_url, secret or None)
     except w.DuplicateKey as exc:
-        typer.echo(f"WITNESS FAILED — events source refused: {exc}")
+        typer.echo(f"WITNESS FAILED — events source refused: {_one_line(exc)}")
         raise typer.Exit(code=1)
     except UnicodeError as exc:
         # type only: the message of a decode error carries a byte value and an offset
@@ -1175,7 +1180,7 @@ def verify_witness_cmd(
         if not chain.ok and (chain.reason or "").startswith("ledger busy"):
             _busy(chain.reason)
         if not chain.ok:
-            typer.echo(f"WITNESS FAILED — the local chain does not verify: {chain.reason}")
+            typer.echo(f"WITNESS FAILED — the local chain does not verify: {_one_line(chain.reason)}")
             raise typer.Exit(code=1)
         snap = store.snapshot()
     except LedgerBusy as exc:
@@ -1183,7 +1188,7 @@ def verify_witness_cmd(
     result = w.verify_witness(snap, anchors, estate, public_key_pem=public_key_pem,
                               verified_length=chain.length)
     for line in result.lines:
-        typer.echo(line)
+        typer.echo(_one_line(line))
     if not result.ok:
         raise typer.Exit(code=1)
 
