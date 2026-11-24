@@ -256,7 +256,8 @@ def reject_non_finite(value: Any) -> None:
     A payload with one cannot be re-verified: the seal hashes a ``NaN`` token but
     the served JSON carries ``null``, so the chain reads as tampered. Iterative,
     so a deep payload cannot hit the recursion limit. The message never carries
-    the value or a key (both are caller data).
+    the value or a key (both are caller data). It has no depth or visit bound of
+    its own (it loops on a cycle): call ``reject_too_deep`` first.
     """
     stack = [value]
     while stack:
@@ -268,6 +269,51 @@ def reject_non_finite(value: Any) -> None:
             stack.extend(v.values())
         elif isinstance(v, (list, tuple)):
             stack.extend(v)
+
+
+#: The deepest payload an append accepts, counted in NODES with the payload itself as level 1 (``{}`` is 1, ``{"a": {}}``
+#: is 2, ``{"a": 1}`` is 2: a scalar value is a node one level below its container). Dicts, lists and tuples all count a
+#: level. The serializer's own limit is version-dependent: pydantic-core's JSON serializer raises
+#: ``PydanticSerializationError`` ("Circular reference detected (depth exceeded)") at ``model_dump_json``, an unmapped
+#: 500 over HTTP, at 99 levels on 2.46.4 (an off-pin build, measured: 98 seals and 99 fails in every dict/list/mixed
+#: shape) and at about 252 payload levels on the pinned 2.50.1 (integration/constraints.txt). Our bound is the FLOOR of
+#: every version seen: it always fires first, before anything is written, and a sealed event can be re-serialised
+#: (served, exported) on any host. A test probes the installed serializer and fails if its limit ever drops below ours.
+MAX_PAYLOAD_DEPTH = 98
+
+#: The walk visits PATHS, not distinct objects, so a shared sub-object (a DAG: two references per level) is walked once
+#: per path, 2**depth times: a visit budget, counted in containers (a flat list of a million scalars is one), refuses
+#: it with the same fixed text. No real payload comes near it (the deepest and largest in the repo's writers and
+#: fixtures is a handful of containers).
+MAX_PAYLOAD_CONTAINERS = 1_000_000
+
+
+def reject_too_deep(value: Any, limit: int = MAX_PAYLOAD_DEPTH) -> None:
+    """Raise ``ValueError("payload nests too deeply")`` if a node of ``value`` lies deeper than ``limit`` levels (the
+    value itself is level 1; every node counts, a scalar too; dicts, lists and tuples nest), or if the walk would visit
+    more than ``MAX_PAYLOAD_CONTAINERS`` containers (a shared sub-object is walked once per path). Iterative, so
+    neither a deep payload nor a self-referencing one can hit the recursion limit (a cycle is deeper than any limit
+    and is refused). The message never carries the value.
+
+    Run this BEFORE ``reject_non_finite`` wherever both are needed: that walk has no depth or visit bound of its own
+    and would loop on a cycle (every caller in the repo does: ``make_event``, ``store._append``, ``AppendRequest``)."""
+    stack: list[tuple[Any, int]] = [(value, 1)]
+    containers = 0
+    while stack:
+        v, level = stack.pop()
+        if level > limit:       # every node counts, a scalar too: the serializer's own counter walks values, not only containers
+            raise ValueError("payload nests too deeply")
+        if isinstance(v, dict):
+            containers += 1
+            children: Any = v.values()
+        elif isinstance(v, (list, tuple)):
+            containers += 1
+            children = v
+        else:
+            continue
+        if containers > MAX_PAYLOAD_CONTAINERS:
+            raise ValueError("payload nests too deeply")
+        stack.extend((child, level + 1) for child in children)
 
 
 def compute_event_hash(event: LedgerEvent | dict[str, Any]) -> str:
@@ -317,6 +363,7 @@ def make_event(
     event_id: str | None = None,
 ) -> LedgerEvent:
     """Build a sealed event linked to ``prev_hash``."""
+    reject_too_deep(payload)      # first: it also refuses a self-referencing payload before the walk below could loop
     reject_non_finite(payload)
     partial = {
         "event_id": event_id or str(uuid.uuid4()),
