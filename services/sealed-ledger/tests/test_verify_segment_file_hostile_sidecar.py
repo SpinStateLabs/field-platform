@@ -381,7 +381,7 @@ def test_C1_a_newline_in_the_file_name_cannot_forge_a_line_in_the_no_sidecar_rea
     f.write_bytes(b"")
     out = verify_segment_file(f)
     assert out["ok"] is False and out["reason"].startswith("no sidecar ")
-    assert "\n" not in out["reason"] and "\n" in out["reason"]          # shown as an escape, on ONE line
+    assert "\n" not in out["reason"] and "\\n" in out["reason"]          # shown as an escape, on ONE line
 
 
 @posix_only
@@ -404,4 +404,4 @@ def test_C1_a_newline_in_the_sidecar_name_when_the_sidecar_cannot_be_read_is_one
     f.write_bytes(b"")
     sidecar_path_for(f).mkdir()                                         # a directory where the sidecar should be
     out = verify_segment_file(f)
-    assert out["ok"] is False and "\n" not in out["reason"] and "\n" in out["reason"]
+    assert out["ok"] is False and "\n" not in out["reason"] and "\\n" in out["reason"]
