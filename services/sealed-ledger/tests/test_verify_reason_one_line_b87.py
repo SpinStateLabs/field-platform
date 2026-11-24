@@ -143,7 +143,7 @@ def test_a_deeply_nested_segment_line_is_a_tampered_reason_not_a_traceback(tmp_p
     two.write_bytes(b"[" * 200000 + b"]" * 200000 + b"\n")
     r = _verify(two)
     _assert_one_tampered_line(r)
-    assert "RecursionError (the message is not echoed)" in r.stdout
+    assert "unparseable line: nesting is deeper than 500 levels" in r.stdout
 
 
 def test_a_deeply_nested_line_on_the_genesis_route_is_tampered_too(tmp_path):
@@ -151,7 +151,7 @@ def test_a_deeply_nested_line_on_the_genesis_route_is_tampered_too(tmp_path):
     two.write_bytes(b"[" * 200000 + b"]" * 200000 + b"\n")
     r = _verify(two, "--genesis", "0" * 64)
     _assert_one_tampered_line(r)
-    assert "RecursionError" in r.stdout
+    assert "nesting is deeper than 500 levels" in r.stdout
 
 
 # ---- the escape function itself -----------------------------------------------------------------------------------

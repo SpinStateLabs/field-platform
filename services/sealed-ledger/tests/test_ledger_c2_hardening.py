@@ -969,7 +969,7 @@ def test_an_unparseable_record_is_a_break_on_verify_never_a_500(tmp_path, how, w
     """C4R-9: GET /verify on a record that does not parse answers 200 ok=false
     with its GLOBAL first_break_index and a reason — single-file and segmented.
     A running store's appends refuse (500 LedgerCorrupt) instead of chaining
-    past it. LIMIT (pinned, as before C2 — test_torn_last_line_raises_as_today):
+    past it. LIMIT (pinned, as before C2 — test_torn_last_line_raises_on_open_and_the_cli_prints_one_tampered_line):
     a store cannot be OPENED on an open segment holding such a line, so a
     ledger process restarted on it does not start at all."""
     if where == "single-file":

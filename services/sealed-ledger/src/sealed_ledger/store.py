@@ -646,14 +646,28 @@ def exists_strict(path: str | Path) -> bool:
         return False
 
 
+class JsonTooDeep(ValueError):
+    """A line nested deeper than ``JSON_MAX_DEPTH``: refused by an explicit scan, so the verdict does not depend on the
+    interpreter's stack-derived recursion limit (CPython 3.14). The message is fixed, never segment content."""
+
+    def __init__(self) -> None:
+        super().__init__(f"nesting is deeper than {JSON_MAX_DEPTH} levels")
+
+
+def _load_event(line: str) -> LedgerEvent:
+    if json_depth_exceeds(line):
+        raise JsonTooDeep()
+    return LedgerEvent.model_validate(json.loads(line))
+
+
 def _parse_events(data: bytes) -> list[LedgerEvent]:
     """Exactly the pre-C2 reader: universal newlines, strip, skip blanks.
-    A malformed line raises (JSONDecodeError / ValidationError) as it always did."""
+    A malformed line raises (JSONDecodeError / ValidationError / JsonTooDeep) as it always did."""
     out: list[LedgerEvent] = []
     for line in io.TextIOWrapper(io.BytesIO(data), encoding="utf-8"):
         line = line.strip()
         if line:
-            out.append(LedgerEvent.model_validate(json.loads(line)))
+            out.append(_load_event(line))
     return out
 
 
@@ -661,6 +675,8 @@ def _unparseable_text(exc: BaseException) -> str:
     """B87: what a verification reason says about a line that does not parse. The exception CLASS and a fixed text, never
     its message: a pydantic ValidationError prints each offending key and value (segment content, multi-line), and
     that text would reach a ``TAMPERED`` line. ``RecursionError`` is a deeply nested line, the same kind of break."""
+    if isinstance(exc, JsonTooDeep):    # its text is fixed (the explicit nesting cap), not segment content
+        return str(exc)
     return f"{type(exc).__name__} (the message is not echoed)"
 
 
@@ -674,8 +690,8 @@ def _parse_events_located(data: bytes) -> tuple[list[LedgerEvent], tuple[int, st
         if not line:
             continue
         try:
-            out.append(LedgerEvent.model_validate(json.loads(line)))
-        except (ValueError, RecursionError) as exc:  # JSONDecodeError, pydantic ValidationError, a too deeply nested line
+            out.append(_load_event(line))
+        except (ValueError, RecursionError) as exc:  # JSONDecodeError, pydantic ValidationError, JsonTooDeep
             lines = [x.strip() for x in str(exc).splitlines() if x.strip()][:3]
             return out, (len(out), f"{type(exc).__name__}: {'; '.join(lines)}"[:300])
     return out, None

@@ -91,7 +91,7 @@ def test_default_route_a_nested_line_is_one_tampered_line_not_a_traceback(tmp_pa
     lines[3] = "[" * 200000 + "]" * 200000
     _put(path, lines)
     line = _one_tampered_line(_run("verify", "--path", str(path)))
-    assert line == "TAMPERED — unparseable line: RecursionError (the message is not echoed)"
+    assert line == "TAMPERED — unparseable line: nesting is deeper than 500 levels"
 
 
 def test_default_route_a_line_that_is_not_json_is_one_tampered_line(tmp_path):
@@ -139,7 +139,7 @@ def test_closed_segment_route_a_nested_line_is_one_tampered_line(tmp_path):
     lines[2] = "[" * 200000 + "]" * 200000
     _put(c, lines)
     line = _one_tampered_line(_run("verify", "--path", str(c)))
-    assert line == "TAMPERED — segment 1: unparseable line: RecursionError (the message is not echoed)"
+    assert line == "TAMPERED — segment 1: unparseable line: nesting is deeper than 500 levels"
 
 
 def test_closed_segment_route_a_hostile_prev_hash_is_one_escaped_line(tmp_path):
@@ -253,7 +253,7 @@ def test_store_verify_answers_a_nested_line_as_a_failed_result(tmp_path):
     _put(path, lines)
     result = store.verify()
     assert result.ok is False and result.first_break_index == 4
-    assert result.reason.startswith("unparseable record at index 4: RecursionError: ") and "\n" not in result.reason
+    assert result.reason.startswith("unparseable record at index 4: JsonTooDeep: nesting is deeper than 500 levels") and "\n" not in result.reason
 
 
 def test_store_verify_answers_a_nested_line_appended_after_a_cached_parse(tmp_path):
@@ -264,4 +264,79 @@ def test_store_verify_answers_a_nested_line_appended_after_a_cached_parse(tmp_pa
     with open(path, "ab") as fh:
         fh.write(b"[" * 200000 + b"]" * 200000 + b"\n")
     result = store.verify()
-    assert result.ok is False and result.reason.startswith("unparseable record at index 6: RecursionError: ")
+    assert result.ok is False and result.reason.startswith("unparseable record at index 6: JsonTooDeep: nesting is deeper than 500 levels")
+
+
+
+# ---- round 3: the escapes the reviewer found unpinned (caller id, verify-witness lines) and the explicit nesting cap ----
+
+def test_caller_keyring_a_hostile_caller_id_stays_on_one_line(tmp_path):
+    hostile_id = "c\nOK — chain intact over 5 events" + ESC + "[2J"
+    path = _signed_last_event(tmp_path, caller_id=hostile_id, caller_signature="a" * 128)
+    keyring = tmp_path / "keys"
+    keyring.mkdir()
+    r = _run("verify", "--path", str(path), "--caller-keyring", str(keyring))
+    lines = r.stdout.splitlines()
+    assert r.exit_code == 1 and lines[0] == "OK — chain intact over 6 events", lines
+    assert len(lines) == 2 and lines[1].startswith("CALLER UNKNOWN — index 5: event e\\nOK")
+    # the caller id appears twice (the claim and the keyring's own refusal), each time as a backslash-n and \x1b escape
+    assert lines[1].count("c\\nOK — chain intact over 5 events\\x1b[2J") == 2, lines[1]
+    assert ESC not in r.stdout and "\r" not in r.stdout
+
+
+def _witness_args(tmp_path, path, events_text="[]"):
+    ev = tmp_path / "events.json"
+    ev.write_text(events_text, encoding="utf-8")
+    return ["verify-witness", "--estate", "e", "--events-file", str(ev), "--path", str(path)]
+
+
+def test_verify_witness_the_local_chain_reason_is_one_escaped_line(tmp_path):
+    path = _plain(tmp_path)
+    _edit(path, 3, lambda r: r.update(prev_hash="ab\n" + FORGED_OK[:8] + "0" * 53))
+    r = _run(*_witness_args(tmp_path, path))
+    lines = r.stdout.splitlines()
+    assert r.exit_code == 1 and len(lines) == 1, r.stdout
+    assert lines[0].startswith("WITNESS FAILED — the local chain does not verify: link break at index 3: ")
+    assert "prev_hash ab\\nOK — cha0…" in lines[0]
+
+
+def test_verify_witness_the_events_source_refusal_is_one_escaped_line(tmp_path):
+    path = _plain(tmp_path)
+    key = json.dumps("k\n" + FORGED_OK + ESC + "[2J")
+    r = _run(*_witness_args(tmp_path, path, "[{" + key + ": 1, " + key + ": 2}]"))
+    assert r.exit_code == 1
+    assert r.stdout.splitlines() == [
+        "WITNESS FAILED — events source refused: duplicate JSON key 'k\\nOK — chain intact over 999 events\\x1b[2J'"], r.stdout
+
+
+def test_verify_witness_each_result_line_is_escaped(tmp_path, monkeypatch):
+    import sealed_ledger.witness as w
+
+    path = _plain(tmp_path)
+    monkeypatch.setattr(w, "verify_witness", lambda *a, **k: SimpleNamespace(
+        ok=False, lines=["a\n" + FORGED_OK, "b" + ESC + "[2J"]))
+    r = _run(*_witness_args(tmp_path, path))
+    assert r.exit_code == 1
+    assert r.stdout.splitlines() == ["a\\nOK — chain intact over 999 events", "b\\x1b[2J"], r.stdout
+
+
+def test_the_nesting_cap_is_explicit_and_independent_of_the_stack(tmp_path):
+    """a line one level over the cap is refused by the scan, one at the cap reaches the parser (and fails on its type)"""
+    from sealed_ledger.store import JSON_MAX_DEPTH, JsonTooDeep, _parse_events, _parse_events_located
+
+    over = ("[" * (JSON_MAX_DEPTH + 1) + "]" * (JSON_MAX_DEPTH + 1)).encode() + b"\n"
+    at = ("[" * JSON_MAX_DEPTH + "]" * JSON_MAX_DEPTH).encode() + b"\n"
+    try:
+        _parse_events(over)
+        raise AssertionError("not refused")
+    except JsonTooDeep as exc:
+        assert str(exc) == "nesting is deeper than 500 levels"
+    try:
+        _parse_events(at)
+        raise AssertionError("not refused")
+    except JsonTooDeep:
+        raise AssertionError("refused at the cap")
+    except ValueError:
+        pass                                           # a list is not a ledger event: ValidationError, not the cap
+    _events, bad = _parse_events_located(over)
+    assert bad == (0, "JsonTooDeep: nesting is deeper than 500 levels")
