@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 import kill_switch.api as ks
 from agent_registry.api import create_app as create_registry_app
 from agent_registry.store import RegistryStore
+from field_core import operator_auth
 from field_core.clients import AgentNotRegisteredError, LedgerClient, RegistryClient, RegistryUnreachableError
 from sealed_ledger.api import create_app as create_ledger_app
 from sealed_ledger.store import LedgerStore
@@ -159,3 +160,63 @@ def test_a_failed_write_whose_signal_also_fails_answers_the_write_error_and_ledg
     assert [e["agent_id"] for e in failed_signal] == ["a2"]
     assert failed_signal[0]["payload"]["reason"] == "transport_error"
     assert _signalled(stack) == [] and _failed(stack) == ["a2"]
+
+
+# --- review conditions (R2 and the second reviewer) ------------------------------------------------------------------
+
+
+def _registry_answering(status: int):
+    """The exception the REAL RegistryClient raises when the registry answers the kill PATCH with `status`."""
+    client = RegistryClient(client=httpx.Client(transport=httpx.MockTransport(
+        lambda request: httpx.Response(status, json={"detail": "refused"}))), base_url="http://t")
+    try:
+        client.set_status("a2", "killed")
+    except Exception as exc:      # noqa: BLE001
+        return exc
+    raise AssertionError("no exception")
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_a_registry_auth_refusal_on_the_write_still_signals(build, status):
+    exc = _registry_answering(status)
+    assert isinstance(exc, RegistryUnreachableError)
+    stack = build(["a2"], exc)
+    r = stack.kill.post("/kill/a2", json=OP)
+    assert r.status_code == 502 and _status(stack, "a2") == "active"
+    assert _signalled(stack) == ["a2"] and _failed(stack) == ["a2"]
+
+
+def test_an_exception_in_the_signal_path_never_replaces_the_write_error(build, monkeypatch):
+    stack = build(["a2"], RegistryUnreachableError("registry returned 500"))
+
+    def broken(ref, *a, **k):
+        raise RuntimeError("manifest resolution blew up")
+
+    monkeypatch.setattr(ks, "resolve_manifest_detail", broken)
+    r = stack.kill.post("/kill/a2", json=OP)
+    assert r.status_code == 502 and "registry unreachable" in r.json()["detail"]     # the write's error, not a 500
+    failed_kill = _events(stack, "kill.agent.failed")
+    assert [e["payload"]["failure_class"] for e in failed_kill] == ["registry_failure"]
+    failed_signal = _events(stack, "kill.endpoint_failed")
+    assert [(e["agent_id"], e["payload"]["reason"]) for e in failed_signal] == [("a2", "signal_error")]
+    assert "blew up" not in str(failed_signal) and "error" not in failed_signal[0]["payload"]   # fixed text only
+
+
+def test_an_operator_refusal_before_the_write_sends_nothing(build, monkeypatch):
+    stack = build(["a2"], RuntimeError("never raised"))
+
+    def refuse(auth, manifest_ref):
+        raise operator_auth.OperatorRefused(403, "operator not authorized for this agent")
+
+    monkeypatch.setattr(operator_auth, "check_record_authorized", refuse)
+    r = stack.kill.post("/kill/a2", json=OP)
+    assert r.status_code == 403
+    assert _status(stack, "a2") == "active"
+    assert stack.endpoint.urls == [] and _signalled(stack) == [] and _events(stack, "kill.endpoint_failed") == []
+
+
+def test_a_404_on_the_read_sends_nothing(build):
+    stack = build([], RuntimeError("never raised"))
+    r = stack.kill.post("/kill/ghost-agent", json=OP)
+    assert r.status_code == 404
+    assert stack.endpoint.urls == [] and _signalled(stack) == [] and _events(stack, "kill.endpoint_failed") == []

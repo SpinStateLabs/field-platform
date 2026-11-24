@@ -782,10 +782,20 @@ def create_app(
                 failure = HTTPException(502, f"registry did not confirm the kill of '{agent_id}'")
         if failure is not None:
             # B108: ANY failed or unconfirmed write still sends the halt signal (an agent left active must not also be
-            # left unsignalled: the signal is the only stop left). The refusals that must send nothing (operator 403,
-            # retired 409, unknown agent 404 on the read) are raised before the write, so they never reach here. The
-            # caller still gets the error, never a 200, and a domain kill records it and moves on to the next agent.
-            _signal_and_ledger(agent_id, record, origin, {"operator": operator, "reason": reason})
+            # left unsignalled: the signal is the only stop left). That includes a registry 401/403 on the PATCH (an
+            # expired or revoked service key must not leave an agent running; who may kill was decided before the
+            # write). The refusals that must send nothing (operator 403, retired 409, unknown agent 404 on the read) are
+            # raised before the write, so they never reach here. The caller still gets the write's error, never a 200,
+            # and a domain kill records it and moves on to the next agent.
+            base = {"operator": operator, "reason": reason}
+            try:
+                _signal_and_ledger(agent_id, record, origin, base)
+            except Exception:  # noqa: BLE001  (never replaces the write's error, below)
+                # an exception inside the signal path (manifest resolution, a bug) never replaces the write's error:
+                # the signal is ledgered as failed with a fixed reason (nothing from the exception), and the original
+                # failure is raised below
+                result = EndpointResult(outcome="failed", reason="signal_error")
+                _ledger_note("kill.endpoint_failed", {**base, **result.model_dump(exclude_none=True)}, agent_id)
             raise failure
         # The signal is sent even on an idempotent re-kill: the flip is what
         # is idempotent, the halt signal is the whole point of repeating it.
