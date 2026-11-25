@@ -84,6 +84,8 @@ below; the rest of this file was not rechecked this pass.
 - 2026-10-05, Don: Fly and GB10 keep separate `FIELD_SHARED_SECRET` values. `STATE.md` ops-console 0.2.0 entry.
 - 2026-10-21, Don: ADR-0072 accepted, option 3 (estate kill watcher). `STATE.md`.
 - 2026-11-03, Don (Q-86 F1): company contact stays in plugin/marketplace metadata and the invoicing skill; client mailboxes stay scrubbed. Commit 793481f.
+- 2026-11-25, Don: agreed the recommendations on open questions 7-9 (reply "agree all" in the T6-T8
+  builder session). Source: the pull request that added this line.
 - Standing: log-only first, enforce after the measured gate; the 2-week burn-in / 30-day false-block window is NOT running by decision. `tasks/todo.md` header, `STATE.md` Next action 2.
 - Standing: never claim compliance or certification; crosswalk stays suggestion-only behind human sign-off. `tasks/lessons.md`.
 
@@ -100,7 +102,7 @@ below; the rest of this file was not rechecked this pass.
 | 8 | `README.md` Definition of Done | Every `services/*` has `SPEC.md` and a LIMITS section in its README; only `claude-approver` has no `demo.sh`. README scopes the DoD to "each system" and excludes claude-approver from the 12, so no contradiction | None; noted |
 | 9 | `.github/workflows/ci.yml` | README says CI runs py 3.11-3.14; PR #520 shows four `tests (3.x)` jobs for 3.11-3.14 | None |
 | 10 | all `*.md` (87 files) | Pass 3 link and path scan: 0 broken relative links (2 hits are literal `(url)` text in the incident-retro README); 7 backticked repo paths do not exist: `integration/demo/.env` x3 (gitignored runtime file, fine), `docs/archive/` (proposed in this file), `plugins/force/skills/force/protocol.md` (force-gateway README; ADR 10 note names the other repository), `packages/field-agent/.../canary.py` (elided path, fine), `docs/proposals/03-...md` (deployment_agent README) | Fixed the last: README now says the path is not in this repo. The `tools/deployment_agent/__init__.py` docstring carries the same path; code, not touched |
-| 11 | `docs/capstone-evidence/t6-health-under-load.md` | Added 2026-11-21. Its "Production finding" paragraph names the estate's image tag, a build id. Open question 5 quotes the `comms/PROTOCOL.md` public-files rule as banning build ids in public files; `comms/PROTOCOL.md` was not re-read this pass | Open: a one-line scrub on Don's go (open question 9). The doc came from the T6 track |
+| 11 | `docs/capstone-evidence/t6-health-under-load.md` | Added 2026-11-21. Its "Production finding" paragraph names the estate's image tag, a build id. Open question 5 quotes the `comms/PROTOCOL.md` public-files rule as banning build ids in public files; `comms/PROTOCOL.md` was not re-read this pass | Fixed 2026-11-25: the tag is replaced by the finding's date (Don agreed open question 9). The doc came from the T6 track |
 | 12 | `services/sealed-ledger/README.md`, `LedgerStore._verified` docstring | Added 2026-11-21. T7 called the `/verify` result a pure function of the cache key; false once a segment is archived | Fixed by T8 (`cb7a94f`) |
 
 ## Open questions for Don
@@ -118,12 +120,28 @@ below; the rest of this file was not rechecked this pass.
      failing points at the VM);
    - the `/ledger/health` check history for the same windows.
    Recommendation: yes. Without them the 2026-11-20 mechanism stays MEDIUM.
+   2026-11-25: Don agreed. Owner: the controller (estate access; the T6-T8
+   builder session has none and sends nothing to an estate). T9 (#1080) since
+   set `cpus = 4`, so the measurements now describe the 4-shared-CPU config.
 8. (2026-11-21) Under CPU starvation `/attest/pack` returns HTTP 200 with most
    metrics `unavailable` (T6). Keep that, or answer non-200 when the ledger was
    unreachable? Changing it is an API change. Recommendation: decide, then
    write a builder card.
+   2026-11-25: Don agreed. Since then #1091 (merged 2026-11-22) admits one
+   pack build at a time (503 + `Retry-After` to the rest) and waits out an
+   upstream's 503. With the ledger's default read concurrency of 1, a starved
+   ledger still times out and the pack still answers 200 with `unavailable`
+   metrics (#1091 body, condition C1). That is the documented contract:
+   `services/attestation-reporter/README.md` row "Unreachable services show
+   as unavailable, never zero" (Enforced in code). `BoardPack` has no
+   pack-level completeness field. Recommendation (2026-11-25): keep the 200.
+   A non-200 would break the callers #1091 lists (ops-console, `estate_probe`).
+   Optional builder card: an additive pack-level count of `unavailable`
+   metrics. Decision: Don's; the card belongs in the coordinator's queue.
 9. (2026-11-21) Scrub the image tag from the T6 evidence doc (drift row 11).
    Recommendation: yes, as its own docs PR.
+   2026-11-25: Don agreed; done in the pull request that added this line
+   (drift row 11).
 
 ## Roadmap pointers
 - Built: `ROADMAP.md`.
