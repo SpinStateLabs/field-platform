@@ -85,6 +85,10 @@ give agents a heartbeat to poll, and prove readiness with timed drills.
   a halt signal is sent; no `kill.*` row is written, and the guard's `operator.refused` row carries no agent id for such
   a request. Once a record is read, every row names the record's own `agent_id`. `RegistryClient` refuses the same ids
   itself, before it builds a URL. A stored agent with an id over 128 characters can therefore not be halted here.
+- **The text of a stop request.** `reason` is one line, not blank, with no control, invisible-format, line-separator,
+  paragraph-separator or unpaired surrogate character; `operator` is refused for an unpaired surrogate only (plus its
+  blank and length bounds). Either is **422** on kill, domain kill, revive and drill, before anything happens. The rules
+  are `field_core.stop_text`; the console and `lifecycle decommission` apply them before they send anything.
 - **A refused row is attempted once more.** When the ledger answers a kill-switch row with a **4xx**, the same event
   type is appended once with a fixed shape (the authenticated operator or `(not recorded)`, a fixed reason, the refusal's
   status; no request text, no claimed name). Its payload keys are only `operator`, `reason`, `refused_status` and, while

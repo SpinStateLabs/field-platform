@@ -25,7 +25,8 @@ presets from it and authors no FORCE language of its own:
 `GET /telemetry[?limit=20]` · `GET /health` (adds `enforce`, `tool_check`,
 `tool_check_active`, `sentinel_url`, `sentinel_timeout_seconds`,
 `ledger_appends_dropped`, `spend_forwards_dropped`: audit appends and governor
-usage reports that failed and were skipped, never affecting the request)
+usage reports that failed or were refused (a non-2xx status other than 404) and
+were skipped, never affecting the request)
 
 ```
 forcegw presets [--show analysis]
