@@ -162,7 +162,10 @@ Agents check in through the SDK (`FieldAgent.checkin()`, `fieldagent checkin
   trips, is `failed` with reason `timeout` and abandoned. A domain kill spends at
   most 20 s (`DOMAIN_SIGNAL_BUDGET_S`) on signals; once that is spent the
   remaining agents are still flipped to `killed` and their signal is `skipped`
-  with reason `budget` (and ledgered as `kill.endpoint_skipped`). Both stay under
+  with reason `budget` (and ledgered as `kill.endpoint_skipped`). The domain kill
+  does not retry a skipped signal: that agent's process stops only when its own
+  `/heartbeat` poll tells it to (its next sentinel check is blocked either way; a
+  later `/kill/{agent_id}` sends the signal again). Both stay under
   the CLI's 30 s timeout. The budget never skips the signal of an agent whose
   registry write failed (the signal is then the only stop left), so a domain with
   many failed writes can take longer: up to the deadline for each of them. An
