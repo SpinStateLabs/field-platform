@@ -79,6 +79,20 @@ give agents a heartbeat to poll, and prove readiness with timed drills.
   `FieldAgent.checkin`, `fieldagent checkin`, plus `Send-FieldCheckin` in
   `tools/field-rest.ps1` and the check-in in the demo agent.
 
+- **Ledger rows are keyed by a registry agent id.** `/kill`, `/revive`, `/drill` and `GET /heartbeat` answer **422**
+  to a path id outside the registry's id rule (`[a-z0-9][a-z0-9._-]*`, at most **128** characters;
+  `field_core.ids.registry_id_ok`), after the key and scope check where there is one and before the registry is asked or
+  a halt signal is sent; no `kill.*` row is written, and the guard's `operator.refused` row carries no agent id for such
+  a request. Once a record is read, every row names the record's own `agent_id`. `RegistryClient` refuses the same ids
+  itself, before it builds a URL. A stored agent with an id over 128 characters can therefore not be halted here.
+- **A refused row is attempted once more.** When the ledger answers a kill-switch row with a **4xx**, the same event
+  type is appended once with a fixed shape (the authenticated operator or `(not recorded)`, a fixed reason, the refusal's
+  status; no request text, no claimed name). Its payload keys are only `operator`, `reason`, `refused_status` and, while
+  an operator mode is on, `operator_id_authenticated` and `operator_key_fp`. An outage (5xx, unreachable) gets no second attempt, and in neither case is
+  the halt held back (the kill still succeeds during a ledger outage). `/health` counts both: `ledger_note_failures` is
+  every row whose first append failed; `ledger_rows_lost` is those not written at all (an outage, or the fixed shape
+  refused too).
+
 - **Retired agents are protected (B4).** `retired` is terminal on **all four**
   status-writing routes: `/kill`, `/revive` and `/drill` answer **409**, and
   `/kill/domain` skips them and lists them in `skipped_retired` (per-agent

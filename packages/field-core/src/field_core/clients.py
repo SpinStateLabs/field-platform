@@ -59,9 +59,11 @@ import stat
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import quote
 
 from field_core.errors import upstream_error
 from field_core.http import get_retrying_once, pooled_limits
+from field_core.ids import registry_id_ok
 from field_core.manifest import FieldManifest
 from field_core.validation import parse_manifest_text, validate_manifest_data
 
@@ -391,6 +393,15 @@ class LedgerClient:
         return body
 
 
+def _agent_path(agent_id: str) -> str:
+    """``/agents/<id>``, or :class:`AgentNotRegisteredError` BEFORE any URL is built or request sent for an id outside
+    the registry's id rule (``field_core.ids.registry_id_ok``): such a text names no agent. The segment is also
+    percent-encoded; an id inside the rule is unchanged."""
+    if not registry_id_ok(agent_id):
+        raise AgentNotRegisteredError(agent_id)
+    return f"/agents/{quote(agent_id, safe='')}"
+
+
 class RegistryClient:
     def __init__(self, client: HttpLike | None = None, base_url: str | None = None):
         self._client = client
@@ -407,9 +418,10 @@ class RegistryClient:
             self._client = httpx.Client(timeout=5.0, trust_env=False, limits=pooled_limits())
 
     def get_agent(self, agent_id: str) -> dict[str, Any]:
+        path = _agent_path(agent_id)
         try:
-            resp = get_retrying_once(self._client, f"{self._base}/agents/{agent_id}",
-                                     **_request_auth(self._own_client, "GET", f"/agents/{agent_id}", REGISTRY_GUARDED))
+            resp = get_retrying_once(self._client, f"{self._base}{path}",
+                                     **_request_auth(self._own_client, "GET", path, REGISTRY_GUARDED))
         except Exception as exc:
             raise RegistryUnreachableError(_transport_text(exc)) from exc
         if resp.status_code == 404:
@@ -463,12 +475,13 @@ class RegistryClient:
         ``updated_at`` still equals this value (the one an earlier read or write of the row returned); any other
         write in between makes the registry answer 412 and this method raise :class:`AgentRowChangedError`. ``None``
         (the default) is the unconditional write it always was."""
+        path = _agent_path(agent_id)
         try:
-            auth = _request_auth(self._own_client, "PATCH", f"/agents/{agent_id}", REGISTRY_GUARDED)
+            auth = _request_auth(self._own_client, "PATCH", path, REGISTRY_GUARDED)
             if extra_headers is not None:
                 auth = {"headers": _with_extra_headers(auth.get("headers", {}), extra_headers)}
             resp = self._client.patch(
-                f"{self._base}/agents/{agent_id}",
+                f"{self._base}{path}",
                 json={"status": status} if if_updated_at is None else {"status": status, "if_updated_at": if_updated_at},
                 **auth,
             )
