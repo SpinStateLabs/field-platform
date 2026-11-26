@@ -43,7 +43,8 @@ def build_manifest(tmp_path, **overrides):
     data["ledger"]["store"] = "sealed-ledger service (hash-chained JSONL)"
     data["delegation"]["granted_by"] = "Controller, Spin State Labs"
     data["delegation"]["scope"] = list(SCOPE)
-    data["delegation"]["expiry"] = "2027-06-30"
+    # Far future on purpose: the mint gate refuses once a manifest expiry is past, so a near date is a time bomb.
+    data["delegation"]["expiry"] = "2099-12-31"
     data["delegation"]["revocation"] = {
         "method": "HTTP POST",
         "endpoint": "http://127.0.0.1:8003/tokens/{id}/revoke",

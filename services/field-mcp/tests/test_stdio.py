@@ -1,4 +1,4 @@
-"""End to end over the real stdio transport with the installed SDK: the process lists 49 tools, calls one against the
+"""End to end over the real stdio transport with the installed SDK: the process lists 47 tools, calls one against the
 stub, writes nothing to stdout but protocol lines, and the write entry point refuses to start in this build."""
 import json
 import os
@@ -53,7 +53,7 @@ def test_list_and_call_over_stdio(stub):
                            "params": {"name": "sealed_ledger_verify", "arguments": {"url": "http://x"}}}])
     by_id = {m.get("id"): m for m in lines if "id" in m}
     tools = by_id[2]["result"]["tools"]
-    assert len(tools) == 49 and all(t["annotations"]["readOnlyHint"] is True for t in tools)
+    assert len(tools) == 47 and all(t["annotations"]["readOnlyHint"] is True for t in tools)
     assert not {t["name"] for t in tools} & {"kill_switch_kill", "kill_switch_revive", "sealed_ledger_rotate", "conformance_sentinel_check"}
     ok = json.loads(by_id[3]["result"]["content"][0]["text"])
     assert ok["status"] == "ok" and ok["data"] == {"ok": True}

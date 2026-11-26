@@ -3,7 +3,7 @@
 
     python tools/phase_g_check.py --base URL --secret-file PATH
         [--operator-id ID --key-file PATH] [--expect-mode off|log-only|enforce]
-        [--agent canary-gb10] [--alias NAME ...] [--allow AGENT:EVENT,...] [--restore]
+        [--agent canary-gb10] [--alias NAME ...] [--allow AGENT:EVENT,...] [--restore] [--stage 2]
 
 Replaces the hand-run curls of the Phase G canary gate. Same conventions as
 tools/estate_probe.py (whose helpers it imports): standard library only,
@@ -95,6 +95,7 @@ endpoint): `docker compose ... restart canary-agent`. The tool never runs docker
 from __future__ import annotations
 
 import argparse
+import email.message
 import hashlib
 import http.client
 import json
@@ -103,6 +104,7 @@ import re
 import secrets as _secrets
 import sys
 import time
+import urllib.error
 import urllib.parse
 from typing import Any
 
@@ -148,6 +150,92 @@ LEAKS: list[str] = []
 
 
 _internal_host = ep._internal_host      # one tested copy (C-489), not a third
+_loopback_host = ep._loopback_host
+
+# -- bounded 503 retry for READS (ep.Estate.call has none) --------------------------
+RETRY_MAX = 3            # retries after the first attempt
+RETRY_BUDGET_S = 30.0    # budget for the WAITS and the decision to retry; the last attempt may still run
+#                          for the Estate timeout (20 s), so one call is at most about 50 s wall time
+MIN_WAIT_S = 0.05        # floor under every wait: "Retry-After: 0" is never a burst
+RETRY_MARK = "_phase_g_503_wrapped"  # set on the call this module wrapped, so wrapping twice is one layer. NOT Estate's own
+#                          process-wide `_retries_503` marker: that is true only after some call really retried, so it is no
+#                          signal at wrap time (see _Retry503Opener: the per-call signal is the stripped Retry-After)
+_sleep = time.sleep      # patched in tests: nothing sleeps
+_clock = time.monotonic
+
+
+def _retry_after_s(exc: Any, attempt: int) -> float:
+    """Seconds the server asked for (delta-seconds only); a missing, negative, non-numeric or
+    HTTP-date value falls back to 1, 2, 4 s."""
+    try:
+        v = float(exc.headers.get("Retry-After", "")) if exc.headers is not None else -1.0
+    except (TypeError, ValueError):
+        v = -1.0
+    return max(v, MIN_WAIT_S) if 0 <= v < float("inf") else float(2 ** attempt)
+
+
+def _spent(exc: urllib.error.HTTPError) -> urllib.error.HTTPError:
+    """The per-call signal to the layer above: this opener already retried THIS GET (its ladder is spent),
+    so the 503 it re-raises carries no Retry-After. Estate.call (probe-retry-after) retries a 503 only when
+    it carries Retry-After, so only one layer retries a given 503 (at most 4 requests, never 4 x 4 = 16)."""
+    hdrs = email.message.Message()
+    for key, value in (exc.headers.items() if exc.headers is not None else []):
+        if key.lower() != "retry-after":
+            hdrs[key] = value
+    return urllib.error.HTTPError(exc.url, exc.code, exc.msg, hdrs, exc.fp)
+
+
+class _Retry503Opener:
+    """Wraps an opener: a GET answered 503 is retried at most RETRY_MAX times within RETRY_BUDGET_S,
+    waiting Retry-After capped by the time left; at the budget the 503 is re-raised (fail closed:
+    the caller sees HTTP 503 and its check goes red). Writes are never retried."""
+
+    def __init__(self, inner: Any):
+        while isinstance(inner, _Retry503Opener):   # never wrap a wrapper: retries must not nest
+            inner = inner.inner
+        self.inner = inner
+
+    def open(self, req: Any, timeout: Any = None) -> Any:
+        start, attempt = _clock(), 0
+        while True:
+            try:
+                return self.inner.open(req, timeout=timeout)
+            except urllib.error.HTTPError as exc:
+                left = RETRY_BUDGET_S - (_clock() - start)
+                if exc.code != 503 or req.get_method() != "GET" or attempt >= RETRY_MAX or left <= 0:
+                    if exc.code == 503 and req.get_method() == "GET":
+                        raise _spent(exc) from None
+                    raise
+                _sleep(min(_retry_after_s(exc, attempt), left))
+                attempt += 1
+
+
+def _with_503_retry(estate: "ep.Estate") -> "ep.Estate":
+    """Make every Estate.call of this instance (and so ep._events / ep._ledger / _count) retry 503.
+
+    Nesting: this wrapper owns the retry of a GET 503. Its opener sits under Estate.call and, once its
+    ladder is spent, re-raises the 503 without Retry-After (see _spent), so Estate.call's own Retry-After
+    retry cannot fire on top of it. RETRY_MARK only makes wrapping twice one layer. The opener swap is
+    undone in a finally, so nothing leaks to other callers."""
+    plain = estate.call
+    if getattr(plain, RETRY_MARK, False):
+        return estate
+
+    def call(*a: Any, **kw: Any) -> Any:
+        inner = ep._OPENER
+        ep._OPENER = _Retry503Opener(inner)
+        try:
+            return plain(*a, **kw)
+        finally:
+            ep._OPENER = inner
+
+    setattr(call, RETRY_MARK, True)
+    estate.call = call  # type: ignore[method-assign]
+    return estate
+
+
+def _make_estate(base: str, secret: str | None) -> "ep.Estate":
+    return _with_503_retry(ep.Estate(base, secret))
 
 
 def _hex(s: str) -> str:
@@ -311,6 +399,20 @@ def _off_evidence(ctx: Ctx, r0: list[dict] | None, bodies: tuple[Any, Any]) -> b
 
 
 # -- 1. mode detection ----------------------------------------------------------------
+
+
+def stage2_precondition(estate) -> bool:
+    """``--stage 2`` (G22; architect decision 2026-11-05): Stage 2 does not start unless the kill-switch and the registry
+    both report ``internal_secret_sha256_present: true`` on their open ``/health`` (the hash is set; the secret is
+    not on them). Read-only: two GETs without credentials. The line carries a count out of two, never a value."""
+    present = 0
+    for service in ("killswitch", "registry"):
+        status, health = estate.call("GET", f"/{service}/health", auth=False)
+        if status == 200 and isinstance(health, dict) and health.get("internal_secret_sha256_present") is True:
+            present += 1
+    ok = present == 2
+    ep.check(ok, f"internal secret hash present on kill-switch and registry /health ({present} of 2)")
+    return ok
 
 
 def detect_mode(ctx: Ctx, expect: str | None) -> str | None:
@@ -744,11 +846,12 @@ def build_parser() -> argparse.ArgumentParser:
                    "login id. Defaults to the shipped canary manifest names")
     p.add_argument("--allow", help="comma list of AGENT:EVENT_TYPE ledger events expected from other agents "
                    "during the run (collateral check)")
-    p.add_argument("--allow-plaintext", action="store_true",
-                   help="permit http:// to a non-loopback, non-private host with the secret")
     p.add_argument("--restore", action="store_true",
                    help="revive the canary if killed, print the host command that resumes the canary-agent "
                    "container, and exit; probes nothing else")
+    p.add_argument("--stage", type=int, choices=(2,),
+                   help="add the entry check of that Phase G stage (G22; read-only): 2 = the internal-secret hash "
+                   "is present on the kill-switch and the registry /health. Prints a count, never a value")
     return p
 
 
@@ -793,13 +896,17 @@ def _scrub(text: str, values: list[str]) -> str:
 
 def _run(args: argparse.Namespace, secret: str | None, key: str | None) -> int:
     # The env key counts: ep.Estate.call sends FIELD_OPERATOR_KEY on every read.
-    if secret or key or os.environ.get("FIELD_OPERATOR_KEY"):
+    has_key = bool(key or os.environ.get("FIELD_OPERATOR_KEY"))
+    if secret or has_key:
         parts = urllib.parse.urlsplit(args.base)
         host = parts.hostname or ""
-        local = _internal_host(host)
-        if parts.scheme != "https" and not local and not args.allow_plaintext:
-            ep._die("the secret/key would travel in cleartext: use https:// or a loopback/private address")
-    estate = ep.Estate(args.base, secret)
+        # An operator key travels in cleartext to loopback only (C-20); the secret alone keeps the
+        # loopback/private allowance. No override (Backlog B1): --allow-plaintext is gone, as in estate_probe.
+        local = _loopback_host(host) if has_key else _internal_host(host)
+        if parts.scheme != "https" and not local:
+            ep._die("the secret/key would travel in cleartext: use https://, or a loopback address "
+                    "(a private address is allowed for the secret alone, never with an operator key)")
+    estate = _make_estate(args.base, secret)
     sender = Sender(args.base, secret)
     ctx = Ctx(estate, sender, args.agent, args.operator_id, key)
     if secret:
@@ -824,6 +931,8 @@ def _run(args: argparse.Namespace, secret: str | None, key: str | None) -> int:
         return ep.finish()
     interrupted = crashed = False
     try:
+        if args.stage == 2:
+            stage2_precondition(estate)
         mode = detect_mode(ctx, args.expect_mode)
         if mode is None:
             return ep.finish()

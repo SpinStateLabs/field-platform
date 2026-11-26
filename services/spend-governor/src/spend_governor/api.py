@@ -12,15 +12,19 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import uuid
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
 
 from field_core import operator_auth, operator_health
+from field_core.ids import REGISTRY_ID_MAX_LENGTH, REGISTRY_ID_PATTERN
+from field_core.startup import warn_open
 from fastapi.responses import JSONResponse
 
 from field_core.authn import install as install_authn
@@ -33,7 +37,7 @@ from field_core.pricing import (
     units_to_cents,
     units_to_usd_str,
 )
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from spend_governor import __version__
 from spend_governor.core import (
@@ -41,13 +45,17 @@ from spend_governor.core import (
     Escalation,
     GovernorStore,
     RateLimitSet,
+    RateLimitSetInbound,
     RateLimitsView,
     SpendCapConfig,
+    SpendCapInbound,
     SpendEvent,
     SpendState,
     SpendStatus,
     ThrottleInfo,
+    Utf8Str,
     action_totals,
+    crossed_thresholds,
     evaluate,
     rolling_window_start,
     window_action_rows,
@@ -57,26 +65,42 @@ from spend_governor.core import (
 from spend_governor.usage import (
     ModelBreakdown,
     UsagePolicy,
+    UsagePolicyInbound,
     UsageRecord,
     UsageStatus,
     evaluate_rogue,
 )
 
 
+# S2-2: bounds on caller free text, so a stored row cannot grow without limit
+# (the ledger copy is already truncated by ledger_note, the stored row was not).
+# The numbers are proposals, flagged for the owner.
+MAX_NOTE_LEN = 1000  # the ledger copy is still cut to 300 (pinned by test_usage_55_and_notes)
+MAX_LABEL_LEN = 200   # action, model
+MAX_ID_LEN = REGISTRY_ID_MAX_LENGTH   # agent_id, the registry id rule
+
+
 class SpendRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    agent_id: str = Field(min_length=1)
+    agent_id: str = Field(min_length=1, max_length=MAX_ID_LEN, pattern=REGISTRY_ID_PATTERN)
     cents: int = Field(default=0, ge=0, le=MAX_AMOUNT)
     tokens: int = Field(default=0, ge=0, le=MAX_AMOUNT)
     actions: int = Field(default=0, ge=0, le=MAX_AMOUNT)
-    note: str | None = None
+    note: Utf8Str | None = Field(default=None, max_length=MAX_NOTE_LEN)
     # D1: which action this row is for (feeds that action's rate window) and
     # who counted it. ``sentinel`` is a LABEL any authenticated caller can
     # send, not an authenticated identity (README LIMITS).
-    action: str | None = Field(default=None, min_length=1)
+    action: str | None = Field(default=None, min_length=1, max_length=MAX_LABEL_LEN)
     source: Literal["self", "sentinel"] = "self"
     shadowed: bool = False  # sentinel: the ALLOW was a log-only shadow
+
+    @field_validator("action")
+    @classmethod
+    def _action_not_blank(cls, v: str | None) -> str | None:
+        if v is not None and not v.strip():
+            raise ValueError("action must not be blank")     # S8-10: min_length=1 let ' ' through
+        return v
 
 
 class TotalsResponse(BaseModel):
@@ -92,12 +116,19 @@ class TotalsResponse(BaseModel):
 class UsageRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    agent_id: str = Field(min_length=1)
-    model: str = Field(min_length=1, description="Model the agent used")
+    agent_id: str = Field(min_length=1, max_length=MAX_ID_LEN, pattern=REGISTRY_ID_PATTERN)
+    model: str = Field(min_length=1, max_length=MAX_LABEL_LEN, description="Model the agent used")
     input_tokens: int = Field(default=0, ge=0, le=MAX_AMOUNT)
     output_tokens: int = Field(default=0, ge=0, le=MAX_AMOUNT)
     cache_read_tokens: int = Field(default=0, ge=0, le=MAX_AMOUNT)
-    note: str | None = None
+    note: Utf8Str | None = Field(default=None, max_length=MAX_NOTE_LEN)
+
+    @field_validator("model")
+    @classmethod
+    def _model_not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("model must not be blank")      # S8-10: stored and returned by GET /usage
+        return v
 
 
 class UsageResponse(BaseModel):
@@ -109,7 +140,17 @@ class UsageResponse(BaseModel):
 class ResolveRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    resolved_by: str = Field(min_length=1, description="Human resolver")
+    resolved_by: str = Field(min_length=1, max_length=200, description="Human resolver")
+
+    @field_validator("resolved_by")
+    @classmethod
+    def _resolver_stripped_not_blank(cls, value: str) -> str:
+        """The recorded human of record (first resolver wins) and the ledger note's `resolved_by`: stripped, never blank,
+        so ' alice' and 'alice' are the same human."""
+        value = value.strip()
+        if not value:
+            raise ValueError("resolved_by must not be blank")
+        return value
 
 
 class HealthResponse(operator_health.OperatorHealthFields):
@@ -124,6 +165,26 @@ class HealthResponse(operator_health.OperatorHealthFields):
     caps_over_bound: int = 0
     # Stored usage-policy rows above a C-315 bound (C-363): served without re-validation, never shortened.
     policies_over_bound: int = 0
+    # PUT /caps and POST /spend calls for an agent whose registry status is retired (C-757, Don's ruling on
+    # C-467: a meter, not a gate): each was kept and counted; the line is written at most once per agent per interval. 0 without a registry client (the design).
+    retired_agent_metered: int = 0
+
+
+# The registry status lookup (C-757, reviewer C-1058 F-399-1). It never runs on a request thread or on the shared
+# sync thread pool: a call that needs an answer hands the agent to a small dedicated executor and returns at once.
+# At most REGISTRY_LOOKUP_WORKERS lookups run at once, one per agent (calls that arrive while an agent's lookup is
+# in flight join it), and at most REGISTRY_LOOKUP_MAX_PENDING agents may wait; a call beyond that is not looked up
+# (the meter fails open, so the line is simply not written for it). An answer is remembered for
+# REGISTRY_STATUS_TTL, a failure to answer for the shorter REGISTRY_FAILURE_TTL, at most
+# REGISTRY_STATUS_CACHE_MAX agents.
+REGISTRY_STATUS_TTL = timedelta(seconds=60)
+REGISTRY_FAILURE_TTL = timedelta(seconds=10)
+REGISTRY_STATUS_CACHE_MAX = 1024
+REGISTRY_LOOKUP_WORKERS = 2
+# The retired-agent warning is written at most once per agent per interval (F-399-2); every call is still counted on
+# /health, and the next line says how many calls it stands for.
+RETIRED_LOG_INTERVAL = timedelta(minutes=5)
+REGISTRY_LOOKUP_MAX_PENDING = 16
 
 
 def data_path() -> Path:
@@ -135,13 +196,45 @@ def _system_clock() -> datetime:
     return datetime.now(timezone.utc)
 
 
+
+#: S6-6: bounds on a usage policy's allow-list, checked on WRITE only. They are not on the model: a stored legacy row is
+#: built through ``UsagePolicy`` at read (core.py ``get_policy``) and must keep reading (C-363).
+MAX_ALLOWED_MODELS = 200
+MAX_MODEL_NAME = 200
+
+
+def _checked_allowed_models(models: list[str]) -> list[str]:
+    """The canonical, de-duplicated allow-list, or a 422 with a fixed text (never the names). A blank entry would
+    normalise to '' and make EVERY model a ``rogue_model`` (a non-empty list that contains no real model), each one
+    opening a human escalation."""
+    if len(models) > MAX_ALLOWED_MODELS:
+        raise HTTPException(422, f"allowed_models holds more than {MAX_ALLOWED_MODELS} entries")
+    out: list[str] = []
+    for m in models:
+        if not isinstance(m, str) or not m.strip():
+            raise HTTPException(422, "allowed_models must not hold a blank entry")
+        if len(m) > MAX_MODEL_NAME:
+            raise HTTPException(422, f"an allowed_models entry is longer than {MAX_MODEL_NAME} characters")
+        canonical = normalize_model(m)
+        if not canonical:
+            raise HTTPException(422, "an allowed_models entry normalises to nothing")
+        if canonical not in out:
+            out.append(canonical)
+    return out
+
 def create_app(
     store: GovernorStore | None = None,
     ledger=None,
     clock: Callable[[], datetime] | None = None,
+    registry=None,
 ) -> FastAPI:
     """ledger: optional LedgerClient-compatible object (append(...)).
-    clock: zero-arg callable returning an aware datetime (tests freeze it)."""
+    clock: zero-arg callable returning an aware datetime (tests freeze it).
+    registry: optional RegistryClient-compatible object (get_agent(agent_id)). With one, a PUT /caps or POST
+    /spend for an agent the registry reports as retired still succeeds and is logged (a fixed line that names no
+    agent) and counted on /health; a registry that cannot answer means no line, never a refusal. The registry is
+    asked off the request path, on a small bounded executor, so a slow registry costs the spend nothing but a
+    cache lookup (see REGISTRY_LOOKUP_WORKERS)."""
     app = FastAPI(
         title="spend-governor",
         version=__version__,
@@ -154,6 +247,13 @@ def create_app(
     app.state.ledger_dropped = 0
     app.state.price_book = load_price_book()  # dated Anthropic list, or env override
     app.state.clock = clock or _system_clock
+    app.state.registry = registry
+    app.state.retired_metered = 0
+    _retired_lock = threading.Condition()
+    _status_cache: dict[str, tuple[datetime, bool]] = {}
+    _pending: dict[str, int] = {}  # agent -> calls waiting on its in-flight lookup
+    _log_state: dict[str, tuple[datetime, int]] = {}  # agent -> (when last logged, calls counted since)
+    _lookup_pool = ThreadPoolExecutor(max_workers=REGISTRY_LOOKUP_WORKERS, thread_name_prefix="registry-status")
 
     def _store() -> GovernorStore:
         return app.state.store
@@ -268,12 +368,126 @@ def create_app(
     def _status(agent_id: str, now: datetime, action: str | None = None) -> SpendStatus:
         return _status_full(agent_id, now, action)[0]
 
+    def _open_threshold_escalations(
+        agent_id: str, status: SpendStatus, cap_detail: str,
+        cap: SpendCapConfig, now: datetime,
+    ) -> None:
+        """One escalation per crossed dimension, for /spend and /usage alike.
+        A cap_detail that is not a crossing ("N unresolved escalation(s)")
+        opens nothing."""
+        if cap_detail.split(" ", 1)[0] not in ("cents", "tokens", "actions"):
+            return
+        spent_limit = {
+            "cents": (status.spent_cents, status.limit_cents),
+            "tokens": (status.spent_tokens, status.token_limit),
+            "actions": (status.spent_actions, status.action_limit),
+        }
+        for kind in crossed_thresholds(
+            cap, status.spent_cents, status.spent_tokens, status.spent_actions
+        ):
+            spent, limit = spent_limit[kind]
+            # check-and-insert in one store call: concurrent crossings
+            # open (and ledger) exactly one escalation per kind
+            esc, opened = _store().add_escalation_if_none_open(
+                Escalation(
+                    escalation_id=str(uuid.uuid4()), agent_id=agent_id,
+                    ts=now.isoformat(), kind=kind, spent=spent, limit=limit,
+                    pct=cap.escalate_at_pct,
+                )
+            )
+            if opened:
+                _ledger_note(
+                    "spend.escalate",
+                    {"escalation_id": esc.escalation_id, "kind": kind,
+                     "spent": spent, "limit": limit},
+                    agent_id,
+                )
+
+    def _ask_registry(agent_id: str) -> tuple[bool, timedelta]:
+        """(retired, how long to remember it). True only when the registry answers and says retired; any failure
+        to ask or to read the answer is False for the shorter REGISTRY_FAILURE_TTL (the meter fails open)."""
+        try:
+            record = app.state.registry.get_agent(agent_id)
+            return (isinstance(record, dict) and record.get("status") == "retired"), REGISTRY_STATUS_TTL
+        except Exception:  # noqa: BLE001 - unreachable, unregistered, malformed: no warning, never a refusal
+            return False, REGISTRY_FAILURE_TTL
+
+    def _remember(agent_id: str, retired: bool, ttl: timedelta) -> None:
+        if len(_status_cache) >= REGISTRY_STATUS_CACHE_MAX:
+            _status_cache.pop(next(iter(_status_cache)))
+        _status_cache[agent_id] = (_now() + ttl, retired)
+
+    def _lookup(agent_id: str) -> None:
+        """Runs on the dedicated executor: asks once, remembers the answer, then records every call that waited."""
+        try:
+            retired, ttl = _ask_registry(agent_id)
+            with _retired_lock:  # an RLock: _record_retired takes it again, and a waiter sees the count first
+                _remember(agent_id, retired, ttl)
+                waiting = _pending.get(agent_id, 0)
+                if retired and waiting:
+                    _record_retired(agent_id, waiting)
+        finally:  # whatever escaped above, the agent must not stay pending (the bound would fill up for good)
+            with _retired_lock:
+                _pending.pop(agent_id, None)
+                _retired_lock.notify_all()
+
+    def _record_retired(agent_id: str, calls: int) -> None:
+        """Counts every metered call of a retired agent; writes the line at most once per agent per
+        RETIRED_LOG_INTERVAL. The line is fixed text and integers: no agent id, token or other caller input (a
+        decommissioned identity that still reports spend means something still holds its credential; the operator
+        looks it up)."""
+        now = _now()
+        with _retired_lock:
+            app.state.retired_metered += calls
+            count = app.state.retired_metered
+            last = _log_state.get(agent_id)
+            if last is not None and now - last[0] < RETIRED_LOG_INTERVAL:
+                _log_state[agent_id] = (last[0], last[1] + calls)
+                return
+            since = calls + (last[1] if last is not None else 0) - 1  # calls the line stands for besides this one
+            if len(_log_state) >= REGISTRY_STATUS_CACHE_MAX and agent_id not in _log_state:
+                _log_state.pop(next(iter(_log_state)))
+            _log_state[agent_id] = (now, 0)
+        logging.getLogger(__name__).warning(
+            "metered a call for an agent the registry reports as retired (kept; %d so far, %d more since the "
+            "last line for this agent): something may still hold a decommissioned credential", count, since)
+
+    def _note_if_retired(agent_id: str) -> None:
+        """Runs after the response (BackgroundTasks), and only ever reads the cache or queues work: it never
+        calls the registry itself and never waits for it."""
+        if app.state.registry is None:
+            return
+        now = _now()
+        with _retired_lock:
+            hit = _status_cache.get(agent_id)
+            if hit is not None and hit[0] > now:
+                retired = hit[1]
+            elif agent_id in _pending:
+                _pending[agent_id] += 1  # join the lookup already in flight
+                return
+            elif len(_pending) >= REGISTRY_LOOKUP_MAX_PENDING:
+                return  # bounded: this call is not looked up
+            else:
+                _pending[agent_id] = 1
+                _lookup_pool.submit(_lookup, agent_id)
+                return
+        if retired:
+            _record_retired(agent_id, 1)
+
+    def _wait_retired_lookups(timeout: float = 5.0) -> bool:
+        """Test seam: block until no lookup is pending (the lookups are asynchronous). Never used by a route."""
+        with _retired_lock:
+            return _retired_lock.wait_for(lambda: not _pending, timeout=timeout)
+
+    app.state.wait_retired_lookups = _wait_retired_lookups
+
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
         return HealthResponse(ok=True, build_sha=build_sha(),
                               ledger_appends_dropped=app.state.ledger_dropped,
                               caps_over_bound=_store().count_caps_over_bound(),
                               policies_over_bound=_store().count_policies_over_bound(),
+                              retired_agent_metered=app.state.retired_metered,
                               **op_health.health_fields())
 
     # C-9: the guards get the governor's ledger, so a LOG-ONLY unauthenticated
@@ -284,11 +498,13 @@ def create_app(
     guard_escalation = op_health.guard("escalation")
 
     @app.put("/caps/{agent_id}", response_model=SpendCapConfig)
-    def set_cap(agent_id: str, cap: SpendCapConfig,
+    def set_cap(agent_id: str, cap: SpendCapInbound, background: BackgroundTasks,
                 _op: object = Depends(guard_caps)) -> SpendCapConfig:
         if cap.agent_id != agent_id:
             raise HTTPException(422, "agent_id in path and body must match")
-        return _store().set_cap(cap)
+        saved = _store().set_cap(cap)
+        background.add_task(_note_if_retired, agent_id)
+        return saved
 
     @app.get("/caps/{agent_id}", response_model=SpendCapConfig)
     def get_cap(agent_id: str) -> SpendCapConfig:
@@ -298,7 +514,7 @@ def create_app(
         return cap
 
     @app.put("/rate-limits/{agent_id}", response_model=RateLimitsView)
-    def set_rate_limits(agent_id: str, body: RateLimitSet,
+    def set_rate_limits(agent_id: str, body: RateLimitSetInbound,
                         _op: object = Depends(guard_caps)) -> RateLimitsView:
         """Replace the agent's rate-limit set (from ``set-cap --from-manifest``).
 
@@ -334,7 +550,7 @@ def create_app(
                               rate_limits=_store().get_rate_limits(agent_id))
 
     @app.post("/spend", response_model=SpendStatus, status_code=201)
-    def record_spend(req: SpendRequest) -> SpendStatus:
+    def record_spend(req: SpendRequest, background: BackgroundTasks) -> SpendStatus:
         now = _now()
         cap = _store().get_cap(req.agent_id)
         if cap is None:
@@ -355,6 +571,7 @@ def create_app(
             req.agent_id, req.cents, req.tokens, req.actions, note, now,
             action=req.action, source=req.source,
         )
+        background.add_task(_note_if_retired, req.agent_id)
         if req.source == "self":
             # A sentinel-metered row is NOT re-ledgered: the conformance.allow
             # (or shadow) verdict event that caused it is its ledger record,
@@ -372,29 +589,7 @@ def create_app(
 
         status, cap_state, cap_detail = _status_full(req.agent_id, now, req.action)
         if cap_state is SpendState.ESCALATE:
-            kind = cap_detail.split(" ", 1)[0]
-            if kind in ("cents", "tokens", "actions"):
-                spent, limit = {
-                    "cents": (status.spent_cents, status.limit_cents),
-                    "tokens": (status.spent_tokens, status.token_limit),
-                    "actions": (status.spent_actions, status.action_limit),
-                }[kind]
-                # check-and-insert in one store call: concurrent crossings
-                # open (and ledger) exactly one escalation per kind
-                esc, opened = _store().add_escalation_if_none_open(
-                    Escalation(
-                        escalation_id=str(uuid.uuid4()), agent_id=req.agent_id,
-                        ts=now.isoformat(), kind=kind, spent=spent, limit=limit,
-                        pct=cap.escalate_at_pct,
-                    )
-                )
-                if opened:
-                    _ledger_note(
-                        "spend.escalate",
-                        {"escalation_id": esc.escalation_id, "kind": kind,
-                         "spent": spent, "limit": limit},
-                        req.agent_id,
-                    )
+            _open_threshold_escalations(req.agent_id, status, cap_detail, cap, now)
         elif status.state is SpendState.BLOCK:
             _ledger_note(
                 "spend.cap_reached",
@@ -448,11 +643,11 @@ def create_app(
     )
     def resolve(escalation_id: str, req: ResolveRequest,
                 _op: object = Depends(guard_escalation)):
-        req.resolved_by = operator_auth.bind_body_operator(req.resolved_by)
         """First resolver wins. 200 with the row when this call resolved it
         (one ``spend.escalation_resolved`` note) or when the SAME human
         retries (idempotent, no second note); 409 with the unchanged row when
         a different human already resolved it."""
+        req.resolved_by = operator_auth.bind_body_operator(req.resolved_by)
         try:
             esc, resolved_now = _store().resolve_escalation_once(
                 escalation_id, req.resolved_by
@@ -472,11 +667,11 @@ def create_app(
     # ---- token-usage governance ----
 
     @app.put("/policies/{agent_id}", response_model=UsagePolicy)
-    def set_policy(agent_id: str, policy: UsagePolicy,
+    def set_policy(agent_id: str, policy: UsagePolicyInbound,
                    _op: object = Depends(guard_caps)) -> UsagePolicy:
         if policy.agent_id != agent_id:
             raise HTTPException(422, "agent_id in path and body must match")
-        policy.allowed_models = [normalize_model(m) for m in policy.allowed_models]
+        policy.allowed_models = _checked_allowed_models(policy.allowed_models)
         return _store().set_policy(policy)
 
     @app.get("/policies/{agent_id}", response_model=UsagePolicy)
@@ -547,7 +742,9 @@ def create_app(
                     req.agent_id,
                 )
 
-        status = _status(req.agent_id, now)
+        status, cap_state, cap_detail = _status_full(req.agent_id, now)
+        if cap_state is SpendState.ESCALATE:
+            _open_threshold_escalations(req.agent_id, status, cap_detail, cap, now)
         if status.state is SpendState.BLOCK:
             _ledger_note("spend.cap_reached", {"detail": status.detail}, req.agent_id)
         return UsageResponse(
@@ -560,8 +757,9 @@ def create_app(
     def usage_status(agent_id: str) -> UsageStatus:
         now = _now()
         cap = _store().get_cap(agent_id)
-        period = cap.period if cap else "total"
-        start = window_start(period, now)
+        if cap is None:  # same answer as /status, /totals and /rate-limits
+            raise HTTPException(404, f"no spend cap configured for '{agent_id}'")
+        start = window_start(cap.period, now)
         u_in, u_out, cost_units, rows = _store().usage_totals_since(agent_id, start)
         policy = _store().get_policy(agent_id)
         allowed = policy.allowed_models if policy else []
@@ -578,7 +776,8 @@ def create_app(
             if e.kind.startswith("usage:")
         )
         return UsageStatus(
-            agent_id=agent_id, window_seconds=0,
+            agent_id=agent_id,
+            window_seconds=max(0, int((now - datetime.fromisoformat(start)).total_seconds())),
             total_input_tokens=u_in, total_output_tokens=u_out,
             total_cost_units=cost_units,
             total_cost_display=units_to_usd_str(cost_units),
@@ -587,4 +786,5 @@ def create_app(
             open_rogue_flags=rogue_open,
         )
 
+    warn_open("spend-governor", operator_layer=True)
     return app

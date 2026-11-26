@@ -648,24 +648,6 @@
   "path": "/health",
   "service": "conformance-sentinel"
  },
- "delegation_authority_get_token": {
-  "body": null,
-  "form": null,
-  "method": "GET",
-  "parameters": [
-   {
-    "in": "path",
-    "name": "token_id",
-    "required": true,
-    "schema": {
-     "title": "Token Id",
-     "type": "string"
-    }
-   }
-  ],
-  "path": "/tokens/{token_id}",
-  "service": "delegation-authority"
- },
  "delegation_authority_health": {
   "body": null,
   "form": null,
@@ -693,31 +675,6 @@
   "method": "POST",
   "parameters": [],
   "path": "/introspect",
-  "service": "delegation-authority"
- },
- "delegation_authority_list_tokens": {
-  "body": null,
-  "form": null,
-  "method": "GET",
-  "parameters": [
-   {
-    "in": "query",
-    "name": "agent_id",
-    "required": false,
-    "schema": {
-     "anyOf": [
-      {
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "title": "Agent Id"
-    }
-   }
-  ],
-  "path": "/tokens",
   "service": "delegation-authority"
  },
  "delegation_authority_oauth_introspect": {
@@ -791,6 +748,8 @@
     "required": false,
     "schema": {
      "default": 20,
+     "maximum": 500,
+     "minimum": 0,
      "title": "Limit",
      "type": "integer"
     }

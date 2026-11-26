@@ -75,7 +75,7 @@ TIER2 = frozenset({
 
 
 def test_the_counts_match_the_ruling():
-    assert len(catalog.TOOLS) == 49 and sum(t.method == "GET" for t in catalog.TOOLS) == 42
+    assert len(catalog.TOOLS) == 47 and sum(t.method == "GET" for t in catalog.TOOLS) == 40
     t3 = [k for k, w in catalog.EXCLUDED.items() if w.startswith("Tier 3")]
     t2 = [k for k, w in catalog.EXCLUDED.items() if w.startswith("Tier 2")]
     assert len(t3) == 20 and len(t2) == 8
@@ -90,6 +90,18 @@ def test_the_tier2_and_tier3_sets_are_exactly_the_written_ones():
 def test_no_tier2_or_tier3_route_is_a_tool_whatever_the_catalog_says():
     assert not ((TIER3 | TIER2) & tool_keys())
     assert not ({(s, p) for s, m, p in TIER3 | TIER2} & catalog.READ_ONLY_POSTS)
+
+
+def test_the_token_reads_are_not_tools():
+    """A token id is a credential: neither delegation token read reaches a model as a tool."""
+    reads = {("delegation-authority", "GET", "/tokens"), ("delegation-authority", "GET", "/tokens/{token_id}")}
+    assert reads <= set(catalog.EXCLUDED)
+    assert not {("delegation-authority", "/tokens"), ("delegation-authority", "/tokens/{token_id}")} & tool_keys_get()
+    assert not [t.name for t in catalog.TOOLS if t.name.endswith(("_list_tokens", "_get_token"))]
+
+
+def tool_keys_get():
+    return {(t.service, t.path) for t in catalog.TOOLS if t.method == "GET"}
 
 
 def test_tool_names_are_unique_and_service_prefixed():

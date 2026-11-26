@@ -1,6 +1,6 @@
 # field-mcp
 
-An MCP server (stdio) that lets a Claude client call the FIELD platform services as tools. **This build is the Tier 1 read tier only: 49 read-only tools over 13 services.** The default deployment is read-only; nothing in this build can change platform state.
+An MCP server (stdio) that lets a Claude client call the FIELD platform services as tools. **This build is the Tier 1 read tier only: 47 read-only tools over 13 services.** The default deployment is read-only; nothing in this build can change platform state.
 
 ## What it exposes
 
@@ -8,9 +8,11 @@ One tool per route, named `<service>_<action>` (for example `sealed_ledger_verif
 
 | Tier | Contents | In this build |
 |---|---|---|
-| 1 read | every GET (42), plus seven POSTs that only compute and return: crosswalk, crosswalk/markdown, crosswalk pack, replay, replay/markdown, introspect, oauth/introspect | 49 tools, on by default |
+| 1 read | every GET but the two token reads (40), plus seven POSTs that only compute and return: crosswalk, crosswalk/markdown, crosswalk pack, replay, replay/markdown, introspect, oauth/introspect | 47 tools, on by default |
 | 2 write | state-changing routes (sentinel `/check`, registry writes, federation crossing, ledger export, regwatch check) | not in this build; excluded with a reason |
 | 3 destructive | kill, kill/domain, revive, drill, heartbeat post, token issue and revoke, ledger events/rotate/hold/retention, spend caps, policies, rate-limits, spend and usage posts, escalation resolve, federation contract change, lifecycle sweep | **never in this server** (CLI and console only) |
+
+Excluded because the answer carries token ids (credentials): `delegation-authority GET /tokens` and `GET /tokens/{id}`. Other reads (ledger events, replay, lifecycle findings, attestation packs) can still show a token id inside their data.
 
 Excluded as not operator APIs: `claude-approver POST /halt/{id}` (open path by design), `force-gateway POST /v1/messages` (a paid model call), the 16 `/operator/*` key-rotation routes, and the whole of `ops-console` (it fronts the services above; they are exposed directly, never both).
 

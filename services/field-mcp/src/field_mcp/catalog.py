@@ -4,7 +4,7 @@ Every route of every service is in exactly one of ``TOOLS`` or ``EXCLUDED``; ``t
 service's app and fails on a route that is in neither, on an entry for a route that no longer exists, and on a route in
 both. A new route therefore turns the suite red until someone decides here.
 
-Tier 1 is read-only: every GET, plus seven POSTs that the service code was read to compute and return only
+Tier 1 is read-only: every GET except the two token reads, plus seven POSTs that the service code was read to compute and return only
 (``READ_ONLY_POSTS``). Tier 2 (state-changing, off by default) is not in this build. Tier 3 (destructive or irreversible)
 is never in this server (Don, 2026-10-30).
 """
@@ -47,8 +47,6 @@ TOOLS: tuple[Tool, ...] = (
     Tool("conformance-sentinel", "GET", "/health", "health", R),
     Tool("conformance-sentinel", "GET", "/clauses", "clauses", R),
     Tool("delegation-authority", "GET", "/health", "health", R),
-    Tool("delegation-authority", "GET", "/tokens", "list_tokens", R),
-    Tool("delegation-authority", "GET", "/tokens/{token_id}", "get_token", R),
     Tool("delegation-authority", "POST", "/introspect", "introspect", _POST_READ),
     Tool("delegation-authority", "POST", "/oauth/introspect", "oauth_introspect", _POST_READ),
     Tool("federation-broker", "GET", "/health", "health", R),
@@ -94,10 +92,15 @@ FORM_BODIES = {("delegation-authority", "/oauth/introspect"): {"token_id": "toke
 _CONSOLE = "ops-console fronts the services; the owning service's tool is the one path (Don, 2026-10-30)"
 _T2 = "Tier 2 (state-changing); lands in the Tier 2 PR, off by default (Don's build order)"
 _T3 = "Tier 3 (destructive or irreversible); never in this server, CLI and console only (Don, 2026-10-30)"
+_TOKEN_READ = ("the answer carries token ids, which are credentials: not a tool until the platform stops showing them "
+               "to a plain reader")
 _OPERATOR = ("key-rotation internals (hash oracle and key fingerprints): not an operator API, loopback-only by design "
              "(field_core/operator_health.py), found by the coverage test, not in Don's route list")
 
 _EXCLUDED_ROUTES: tuple[tuple[str, str, str, str], ...] = (
+    # token reads (a GET, and not a tool)
+    ("delegation-authority", "GET", "/tokens", _TOKEN_READ),
+    ("delegation-authority", "GET", "/tokens/{token_id}", _TOKEN_READ),
     # Tier 2
     ("conformance-sentinel", "POST", "/check", _T2 + "; meters spend and ledgers rows (engine.py:371-405)"),
     ("compliance-crosswalk", "POST", "/regwatch/check", _T2 + "; sets stale flags and fetches external sources"),
