@@ -47,11 +47,17 @@ class Registry:
     def __init__(self, agents):
         self.agents = {a["agent_id"]: dict(a) for a in agents}
         self.writes = []
+        self.reads = []
+        self.retired_on_reread = set()     # listed as stored, read by id as retired (a retire between the two reads)
 
     def get_agent(self, agent_id):
+        self.reads.append(agent_id)
         if agent_id not in self.agents:
             raise AgentNotRegisteredError(agent_id)
-        return dict(self.agents[agent_id])
+        record = dict(self.agents[agent_id])
+        if agent_id in self.retired_on_reread:
+            record["status"] = "retired"
+        return record
 
     def list_agents(self, domain=None, status=None):
         return [dict(a) for a in self.agents.values()
@@ -126,7 +132,7 @@ def test_an_unauthenticated_or_out_of_scope_caller_learns_nothing_about_a_retire
         r = client.post(f"/{route}/{target}", json=BODY, headers=headers)
         assert r.status_code == status, (target, r.status_code, r.text)
         assert "retired" not in r.text, (target, r.text)
-    assert reg.writes == [] and [t for t, _, _ in led.rows if t.startswith("kill.")] == []
+    assert reg.reads == [] and reg.writes == [] and [t for t, _, _ in led.rows if t.startswith("kill.")] == []
 
 
 @pytest.mark.parametrize("route", ROUTES)
@@ -152,13 +158,14 @@ def test_a_scoped_operator_gets_409_on_a_retired_agent_listed_or_not(stack, rout
     assert client.get("/health").json()["refused_count"] == 0
 
 
+@pytest.mark.parametrize("target", RETIRED)
 @pytest.mark.parametrize("operator,key", SCOPED, ids=["listed", "unlisted", "list-bound-verifier"])
-def test_the_ledger_row_of_a_refused_kill_of_a_retired_agent(stack, operator, key):
+def test_the_ledger_row_of_a_refused_kill_of_a_retired_agent(stack, target, operator, key):
     client, _, led = stack
-    assert client.post("/kill/ret-nomanifest", json=BODY, headers=hdr(operator, key)).status_code == 409
+    assert client.post(f"/kill/{target}", json=BODY, headers=hdr(operator, key)).status_code == 409
     assert [t for t, _, _ in led.rows] == ["kill.agent.failed"]
     payload, agent_id = led.of("kill.agent.failed")[0]
-    assert agent_id == "ret-nomanifest"
+    assert agent_id == target
     assert (payload["status_code"], payload["failure_class"], payload["operator"]) == (409, "retired", operator)
 
 
@@ -187,6 +194,95 @@ def test_a_ledger_that_cannot_be_written_does_not_change_the_409(stack, route):
     led.append = refuse
     assert client.post(f"/{route}/ret-nomanifest", json=BODY, headers=hdr("other", KEY_OTHER)).status_code == 409
     assert reg.writes == []
+
+
+ROW_OF = [("kill", "kill.agent.failed")] + REFUSED_ROW
+ROW_IDS = ["kill", "revive", "drill"]
+
+
+@pytest.mark.parametrize("route,event_type", ROW_OF, ids=ROW_IDS)
+def test_the_row_names_the_registry_record_not_the_path_text(stack, route, event_type):
+    client, reg, led = stack
+    reg.agents["path-text"] = dict(reg.agents["ret-nomanifest"])    # read by one id, the record says another
+    assert client.post(f"/{route}/path-text", json=BODY, headers=hdr("other", KEY_OTHER)).status_code == 409
+    assert [a for _, a in led.of(event_type)] == ["ret-nomanifest"]
+
+
+@pytest.mark.parametrize("route,event_type", ROW_OF, ids=ROW_IDS)
+def test_the_row_is_written_with_the_operator_layer_off(stack, monkeypatch, route, event_type):
+    """OFF: ``operator`` is the body's free text and the payload carries no authenticated fields"""
+    client, _, led = stack
+    monkeypatch.delenv(oa.ENV_REQUIRE)
+    monkeypatch.delenv(oa.ENV_REGISTRY)
+    assert client.post(f"/{route}/ret-nomanifest", json=BODY).status_code == 409
+    [(payload, agent_id)] = led.of(event_type)
+    assert agent_id == "ret-nomanifest" and payload["operator"] == "someone"
+    assert "operator_id_authenticated" not in payload
+
+
+@pytest.mark.parametrize("route,event_type", ROW_OF, ids=ROW_IDS)
+@pytest.mark.parametrize("headers,operator,authenticated", [
+    ({}, "someone", None),
+    (hdr("other", KEY_OTHER), "other", "other"),
+], ids=["no-credential", "authenticated"])
+def test_the_row_is_written_in_log_only(stack, monkeypatch, route, event_type, headers, operator, authenticated):
+    """LOG-ONLY: the authenticated id when the credential is good, else the body's free text and a null identity"""
+    client, _, led = stack
+    monkeypatch.delenv(oa.ENV_REQUIRE)
+    assert client.post(f"/{route}/ret-nomanifest", json=BODY, headers=headers).status_code == 409
+    [(payload, agent_id)] = led.of(event_type)
+    assert agent_id == "ret-nomanifest" and payload["operator"] == operator
+    assert payload["operator_id_authenticated"] == authenticated
+
+
+# --- a path id outside the registry's id rule ------------------------------------------------------------------------
+
+BAD_IDS = ["ret-nomanifest%3F", "ret-nomanifest%23x", "Ret-Nomanifest", "-ret", ".ret", "ret%20x", "ret%0Ax"]
+
+
+@pytest.mark.parametrize("route", ROUTES)
+@pytest.mark.parametrize("bad", BAD_IDS)
+def test_an_id_outside_the_registry_rule_is_422_before_any_read_or_row(stack, route, bad):
+    client, reg, led = stack
+    r = client.post(f"/{route}/{bad}", json=BODY, headers=hdr("don", KEY_DON))
+    assert r.status_code == 422, (r.status_code, r.text)
+    assert r.json() == {"detail": "agent_id is not a valid agent id"}
+    assert reg.reads == [] and reg.writes == [] and led.rows == []
+
+
+@pytest.mark.parametrize("route", ROUTES)
+def test_the_key_and_scope_are_checked_before_the_id_rule(stack, route):
+    client, reg, _ = stack
+    assert client.post(f"/{route}/ret-nomanifest%3F", json=BODY).status_code == 401
+    assert reg.reads == []
+
+
+@pytest.mark.parametrize("route", ROUTES)
+def test_a_long_stored_id_is_not_refused_by_the_id_rule(stack, route):
+    """no length bound: a stored row with a long id must stay reachable (a kill above all)"""
+    client, reg, _ = stack
+    long_id = "a" * 200
+    reg.agents[long_id] = {"agent_id": long_id, "status": "retired", "domain": "canary", "manifest_ref": None}
+    assert client.post(f"/{route}/{long_id}", json=BODY, headers=hdr("don", KEY_DON)).status_code == 409
+    assert reg.reads == [long_id]
+
+
+def test_the_domain_kill_of_an_agent_retired_between_the_list_and_the_re_read(stack):
+    client, reg, led = stack
+    reg.agents["raced"] = {"agent_id": "raced", "status": "active", "domain": "race",
+                           "manifest_ref": reg.agents["live-listed"]["manifest_ref"]}
+    reg.retired_on_reread.add("raced")
+    r = client.post("/kill/domain/race", json=BODY, headers=hdr("other", KEY_OTHER))
+    assert r.status_code == 502, r.text
+    report = r.json()["detail"]
+    assert report["skipped_retired"] == [] and report["killed"] == []
+    [result] = report["results"]
+    assert result["outcome"] == "error" and result["error"].startswith("409:")
+    [(payload, agent_id)] = led.of("kill.agent.failed")
+    assert agent_id == "raced" and payload["domain"] == "race" and payload["failure_class"] == "retired"
+    [(domain_row, _)] = led.of("kill.domain")
+    assert domain_row["errored"] == [{"agent_id": "raced", "status_code": 409}]
+    assert reg.writes == [] and led.of("operator.refused") == []
 
 
 # --- a non-retired agent is unchanged --------------------------------------------------------------------------------

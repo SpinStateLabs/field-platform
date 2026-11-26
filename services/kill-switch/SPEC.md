@@ -93,7 +93,9 @@ give agents a heartbeat to poll, and prove readiness with timed drills.
   leaves `kill.revive.refused` and `/drill` leaves `kill.drill.refused` (both `operator` and the reason
   `agent is retired`). The row is best effort: a ledger that cannot be written never changes the 409. Neither refused
   type pairs with a registry status change. A non-retired agent is unchanged (403 for an operator its list does not
-  name).
+  name). On the same three routes a path id outside the registry's id rule (`[a-z0-9][a-z0-9._-]*`, no length bound) is
+  422 after the key and scope check, before the registry is asked, and writes no `kill.*` row; the refused rows name
+  the registry record's own `agent_id`.
 
   `/drill` was covered last and is the reason the other three were
   bypassable. The tempting argument — *a drill restores the prior status, so

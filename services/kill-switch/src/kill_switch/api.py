@@ -456,6 +456,12 @@ def _canonical_path(path: str) -> str | None:
     return "/" + "/".join(segments) + ("/" if decoded.endswith("/") and segments else "")
 
 
+def _record_id(record: dict, path_id: str) -> str:
+    """The id a refusal row carries: the registry record's own; the (validated) path id only if it names none."""
+    rid = record.get("agent_id")
+    return rid if isinstance(rid, str) and rid else path_id
+
+
 def _is_self_endpoint(path: str, agent_id: str) -> bool:
     canonical = _canonical_path(path)
     if canonical is None:
@@ -513,6 +519,15 @@ def create_app(
                 exc, action=action, path=f"/{action}/{record.get('agent_id', '')}",
                 headers={}, claimed=operator_auth.current().claimed,
                 agent_id=record.get("agent_id")) from None
+
+    def _require_agent_id(agent_id: str, action: str) -> None:
+        """/kill, /revive and /drill refuse a path id outside the registry's id rule (``_HEARTBEAT_ID_RE``) before the
+        registry is asked or a row is written: the id goes into the registry URL unquoted, so ``<id>%3F`` would read
+        another record and ledger the caller's text as the agent id. No length bound, unlike check-ins: a stored row
+        with a long id must stay killable. The log line never quotes the id."""
+        if not _HEARTBEAT_ID_RE.fullmatch(agent_id):
+            log.warning("kill-switch: %s refused, the path id is outside the agent-id rule", action)
+            raise HTTPException(422, "agent_id is not a valid agent id")
 
     def _manifest_refs() -> list:
         """C-8 manifests_unresolved: every agent that can still be killed or
@@ -714,7 +729,7 @@ def create_app(
             return _kill_one_inner(agent_id, operator, reason, origin, extra)
         except HTTPException as exc:
             if exc.status_code != 403:        # an operator refusal is already ledgered as operator.refused
-                _ledger_kill_failed(agent_id, operator, reason, extra, exc.status_code,
+                _ledger_kill_failed(getattr(exc, "row_agent_id", agent_id), operator, reason, extra, exc.status_code,
                                     _FAIL_CLASS.get(exc.status_code, "refused"))
             raise
         except Exception as exc:
@@ -753,12 +768,14 @@ def create_app(
             # later /revive put a decommissioned agent back to `active`.
             # Answered BEFORE the manifest's authorized_operators (the guard's key and scope check ran first): the
             # same 409 for a listed and an unlisted operator, and nothing is written or signalled either way.
-            raise HTTPException(
+            refusal = HTTPException(
                 409,
                 f"agent '{agent_id}' is retired — a retired agent is already "
                 "non-active and must not be flipped to 'killed' (a later "
                 "/revive would undo the decommission)",
             )
+            refusal.row_agent_id = _record_id(record, agent_id)    # the kill.agent.failed row names the record
+            raise refusal
         _check_authorized_operators(record)
         # ALWAYS written, even when the row already reads killed: the write moves the row's updated_at, which is what a
         # drill's compare-and-set restore compares, so a kill that lands during a drill can never be mistaken for the
@@ -863,6 +880,7 @@ def create_app(
     def kill_agent(agent_id: str, req: KillRequest, request: Request,
                    _op: Any = Depends(guard_kill)) -> KillReport:
         req.operator = operator_auth.bind_body_operator(req.operator)
+        _require_agent_id(agent_id, "kill")
         return _kill_one(
             agent_id, req.operator, req.reason,
             origin=request.headers.get(ORIGIN_HEADER),
@@ -976,6 +994,7 @@ def create_app(
     def revive(agent_id: str, req: KillRequest,
                _op: Any = Depends(guard_revive)) -> Heartbeat:
         req.operator = operator_auth.bind_body_operator(req.operator)
+        _require_agent_id(agent_id, "revive")
         try:
             record = app.state.registry.get_agent(agent_id)
         except AgentNotRegisteredError:
@@ -986,7 +1005,8 @@ def create_app(
             # The one that matters: without this, one console click undoes a
             # decommission and the agent is `active` again. Before the authorized_operators list, as on /kill.
             # Its own event type: neither a revive nor a failed kill, and the attempt leaves a trace.
-            _ledger_note("kill.revive.refused", {"operator": req.operator, "reason": "agent is retired"}, agent_id)
+            _ledger_note("kill.revive.refused", {"operator": req.operator, "reason": "agent is retired"},
+                         _record_id(record, agent_id))
             raise HTTPException(
                 409,
                 f"agent '{agent_id}' is retired — reviving a decommissioned "
@@ -1113,6 +1133,7 @@ def create_app(
     def drill(agent_id: str, req: KillRequest, request: Request,
               _op: Any = Depends(guard_drill)) -> DrillReport:
         req.operator = operator_auth.bind_body_operator(req.operator)
+        _require_agent_id(agent_id, "drill")
         t0 = time.perf_counter()
         gen0, inflight0 = _kill_snapshot(agent_id)    # BEFORE the read
         with _kill_gen_lock:
@@ -1148,7 +1169,8 @@ def create_app(
             # accepts. Drill-then-revive laundered a decommissioned agent back
             # to active. A drill on a decommissioned agent proves nothing.
             # Before the authorized_operators list, as on /kill.
-            _ledger_note("kill.drill.refused", {"operator": req.operator, "reason": "agent is retired"}, agent_id)
+            _ledger_note("kill.drill.refused", {"operator": req.operator, "reason": "agent is retired"},
+                         _record_id(record, agent_id))
             raise HTTPException(
                 409,
                 f"agent '{agent_id}' is retired — a drill on a decommissioned "
