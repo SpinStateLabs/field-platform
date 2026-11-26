@@ -143,6 +143,7 @@ not list them and `tools/tests/test_environment_doc.py` does not check them.
 
 - `FIELD_COMPOSE_ALLOWED_ROOTS` (read in `tools/compose_bind_rules.py`, used by `tools/compose_resolved_check.py`; C-1196):
   colon-separated absolute directories ADDED to the committed default root as allowed bind roots for the resolved-model
-  check. Unset or empty means the committed default only. An entry that is relative, not literal, has a dot segment, or
+  check. When the process does not set it, the check reads it from the compose project's `.env` (`--env-file` names
+  another file); a value set in the process wins. Unset or empty means the committed default only. An entry that is relative, not literal, has a dot segment, or
   is a system or credential directory refuses the whole check (exit 2); the message names the entry's position, never its
   text. The static pins ignore it.

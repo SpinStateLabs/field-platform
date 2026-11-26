@@ -106,6 +106,39 @@ def _root_problem(root: str) -> str | None:
     return None
 
 
+def env_file_value(path: str, name: str, required: bool = False) -> str | None:
+    """The value the compose project's ``.env`` gives ``name``, or None when it sets none (or there is no file and the
+    path was not asked for by name). Only that one assignment is looked at and nothing else in the file is kept or
+    shown: it holds secrets. ``export`` and one pair of quotes are accepted, an unquoted value ends at " #", and the
+    last assignment wins, as compose reads it. A file that exists and cannot be read, or an unfinished quote, raises
+    ValueError without any of the file's text: the caller refuses."""
+    try:
+        with open(path, encoding="utf-8-sig") as handle:
+            lines = handle.read().split("\n")
+    except FileNotFoundError:
+        if required:
+            raise ValueError(f"{name}: the env file given by --env-file does not exist") from None
+        return None
+    except (OSError, UnicodeError) as exc:
+        raise ValueError(f"{name}: the env file cannot be read ({type(exc).__name__})") from None
+    value = None
+    for line in lines:
+        key, equals, raw = line.strip().partition("=")
+        if key.startswith("export "):
+            key = key[len("export "):]
+        if not equals or key.strip() != name:
+            continue
+        raw = raw.strip()
+        if raw[:1] in ("'", '"'):
+            end = raw.find(raw[0], 1)
+            if end < 0 or not (raw[end + 1:].strip() == "" or raw[end + 1:].lstrip().startswith("#")):
+                raise ValueError(f"{name}: its line in the env file has an unfinished or trailing quote")
+            value = raw[1:end]
+        else:
+            value = "" if raw.startswith("#") else raw.split(" #", 1)[0].split("\t#", 1)[0].strip()
+    return value
+
+
 def allowed_absolute_roots(environ=None, defaults=None) -> tuple[str, ...]:
     """The default roots (``defaults``; the committed ones when None), plus those the operator adds through
     FIELD_COMPOSE_ALLOWED_ROOTS (colon-separated).

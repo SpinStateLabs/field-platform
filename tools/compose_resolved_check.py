@@ -25,6 +25,9 @@ through `FIELD_COMPOSE_ALLOWED_ROOTS`: a colon-separated list of absolute direct
 descendant of one, never the root itself). An unset or empty variable is the default; an entry that is relative, not
 literal, has a dot segment, or is a system or credential directory refuses the whole check (exit 2) and the message
 names the entry's position, never its text. The static pins check only the committed default.
+When the process environment does not set the variable, it is read from the compose project's `.env` (`--env-file`;
+by default the `.env` beside the first `--run-compose` file, else `<repo-root>/integration/demo/.env`) under the same
+rule. A variable set in the process, even empty, wins.
 
 Read-only: it never starts anything. It runs `docker compose ... config` only when `--run-compose` is given, on the
 operator's machine; otherwise it reads a file or stdin. Symlinks are followed only with `--realpath` (it must run on
@@ -85,9 +88,9 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 
 try:
     from compose_bind_rules import (  # noqa: E402  the rules the static pins use: one definition (C-512)
-        A_HOME, ALLOWED_ABSOLUTE_ROOTS, FORBIDDEN_BIND_EXACT, FORBIDDEN_BIND_TREES, FORBIDDEN_HOME_DIRS,
-        FORBIDDEN_HOME_PARENTS, NAMESPACE_OPTIONS, RUNTIME_SOCKET, allowed_absolute_roots, name_problem,
-        namespace_problem)
+        A_HOME, ALLOWED_ABSOLUTE_ROOTS, ENV_ALLOWED_ROOTS, FORBIDDEN_BIND_EXACT, FORBIDDEN_BIND_TREES,
+        FORBIDDEN_HOME_DIRS, FORBIDDEN_HOME_PARENTS, NAMESPACE_OPTIONS, RUNTIME_SOCKET, allowed_absolute_roots,
+        env_file_value, name_problem, namespace_problem)
 except Exception as exc:  # noqa: BLE001  C-932 (reviewer C-43 F-C387-1): the script copied ALONE is a usage error (exit 3), not a traceback
     # C-1070 (reviewer C-1054 F-C1054-2, ported by hand from 98de2c7): ImportError (absent, or stale: it lacks a name),
     # SyntaxError (broken) and anything the sibling raises at import are all "could not check": exit 3, one line, the
@@ -326,6 +329,16 @@ def run_compose_config(files: list[str], project_dir: str | None = None) -> str:
     return done.stdout
 
 
+def _project_env_path(args: argparse.Namespace) -> str:
+    """``--env-file``, else the .env of the compose project directory (the first compose file's, as compose takes it;
+    for a model given as text, this repository's demo project)."""
+    if args.env_file is not None:
+        return args.env_file
+    if args.run_compose:
+        return os.path.join(os.path.dirname(args.run_compose[0]) or ".", ".env")
+    return os.path.join(args.repo_root, "integration", "demo", ".env")
+
+
 def main(argv: list[str] | None = None) -> int:
     p = _Parser(description="apply the compose bind-source allowlist to a resolved compose model")
     p.add_argument("model", nargs="?", help="a file holding the output of `docker compose config`, or - for stdin")
@@ -335,38 +348,53 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--run-compose", nargs="+", metavar="FILE",
                    help="run `docker compose -f FILE ... config --format json` here (read-only; the operator's machine "
                         "only), e.g. --run-compose docker-compose.yml docker-compose.gb10.yml")
+    p.add_argument("--env-file", metavar="PATH",
+                   help="the compose project's .env, read for FIELD_COMPOSE_ALLOWED_ROOTS only when the process "
+                        "environment does not set it")
     args = p.parse_args(argv)
+    from_file = False
     try:
-        allowed_absolute_roots()   # C-1196: a bad variable entry refuses the whole check, before any model is read
-    except ValueError as exc:
-        print(f"compose-resolved: REFUSED {exc}")
-        return 2
-    try:
-        if args.run_compose:
-            text = run_compose_config(args.run_compose)
-        elif args.model:
-            text = sys.stdin.read() if args.model == "-" else open(args.model, encoding="utf-8").read()
-        else:
-            p.error("give a model file, - for stdin, or --run-compose")
-        model = load_model(text)
-    except (OSError, RuntimeError, ValueError, *((yaml.YAMLError,) if yaml else ()), subprocess.SubprocessError) as exc:
-        # ValueError covers UnicodeDecodeError (C-723, C-698 objection 1: text that is not UTF-8 exited 1 with a traceback)
-        print(f"compose-resolved: could not read the model ({type(exc).__name__})"
-              + (f": {exc}" if isinstance(exc, (NoYamlError, EmptyModelError)) else ""))
-        return 3
-    # C-638 F-C585-1: with --realpath the repository root is resolved too (a checkout reached through a symlink would
-    # otherwise be refused on every source), and a model shape the tool does not know is exit 3, never a traceback
-    repo_root = os.path.realpath(args.repo_root) if args.realpath else args.repo_root
-    try:
-        problems = check_model(model, repo_root, os.path.realpath if args.realpath else None)
-    except Exception as exc:  # noqa: BLE001 - any unexpected shape is "could not check", never a crash
-        print(f"compose-resolved: the model has a shape this tool does not know ({type(exc).__name__}): not checked")
-        return 3
-    for line in problems:
-        print(f"compose-resolved: REFUSED {line}")
-    if not problems:
-        print("compose-resolved: every bind source is allowed")
-    return 2 if problems else 0
+        try:
+            if ENV_ALLOWED_ROOTS not in os.environ:
+                value = env_file_value(_project_env_path(args), ENV_ALLOWED_ROOTS, required=args.env_file is not None)
+                if value is not None:
+                    os.environ[ENV_ALLOWED_ROOTS] = value     # for this run only: removed before returning
+                    from_file = True
+            allowed_absolute_roots()   # C-1196: a bad variable entry refuses the whole check, before any model is read
+        except ValueError as exc:
+            print(f"compose-resolved: REFUSED {exc}")
+            return 2
+        if from_file:
+            print("compose-resolved: the added allowed roots were read from the compose project's .env")
+        try:
+            if args.run_compose:
+                text = run_compose_config(args.run_compose)
+            elif args.model:
+                text = sys.stdin.read() if args.model == "-" else open(args.model, encoding="utf-8").read()
+            else:
+                p.error("give a model file, - for stdin, or --run-compose")
+            model = load_model(text)
+        except (OSError, RuntimeError, ValueError, *((yaml.YAMLError,) if yaml else ()), subprocess.SubprocessError) as exc:
+            # ValueError covers UnicodeDecodeError (C-723, C-698 objection 1: text that is not UTF-8 exited 1 with a traceback)
+            print(f"compose-resolved: could not read the model ({type(exc).__name__})"
+                  + (f": {exc}" if isinstance(exc, (NoYamlError, EmptyModelError)) else ""))
+            return 3
+        # C-638 F-C585-1: with --realpath the repository root is resolved too (a checkout reached through a symlink would
+        # otherwise be refused on every source), and a model shape the tool does not know is exit 3, never a traceback
+        repo_root = os.path.realpath(args.repo_root) if args.realpath else args.repo_root
+        try:
+            problems = check_model(model, repo_root, os.path.realpath if args.realpath else None)
+        except Exception as exc:  # noqa: BLE001 - any unexpected shape is "could not check", never a crash
+            print(f"compose-resolved: the model has a shape this tool does not know ({type(exc).__name__}): not checked")
+            return 3
+        for line in problems:
+            print(f"compose-resolved: REFUSED {line}")
+        if not problems:
+            print("compose-resolved: every bind source is allowed")
+        return 2 if problems else 0
+    finally:
+        if from_file:
+            os.environ.pop(ENV_ALLOWED_ROOTS, None)
 
 
 if __name__ == "__main__":
