@@ -23,6 +23,7 @@ from typing import Literal
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
 
 from field_core import operator_auth, operator_health
+from field_core.ids import REGISTRY_ID_MAX_LENGTH, REGISTRY_ID_PATTERN
 from field_core.startup import warn_open
 from fastapi.responses import JSONResponse
 
@@ -76,13 +77,13 @@ from spend_governor.usage import (
 # The numbers are proposals, flagged for the owner.
 MAX_NOTE_LEN = 1000  # the ledger copy is still cut to 300 (pinned by test_usage_55_and_notes)
 MAX_LABEL_LEN = 200   # action, model
-MAX_ID_LEN = 128      # agent_id, the registry id style
+MAX_ID_LEN = REGISTRY_ID_MAX_LENGTH   # agent_id, the registry id rule
 
 
 class SpendRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    agent_id: str = Field(min_length=1, max_length=MAX_ID_LEN)
+    agent_id: str = Field(min_length=1, max_length=MAX_ID_LEN, pattern=REGISTRY_ID_PATTERN)
     cents: int = Field(default=0, ge=0, le=MAX_AMOUNT)
     tokens: int = Field(default=0, ge=0, le=MAX_AMOUNT)
     actions: int = Field(default=0, ge=0, le=MAX_AMOUNT)
@@ -115,7 +116,7 @@ class TotalsResponse(BaseModel):
 class UsageRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    agent_id: str = Field(min_length=1, max_length=MAX_ID_LEN)
+    agent_id: str = Field(min_length=1, max_length=MAX_ID_LEN, pattern=REGISTRY_ID_PATTERN)
     model: str = Field(min_length=1, max_length=MAX_LABEL_LEN, description="Model the agent used")
     input_tokens: int = Field(default=0, ge=0, le=MAX_AMOUNT)
     output_tokens: int = Field(default=0, ge=0, le=MAX_AMOUNT)

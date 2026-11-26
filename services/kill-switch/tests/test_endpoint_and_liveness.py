@@ -959,9 +959,9 @@ def test_the_drill_signal_carries_the_drill_reason(stack, monkeypatch):
 
 
 def test_adversarial_reason_cannot_inject_a_header_and_is_capped(tmp_path, monkeypatch):
-    """Free operator text with CR/LF and non-ASCII must never reach the wire
-    raw (header injection, or an httpx encode error that turns a kill's signal
-    into `failed`). A real httpx client over a mock transport proves the
+    """Free operator text with non-ASCII and percent or colon sequences must never reach the wire
+    raw (an httpx encode error that turns a kill's signal into `failed`). A reason with CR/LF is
+    refused at the request (422, nothing sent). A real httpx client over a mock transport proves the
     encoded value is a legal header; the cap bounds it."""
     import httpx
     from urllib.parse import unquote
@@ -977,9 +977,12 @@ def test_adversarial_reason_cannot_inject_a_header_and_is_capped(tmp_path, monke
     client = httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=False)
     monkeypatch.setenv("FIELD_KILL_ENDPOINT_ALLOWLIST", ALLOWED)
     local = Stack(tmp_path, endpoint=client)
-    evil = "x3-abc" + chr(13) + chr(10) + "x-injected: stolen" + chr(13) + chr(10) + "été " + "z" * 900
+    evil = "x3-abc %0d%0a x-injected: stolen été " + "z" * 900
     local.with_endpoint("invoicing-agent", f"http://{ALLOWED}/hooks/halt")
     try:
+        two_lines = "x3-abc" + chr(13) + chr(10) + "x-injected: stolen"
+        refused = local.kill.post("/kill/invoicing-agent", json={"operator": "CISO on-call", "reason": two_lines})
+        assert refused.status_code == 422 and seen == []
         r = local.kill.post("/kill/invoicing-agent", json={"operator": "CISO on-call", "reason": evil})
     finally:
         client.close()
@@ -987,7 +990,7 @@ def test_adversarial_reason_cannot_inject_a_header_and_is_capped(tmp_path, monke
     assert r.json()["endpoint_result"]["outcome"] == "called"
     assert len(seen) == 1
     raw = seen[0].headers[REASON_HEADER]
-    assert chr(13) not in raw and chr(10) not in raw and raw.isascii()
+    assert " " not in raw and raw.isascii()
     assert "x-injected" not in {k.lower() for k in seen[0].headers.keys()}
     assert unquote(raw) == evil[:REASON_HEADER_MAX]
 

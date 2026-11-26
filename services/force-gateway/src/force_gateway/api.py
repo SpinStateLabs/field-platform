@@ -664,7 +664,9 @@ def _meter_usage(app: FastAPI, agent_id: str | None, model: str,
     """Best-effort token report for a call that names an agent. Cost-aware
     `/usage` (model + input/output tokens, so the governor prices it and runs
     rogue detection); raw-token `/spend` for older governors (404 on /usage).
-    Never raises: metering must not fail traffic (the sentinel gates actions)."""
+    Never raises: metering must not fail traffic (the sentinel gates actions).
+    A report the governor answers with any other non-2xx status is counted and
+    logged like a failed one; 404 (no such route, or no cap for the agent) is not."""
     gov = app.state.governor
     if gov is None or not agent_id:
         return
@@ -674,11 +676,16 @@ def _meter_usage(app: FastAPI, agent_id: str | None, model: str,
             "input_tokens": input_tokens, "output_tokens": output_tokens,
             "note": note,
         })
-        if getattr(resp, "status_code", 201) == 404:
-            gov.post("/spend", json={
+        status = getattr(resp, "status_code", 201)
+        if status == 404:
+            resp = gov.post("/spend", json={
                 "agent_id": agent_id, "tokens": input_tokens + output_tokens,
                 "note": note,
             })
+            status = getattr(resp, "status_code", 201)
+        if status != 404 and not 200 <= status < 300:
+            app.state.spend_forwards_dropped += 1
+            log.warning("spend forward to the governor refused (HTTP %s); request kept", status)
     except Exception as exc:
         # Traffic stands; the metering gap is now visible: counted for /health and
         # logged (the exception TYPE only: its text can carry a URL or a value).

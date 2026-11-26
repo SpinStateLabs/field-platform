@@ -39,7 +39,9 @@ from field_core.startup import warn_open
 from field_core.authn import HEADER as AUTH_HEADER, install as install_authn, shared_secret
 from field_core.http import get_retrying_once, pooled_limits
 from field_core.http_errors import install_validation_handler
+from field_core.ids import REGISTRY_ID_MAX_LENGTH, REGISTRY_ID_PATTERN, registry_id_ok
 from field_core.buildinfo import build_sha
+from field_core.stop_text import require_operator, require_reason
 from field_core.clients import (
     CallerSigner,
     LedgerUnreachableError,
@@ -209,7 +211,22 @@ MAX_OPERATOR_CHARS = 200
 MAX_REASON_CHARS = 1000
 
 
-class OperatorAction(BaseModel):
+class _StopText(BaseModel):
+    """The two texts of a stop action, held at the console to the kill-switch's character rules
+    (``field_core.stop_text``): a value it would refuse is one 422 here and nothing is sent."""
+
+    @field_validator("operator", check_fields=False)
+    @classmethod
+    def _writable_operator(cls, value: str) -> str:
+        return require_operator(value)
+
+    @field_validator("reason", check_fields=False)
+    @classmethod
+    def _one_plain_line(cls, value: str) -> str:
+        return require_reason(value)
+
+
+class OperatorAction(_StopText):
     model_config = ConfigDict(extra="forbid")
 
     operator: str = Field(min_length=1, max_length=MAX_OPERATOR_CHARS, description="Human operator — recorded")
@@ -223,10 +240,10 @@ class ResolveAction(BaseModel):
 
 
 #: The registry's agent id grammar (agent_registry/models.py), the only ids a bulk action may name.
-AGENT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+AGENT_ID_RE = re.compile(REGISTRY_ID_PATTERN)
 
 
-class BulkAction(BaseModel):
+class BulkAction(_StopText):
     model_config = ConfigDict(extra="forbid")
 
     action: Literal["kill", "drill", "revive"]
@@ -245,7 +262,7 @@ class BulkAction(BaseModel):
         return ids
 
 
-class FleetHalt(BaseModel):
+class FleetHalt(_StopText):
     model_config = ConfigDict(extra="forbid")
 
     operator: str = Field(min_length=1, max_length=MAX_OPERATOR_CHARS, description="Human operator — recorded")
@@ -279,7 +296,7 @@ class CheckRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # B-S11-31: bounded here because the sentinel does not bound them and the verdict lands on the ledger.
-    agent_id: str = Field(min_length=1, max_length=128)
+    agent_id: str = Field(min_length=1, max_length=REGISTRY_ID_MAX_LENGTH)
     action: str = Field(min_length=1, max_length=500)
     token_id: str | None = Field(default=None, min_length=1, max_length=200)
     irreversible: bool = False
@@ -422,7 +439,7 @@ def _named_halt_uncovered(registry: Any, results: list[dict[str, Any]]) -> tuple
         if isinstance(d, str) and REGISTRY_DOMAIN_RE.fullmatch(d.strip(" ")):
             continue
         aid = row.get("agent_id")
-        aid = aid if isinstance(aid, str) and len(aid) <= 128 and AGENT_ID_RE.fullmatch(aid) else None
+        aid = aid if registry_id_ok(aid) else None
         if aid is not None and aid in reached:
             continue
         out.append({"agent_id": aid, "reason": "domain is outside the registry rule: no named halt reaches it"})
@@ -993,7 +1010,7 @@ def create_app(
                 aid = a.get("agent_id")
                 # a usable id is ONE valid path segment (AGENT_ID_RE, at most 128 chars): anything else (a "/" would
                 # reach the whole-domain route, C-936 F-C936-1) is reported but never used to build a URL
-                aid = aid if isinstance(aid, str) and len(aid) <= 128 and AGENT_ID_RE.fullmatch(aid) else None
+                aid = aid if registry_id_ok(aid) else None
                 # a missing key or null is the default domain; any other non-string (0, False, [], {}) or a blank or
                 # slashed string is malformed, never silently "general"
                 d = a["domain"] if a.get("domain") is not None else "general"

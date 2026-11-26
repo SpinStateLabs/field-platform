@@ -82,7 +82,7 @@ def test_the_operator_and_reason_come_back_exactly_as_sent_padding_and_case_incl
     """Review B6: a validator that returns value.strip() (or changes case) passes a bare 200 check; pin the values."""
     stack = Stack(tmp_path)
     stack.register("agent-1")
-    sent = {"operator": "  Don  HAGELL" + chr(9), "reason": chr(10) + " incident 42, RE-check " + chr(10)}
+    sent = {"operator": "  Don  HAGELL" + chr(9), "reason": "  incident 42, RE-check  "}
     r = stack.kill.post("/kill/agent-1", json=sent)
     assert r.status_code == 200, r.text
     body = r.json()
