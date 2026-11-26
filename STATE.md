@@ -352,7 +352,7 @@ on e07cd5b. Portal wiring: Netlify ESTATE_URL set; ESTATE_SHARED_SECRET
 + the GitHub repo link are the remaining human clicks. This is the
 PRODUCT estate (sentinel enforce); GB10 remains the private burn-in
 estate (log_only).
-[2026-11-12 correction: that was true on 2026-09-14. GB10 has since been armed to enforce (Stage 3 REQUIRE, 2026-11-10), so GB10 is no longer only a burn-in estate; Fly remains the product estate.]
+[2026-11-12 correction, reworded 2026-11-26 (B-1058-STATE-FIX): "GB10 remains the private burn-in estate (log_only)" was already false on 2026-09-14: the GB10 has run ENFORCE since the 2026-09-08 cutover (the "Dogfood step 1" section above; see also the 2026-11-08 E3 correction below). Fly is the product estate. Current estate deployment status is not stated here, by policy (`docs/DOSSIER.md`, Status, last bullet).]
 PRODUCT estate (sentinel enforce).
 [CORRECTED 2026-11-08 (E3): the closing clause of this sentence called the
 GB10 "the private burn-in estate (log_only)". That stopped being true at the
