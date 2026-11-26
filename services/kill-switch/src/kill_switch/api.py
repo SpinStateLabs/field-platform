@@ -60,6 +60,7 @@ import logging
 import re
 import threading
 import time
+import unicodedata
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -135,6 +136,15 @@ class KillRequest(BaseModel):
         # min_length=1 let ' ' or a tab through to the kill / revive / drill ledger rows. The value is kept as sent.
         if not value.strip():
             raise ValueError("must not be blank")
+        return value
+
+    @field_validator("reason")
+    @classmethod
+    def _one_plain_line(cls, value: str) -> str:
+        """No control, invisible-format, line- or paragraph-separator character (the force-gateway's header rule): the
+        reason is written to ledger rows and shown to people."""
+        if any(unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp") for ch in value):
+            raise ValueError("must be one line without control or invisible format characters")
         return value
 
 

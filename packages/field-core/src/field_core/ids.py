@@ -11,6 +11,8 @@ import re
 
 #: Use with ``fullmatch``. The registry's stored-id pattern; a NEW id is held to a stricter one there.
 REGISTRY_ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]*")
+#: The same rule, anchored, for a pydantic ``Field(pattern=...)`` (with ``max_length=REGISTRY_ID_MAX_LENGTH``).
+REGISTRY_ID_PATTERN = r"^[a-z0-9][a-z0-9._-]*$"
 REGISTRY_ID_MAX_LENGTH = 128
 
 
