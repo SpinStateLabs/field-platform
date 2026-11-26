@@ -12,8 +12,10 @@ From a field-platform checkout, with the interpreter that has the services' depe
 
 ```bash
 git fetch origin main
-python3 tools/rollback_read_check.py --repo . --old cb7a94f8 --new origin/main --python "$TRAIN_PYTHON" --json rollback-read.json
+python3 tools/rollback_read_check.py --repo . --old "$OLD_SHA" --new origin/main --python "$TRAIN_PYTHON" --json rollback-read.json
 ```
+
+`--old` is required and has no default: give the SHA of the release a rollback would return to. A run without it exits 2.
 
 Pass the exact deploy SHA as `--new` for the final run. `$TRAIN_PYTHON` stands for the train's virtual environment interpreter.
 
