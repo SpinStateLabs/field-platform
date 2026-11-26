@@ -206,7 +206,8 @@ class _Retry503Opener:
                     if exc.code == 503 and req.get_method() == "GET":
                         raise _spent(exc) from None
                     raise
-                _sleep(min(_retry_after_s(exc, attempt), left))
+                with ep.between_attempts():     # the wait is not part of any attempt's --timeout
+                    _sleep(min(_retry_after_s(exc, attempt), left))
                 attempt += 1
 
 

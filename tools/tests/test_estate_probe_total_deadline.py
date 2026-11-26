@@ -18,6 +18,7 @@ import pytest
 TOOLS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOLS))
 import estate_probe as ep  # noqa: E402
+import phase_g_check as pg  # noqa: E402
 
 TIMEOUT = 1.0    # --timeout under test
 TRICKLE = 0.2    # one byte every TRICKLE s: far below TIMEOUT, so no single socket read ever times out
@@ -114,5 +115,65 @@ def test_a_fast_answer_is_unchanged():
     try:
         assert ep.Estate(server.base, None, timeout=TIMEOUT).call("GET", "/ledger/health", auth=False) == \
             (200, {"service": "sealed-ledger"})
+    finally:
+        server.close()
+
+
+class Busy(Slowloris):
+    """Answers 503 with ``Retry-After: 1`` to the first ``busy`` requests, then 200."""
+
+    def __init__(self, busy: int):
+        self.busy, self.seen, self._count = busy, 0, threading.Lock()
+        super().__init__("body")
+
+    def _answer(self, conn):
+        try:
+            conn.settimeout(5)
+            conn.recv(65536)
+            with self._count:
+                self.seen += 1
+                refuse = self.seen <= self.busy
+            status = b"503 Service Unavailable\r\nRetry-After: 1" if refuse else b"200 OK"
+            body = b'{"service": "sealed-ledger"}'
+            conn.sendall(b"HTTP/1.1 " + status + b"\r\nContent-Type: application/json\r\nContent-Length: "
+                         + str(len(body)).encode() + b"\r\nConnection: close\r\n\r\n" + body)
+        except OSError:
+            pass
+        finally:
+            conn.close()
+
+
+@pytest.mark.parametrize("busy, expected, requests", [(2, 200, 3), (99, 503, 1 + pg.RETRY_MAX)], ids=["recovers", "spent"])
+def test_a_retry_layers_waits_are_outside_the_timeout(busy, expected, requests):
+    """The waits add up to more than --timeout: the answer is still the server's own, never a transport error."""
+    server = Busy(busy)
+    try:
+        estate = pg._with_503_retry(ep.Estate(server.base, None, timeout=TIMEOUT))
+        start = time.monotonic()
+        status, _ = estate.call("GET", "/ledger/health", auth=False)
+        assert time.monotonic() - start > TIMEOUT, "the case must outlast one attempt's limit"
+        assert status == expected and server.seen == requests
+    finally:
+        server.close()
+
+
+def test_a_trickled_answer_after_a_wait_still_fails_closed():
+    class BusyThenSlow(Busy):
+        def _answer(self, conn):
+            with self._count:
+                first = self.seen == 0
+            if first:
+                return Busy._answer(self, conn)
+            with self._count:
+                self.seen += 1
+            return Slowloris._answer(self, conn)
+
+    server = BusyThenSlow(1)
+    try:
+        estate = pg._with_503_retry(ep.Estate(server.base, None, timeout=TIMEOUT))
+        start = time.monotonic()
+        status, body = estate.call("GET", "/ledger/health", auth=False)
+        assert status == 0 and body == {"transport_error": "TimeoutError"}
+        assert time.monotonic() - start < 1 + TIMEOUT + SLACK        # one wait, then one bounded attempt
     finally:
         server.close()

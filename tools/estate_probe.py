@@ -91,6 +91,7 @@ Subcommands (all take --base):
 from __future__ import annotations
 
 import argparse
+import contextlib
 import http.client
 import ipaddress
 import json
@@ -453,7 +454,7 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class _Deadline:
-    """A wall-clock limit on ONE request (B-1074-TOTAL-DEADLINE). The ``timeout=`` of ``urlopen`` bounds each socket
+    """A wall-clock limit on ONE HTTP attempt (B-1074-TOTAL-DEADLINE). The ``timeout=`` of ``urlopen`` bounds each socket
     operation, so a server that sends one byte at a time never trips it. When ``seconds`` pass, this shuts every socket
     the request opened down (through a duplicate descriptor, so it also reaches a socket TLS has since wrapped), which
     wakes the blocked read; ``fired`` then makes the call a transport error, whatever the read returned (fail closed)."""
@@ -462,8 +463,28 @@ class _Deadline:
         self.fired = False
         self._dups: list[socket.socket] = []
         self._lock = threading.Lock()
-        self._timer = threading.Timer(seconds, self._fire)
-        self._timer.daemon = True
+        self._seconds = seconds
+        self._timer = self._new_timer()
+
+    def _new_timer(self) -> threading.Timer:
+        timer = threading.Timer(self._seconds, self._fire)
+        timer.daemon = True
+        return timer
+
+    def pause(self) -> None:
+        self._timer.cancel()
+
+    def restart(self) -> None:
+        """A fresh limit for the next attempt. A limit already overrun stays overrun (fail closed)."""
+        self._timer.cancel()
+        with self._lock:
+            if self.fired:
+                return
+            dups, self._dups = self._dups, []
+        for dup in dups:
+            dup.close()
+        self._timer = self._new_timer()
+        self._timer.start()
 
     def track(self, sock: socket.socket) -> socket.socket:
         dup = sock.dup()
@@ -504,6 +525,20 @@ class _Deadline:
 _ACTIVE = threading.local()   # .deadline: the _Deadline of the request this thread is sending, if any
 
 
+@contextlib.contextmanager
+def between_attempts():
+    """For a retry layer that resends inside one ``_OPENER.open``: the wait in this block is not counted, and the
+    attempt after it gets the full limit again. Outside a request it does nothing."""
+    deadline = getattr(_ACTIVE, "deadline", None)
+    if deadline is not None:
+        deadline.pause()
+    try:
+        yield
+    finally:
+        if deadline is not None:
+            deadline.restart()
+
+
 def _tracked(conn_class):
     class Conn(conn_class):
         def __init__(self, *args, **kw):
@@ -535,7 +570,8 @@ _OPENER = urllib.request.build_opener(_NoRedirect, urllib.request.ProxyHandler({
 
 
 def _fetch(req: urllib.request.Request, seconds: float) -> tuple[int, bytes, str | None]:
-    """Send ``req`` and read the answer within ``seconds`` IN ALL (connect, headers and body), not per socket read.
+    """Send ``req`` and read the answer within ``seconds`` per HTTP attempt (headers and body in all), not per socket
+    read. Name resolution and the TCP connect are bounded only by the socket timeout.
     Returns (status, raw body, Retry-After). An overrun raises ``TimeoutError``; a 4xx/5xx is an answer, not a raise."""
     with _Deadline(seconds) as deadline:
         _ACTIVE.deadline = deadline
@@ -1217,7 +1253,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--base", required=True)
     parser.add_argument("--secret-file")
     parser.add_argument("--timeout", metavar="SECONDS",
-                        help=f"wall-clock limit of every request (connect, headers and body in all), in every subcommand "
+                        help=f"wall-clock limit of every HTTP attempt (headers and body in all), in every subcommand "
                              f"(default: ${TIMEOUT_ENV}, else {DEFAULT_TIMEOUT:g}); a request that outlasts it fails "
                              f"the check. It is also the retry "
                              f"budget of one call: a busy 503 with a Retry-After is resent while the wait leaves at "
