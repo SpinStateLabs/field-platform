@@ -126,3 +126,10 @@ def test_the_overflow_safe_sum_still_holds_for_a_mixed_model(store):
     add(store, MODEL, big)
     add(store, MODEL, big)
     assert store.usage_totals_since(AGENT, since())[2] == 2 * big      # beyond int64 once added, still exact
+
+
+def test_a_priced_model_that_costs_nothing_shows_zero_not_none(client, store):
+    """Priced at zero is a known cost: only a model with no priced cost at all is shown without one."""
+    add(store, MODEL, 0)
+    m = by_model(client)[MODEL]
+    assert m["priced"] is True and m["cost_units"] == 0
