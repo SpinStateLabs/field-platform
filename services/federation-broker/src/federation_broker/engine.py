@@ -153,6 +153,49 @@ def _not_blank(value: Any) -> Any:
     return value
 
 
+#: Bounds on a free-form manifest dict (S6-11). A real FIELD manifest is a few levels deep and a few hundred values.
+#: Container nesting allowed in a free-form manifest: the top-level dict is depth 1, so 64 nested containers pass and a
+#: 65th is refused. Only containers (dict, list, tuple) are depth-checked; a string or number at depth 65 is fine.
+MANIFEST_MAX_DEPTH = 64
+#: Every item the walk visits counts toward this: the top-level container, every nested container, every dict KEY
+#: and every value. So {"k": "v"} is 3, and a dict of 25,000 scalar entries is 50,001 (refused) although it holds
+#: only 25,000 values. Pinned by tests/test_lone_surrogate.py (the 50,000 / 50,001 and 64 / 65 boundary tests).
+MANIFEST_MAX_NODES = 50_000
+
+
+def _check_manifest_text(value: Any, field: str) -> Any:
+    """Refuse a free-form manifest dict that holds text not encodable as UTF-8 (a lone surrogate such as the JSON
+    escape ``\\ud800``, in a key or a value, at any depth), nests deeper than ``MANIFEST_MAX_DEPTH``, or holds more
+    than ``MANIFEST_MAX_NODES`` values. pydantic constrains the typed ``str`` fields but not the strings inside a
+    ``dict[str, Any]``; the SQLite bind and the ledger payload then fail on such text. The walk is ITERATIVE
+    (explicit stack): a recursive walk turned a deeply nested manifest into a RecursionError, a 500. The error names
+    the field only, never the text."""
+    if value is None:
+        return value
+    stack: list[tuple[Any, int]] = [(value, 1)]
+    nodes = 0
+    while stack:
+        item, depth = stack.pop()
+        nodes += 1
+        if nodes > MANIFEST_MAX_NODES:
+            raise ValueError(f"{field} holds more than {MANIFEST_MAX_NODES} values")
+        if isinstance(item, str):
+            try:
+                item.encode("utf-8")
+            except UnicodeEncodeError:
+                raise ValueError(f"{field} holds text that is not valid UTF-8 (a lone surrogate)") from None
+        elif isinstance(item, (dict, list, tuple)):
+            if depth > MANIFEST_MAX_DEPTH:
+                raise ValueError(f"{field} nests deeper than {MANIFEST_MAX_DEPTH} levels")
+            if isinstance(item, dict):
+                for k, v in item.items():
+                    stack.append((k, depth + 1))
+                    stack.append((v, depth + 1))
+            else:
+                stack.extend((v, depth + 1) for v in item)
+    return value
+
+
 class FederationContract(BaseModel):
     # hide_input_in_errors: a ValidationError's text must not quote an input
     # that may be a pasted private key (the API's 422 drops ``input`` too).
@@ -232,7 +275,8 @@ REFUSED_NAMES: dict[str, tuple[str, ...]] = {
 
 
 class CrossingRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    # hide_input_in_errors: a ValidationError's own text must not quote the request (the API's 422 drops ``input``)
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     direction: Direction = Field(
         default="inbound",
@@ -269,6 +313,11 @@ class CrossingRequest(BaseModel):
     @classmethod
     def _names_not_blank(cls, value: Any) -> Any:
         return _not_blank(value)
+
+    @field_validator("counterparty_manifest", "manifest")
+    @classmethod
+    def _manifest_text_is_utf8_and_bounded(cls, value: Any, info: ValidationInfo) -> Any:
+        return _check_manifest_text(value, info.field_name or "manifest")
 
     @model_validator(mode="after")
     def _names_match_direction(self) -> "CrossingRequest":
