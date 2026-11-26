@@ -41,6 +41,13 @@ def test_operator_text_with_an_unpaired_surrogate_is_refused(code):
     assert "zz-marker" not in str(exc.value)
 
 
-@pytest.mark.parametrize("text", ORDINARY + ["  CISO" + chr(9), "a" + chr(0x200D) + "b", ""])
+@pytest.mark.parametrize("text", ["", " ", "   ", chr(9), chr(10), " " + chr(9) + " ", chr(0xA0), chr(0x2028)])
+def test_blank_operator_text_is_refused(text):
+    assert operator_ok(text) is False
+    with pytest.raises(ValueError):
+        require_operator(text)
+
+
+@pytest.mark.parametrize("text", ORDINARY + ["  CISO" + chr(9), "a" + chr(0x200D) + "b"])
 def test_operator_text_is_held_to_less_than_a_reason(text):
     assert operator_ok(text) is True and require_operator(text) is text

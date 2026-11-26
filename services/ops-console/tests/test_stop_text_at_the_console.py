@@ -1,5 +1,5 @@
-"""The console holds a stop action's reason and operator to the kill-switch's character rules: a refused value is one
-422 and the kill-switch is never called; an ordinary one is sent on as typed."""
+"""The console holds a stop action's reason and operator to the kill-switch's text rules: a refused value is one 422
+and the kill-switch is never called; an ordinary one is sent on as typed."""
 from __future__ import annotations
 
 import json
@@ -79,6 +79,23 @@ def test_operator_text_with_an_unpaired_surrogate_never_reaches_the_kill_switch(
     r = send(client, path, {**extra, "operator": "CISO" + chr(0xD800), "reason": "incident"})
     assert r.status_code == 422, r.text
     assert ks.calls == []
+
+
+@pytest.mark.parametrize("route", ROUTES)
+@pytest.mark.parametrize("blank", [" ", "   ", chr(9), chr(10)], ids=["space", "spaces", "tab", "line-feed"])
+def test_a_blank_operator_never_reaches_the_kill_switch(console, route, blank):
+    client, ks, _ = console
+    path, extra, _sent = ROUTES[route]
+    r = send(client, path, {**extra, "operator": blank, "reason": "incident"})
+    assert r.status_code == 422, r.text
+    assert ks.calls == []
+
+
+def test_a_fleet_halt_with_a_blank_operator_and_no_named_domains_does_not_read_the_registry(console):
+    client, ks, other = console
+    r = send(client, "/api/fleet/halt", {"operator": "   ", "reason": "incident", "confirm": "HALT"})
+    assert r.status_code == 422, r.text
+    assert ks.calls == [] and other.reads == []
 
 
 @pytest.mark.parametrize("route", ROUTES)
