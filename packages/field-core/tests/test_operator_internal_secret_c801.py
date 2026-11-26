@@ -104,9 +104,11 @@ def test_the_value_form_refuses_a_wrong_or_empty_header(monkeypatch):
 
 
 def test_when_both_forms_are_set_the_header_must_satisfy_both(monkeypatch):
+    """The mismatched pair is refused at install (S10-3), so the app is installed with the hash alone and the value is
+    set afterwards: the request-time check stays as defence in depth."""
     monkeypatch.setenv(oh.ENV_INTERNAL_SECRET_SHA256, INTERNAL_HASH)
-    monkeypatch.setenv(oh.ENV_INTERNAL_SECRET, "tkv-c801-a-different-value-0123")
     c = client()
+    monkeypatch.setenv(oh.ENV_INTERNAL_SECRET, "tkv-c801-a-different-value-0123")
     assert state(c, INTERNAL).status_code == 404
     monkeypatch.setenv(oh.ENV_INTERNAL_SECRET, INTERNAL)
     assert state(c, INTERNAL).status_code == 200
@@ -229,9 +231,10 @@ def test_an_absent_or_empty_header_never_passes_whatever_is_configured(monkeypat
 
 
 def test_both_forms_set_with_a_wrong_hash_and_the_right_value_is_refused(monkeypatch):
+    """Installed with the hash alone (the mismatched pair is refused at install, S10-3); the value is set afterwards."""
     monkeypatch.setenv(oh.ENV_INTERNAL_SECRET_SHA256, hashlib.sha256(b"another-secret-0123456789").hexdigest())
-    monkeypatch.setenv(oh.ENV_INTERNAL_SECRET, INTERNAL)
     c = client()
+    monkeypatch.setenv(oh.ENV_INTERNAL_SECRET, INTERNAL)
     assert state(c, INTERNAL).status_code == 404
     assert state(c, "another-secret-0123456789").status_code == 404
 
