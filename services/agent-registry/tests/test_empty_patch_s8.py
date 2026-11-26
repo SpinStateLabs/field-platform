@@ -82,3 +82,28 @@ def test_a_patch_equal_to_the_current_values_is_a_real_write_that_moves_updated_
     assert r.status_code == 200
     assert r.json()["updated_at"] > before["updated_at"]
     assert [e[0] for e in ledger.events] == ["registry.updated"]
+
+
+@pytest.mark.parametrize("stale", [False, True], ids=["current", "stale"])
+def test_the_condition_alone_is_an_empty_patch(registry, stale):
+    client, ledger = registry
+    before = client.get("/agents/invoicing-agent").json()
+    seen = "2000-01-01T00:00:00+00:00" if stale else before["updated_at"]
+    r = client.patch("/agents/invoicing-agent", json={"if_updated_at": seen})
+    assert r.status_code == 422 and r.json()["detail"][0]["loc"] == ["body"]
+    assert ledger.events == []
+    assert client.get("/agents/invoicing-agent").json() == before
+    with pytest.raises(ValidationError, match="at least one field"):
+        AgentUpdate(if_updated_at=seen)
+
+
+def test_the_condition_with_one_field_still_applies_and_a_stale_one_is_412(registry):
+    client, ledger = registry
+    seen = client.get("/agents/invoicing-agent").json()["updated_at"]
+    r = client.patch("/agents/invoicing-agent", json={"domain": "ops", "if_updated_at": seen})
+    assert r.status_code == 200 and r.json()["domain"] == "ops"
+    assert ledger.events[-1][1] == {"fields": ["domain"]}
+    ledger.events.clear()
+    r = client.patch("/agents/invoicing-agent", json={"domain": "legal", "if_updated_at": seen})
+    assert r.status_code == 412
+    assert client.get("/agents/invoicing-agent").json()["domain"] == "ops"

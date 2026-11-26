@@ -199,6 +199,14 @@ class AgentUpdate(BaseModel):
     def _domain_shape(cls, v: str | None) -> str | None:
         return _new_domain(v)
 
+    @model_validator(mode="after")
+    def _at_least_one_field(self) -> "AgentUpdate":
+        """S8-15: a patch that edits nothing wrote no row yet was ledgered as ``registry.updated`` with no fields.
+        ``if_updated_at`` is a condition on the write, not a field to change, so alone it edits nothing."""
+        if all(getattr(self, f) is None for f in type(self).model_fields if f != "if_updated_at"):
+            raise ValueError("a patch must carry at least one field to change")
+        return self
+
 
 def parse_updated_at(value: str) -> datetime:
     """An ISO 8601 timestamp as an aware UTC datetime (``Z`` accepted, naive taken as UTC); ValueError otherwise."""
@@ -207,13 +215,6 @@ def parse_updated_at(value: str) -> datetime:
         text = text[:-1] + "+00:00"
     parsed = datetime.fromisoformat(text)
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
-
-    @model_validator(mode="after")
-    def _at_least_one_field(self) -> "AgentUpdate":
-        """S8-15: a patch that edits nothing wrote no row yet was ledgered as ``registry.updated`` with no fields."""
-        if all(getattr(self, f) is None for f in type(self).model_fields):
-            raise ValueError("a patch must carry at least one field to change")
-        return self
 
 
 class ShadowCandidate(BaseModel):
