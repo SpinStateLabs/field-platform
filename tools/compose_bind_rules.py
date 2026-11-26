@@ -34,7 +34,7 @@ def name_problem(names):
 # `FIELD_CALLER_KEYS_DIR` to (a test keeps the two in step), so a different user or directory is one reviewed edit here
 # and in the compose defaults, never a second spelling elsewhere. C-617: it lives here, with the other shared rules,
 # so the static pins and the resolved-model check cannot drift.
-CALLER_KEYS_ROOT = "/home/spinner/.field-local/caller-keys"
+CALLER_KEYS_ROOT = "/home/user/.field-local/caller-keys"
 ALLOWED_ABSOLUTE_ROOTS = (CALLER_KEYS_ROOT,)
 
 # C-500 (reviewer C-454 F-C454-1): the path rule is an allowlist, so the keys that can carry a path are one too. A service

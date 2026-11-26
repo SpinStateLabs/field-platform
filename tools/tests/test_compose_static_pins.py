@@ -672,7 +672,7 @@ PAIR_MUTANTS = {
     **{f"a GB10 bind of {src}": (lambda s: lambda base, gb10: (base, re.sub(
         r"(\n  registry:\n(?:    (?:#|<<)[^\n]*\n)*    volumes:\n)", r"\1      - '" + s + ":/h'\n", gb10, count=1)))(src)
        for src in ("/run", "/run/podman/podman.sock", "/run/containerd/containerd.sock", "/var/lib", "/var/lib/containerd",
-                   "/var/lib/kubelet", "/home/spinner/.ssh", "/home/spinner/.aws", "/home/spinner/.docker",
+                   "/var/lib/kubelet", "/home/user/.ssh", "/home/user/.aws", "/home/user/.docker",
                    "${A:-${B:-/}}", "${X:+/}", "${X:=/}", "../../..", "./../../../etc", "~/.ssh", "/srv/x/crio.sock")},
     "a GB10 named volume bound to / through driver_opts": _top_volume("/"),
     "a GB10 named volume bound to /etc through driver_opts": _top_volume("/etc"),
@@ -721,7 +721,7 @@ def test_compose_merge_removes_a_reset_key_and_replaces_command_entrypoint_and_h
     ("/sys/fs/cgroup", True), ("/var/lib/docker/volumes", True), ("/var/run/docker.sock", True), ("/root", True),
     ("/root/.ssh", True), ("/dev", True), ("/dev/mem", True), ("/boot", True), ("/home", True), ("/var", True),
     ("/usr", True), ("${X:-/}", True), ("${X:-/etc}/ssh", True), ("${X-/}", True), ("/etc/../etc/shadow", True),
-    ("/home/spinner/.field-local/caller-keys/registry", False), ("${KEYS:-/home/spinner/.field-local/caller-keys}/w", False),
+    ("/home/user/.field-local/caller-keys/registry", False), ("${KEYS:-/home/user/.field-local/caller-keys}/w", False),
     ("/var/log/app", False), ("/usr/share/zoneinfo", False), ("/opt/field/data", False), ("./operators", False),
     ("field-data", False), ("${FIELD_OPERATORS_DIR:-./operators}", False), ("${NO_DEFAULT}", False),
 ])
@@ -733,8 +733,8 @@ def test_the_forbidden_bind_sources_are_trees_or_exact_paths_as_stated(source, f
 @pytest.mark.parametrize("source", [
     "/run", "/run/", "/run/user/1000", "/var/run", "/var/run/user/1000", "/var/run/anything", "/run/containerd/containerd.sock", "/run/podman/podman.sock",
     "/var/run/crio/crio.sock", "/var/lib", "/var/lib/", "/var/lib/containerd", "/var/lib/containerd/io.containerd",
-    "/var/lib/kubelet", "/var/lib/kubelet/pods", "/home/spinner/.ssh", "/home/spinner/.ssh/id_ed25519",
-    "/home/spinner/.aws", "/home/spinner/.aws/credentials", "/home/spinner/.docker", "/home/spinner/.docker/config.json",
+    "/var/lib/kubelet", "/var/lib/kubelet/pods", "/home/user/.ssh", "/home/user/.ssh/id_ed25519",
+    "/home/user/.aws", "/home/user/.aws/credentials", "/home/user/.docker", "/home/user/.docker/config.json",
     "/srv/x/containerd.sock", "/opt/y/podman.sock", "/tmp/crio.sock", "/tmp/docker.sock", "/tmp/cri-dockerd.sock",
 ])
 def test_the_host_runtime_and_credential_paths_the_first_lists_missed_are_forbidden(source):
@@ -764,8 +764,8 @@ def test_a_source_that_climbs_out_of_the_repository_or_names_a_home_is_forbidden
 
 @pytest.mark.parametrize("source", [
     "/etcetera", "/devices", "/runtime", "/run-keys", "/bootstrap", "/rootfs", "/procfs", "/system", "/var/lib/field",
-    "/var/lib/docker-field", "/home/spinner/ssh", "/home/spinner/.ssh-keys-local", "/home/spinner/.field-local/keys",
-    "/home/spinner/.docker.d", "/srv-data", "/tmp/dockersock", "/tmp/not-docker.sock.d", "/tmp/mydocker.sock",
+    "/var/lib/docker-field", "/home/user/ssh", "/home/user/.ssh-keys-local", "/home/user/.field-local/keys",
+    "/home/user/.docker.d", "/srv-data", "/tmp/dockersock", "/tmp/not-docker.sock.d", "/tmp/mydocker.sock",
     ".", "./", "./operators", "./a/../b", "./a/b/..", "..", "../../manifests", "./../../etc", "../../services/x", "./a/b/../../..", "operators", "field-data", "${NO_DEFAULT}", "$HOSTDIR", "${NO_DEFAULT}/x",
     None, 5,
 ])
@@ -790,7 +790,7 @@ def test_the_host_side_of_a_nested_or_replacement_default_stays_whole(volume, sh
     assert _short_source(volume) == short
 
 
-@pytest.mark.parametrize("device", ["/", "/etc", "/run/podman/podman.sock", "/var/lib", "/home/spinner/.ssh", "${D:-/}", "../../.."])
+@pytest.mark.parametrize("device", ["/", "/etc", "/run/podman/podman.sock", "/var/lib", "/home/user/.ssh", "${D:-/}", "../../.."])
 def test_a_named_volume_that_binds_a_forbidden_host_directory_through_driver_opts_is_red(device):
     _, base, gb10 = _texts()
     mb, mg = _top_volume(device)(base, gb10)
@@ -801,7 +801,7 @@ def test_a_named_volume_that_binds_a_forbidden_host_directory_through_driver_opt
 
 def test_a_named_volume_that_binds_a_fine_host_directory_through_driver_opts_is_green():
     _, base, gb10 = _texts()
-    mb, mg = _top_volume("/home/spinner/.field-local/caller-keys/ledger")(base, gb10)    # under an allowed root (C-453)
+    mb, mg = _top_volume("/home/user/.field-local/caller-keys/ledger")(base, gb10)    # under an allowed root (C-453)
     assert (mb, mg) != (base, gb10)
     check_compose(mb, mg)
 
@@ -910,10 +910,10 @@ def test_each_compose_mutant_turns_the_check_red(name: str):
 
 
 @pytest.mark.parametrize("source", [
-    "/home/spinner", "/home/spinner/", "/home//spinner", "/home/./spinner", "/home/spinner/x/..",
-    "/home/spinner/.gnupg", "/home/spinner/.kube/config", "/home/spinner/.config/gcloud", "/home/spinner/.config/gcloud/creds.db",
-    "/home/spinner/.git-credentials", "/home/spinner/.netrc", "/home/spinner/.npmrc", "/home/spinner/.azure",
-    "/home/spinner/.local/share/keyrings", "${HOME}", "$HOME", "${HOME}/.ssh", "$HOME/.ssh", "${HOME}/.aws/credentials",
+    "/home/user", "/home/user/", "/home//user", "/home/./user", "/home/user/x/..",
+    "/home/user/.gnupg", "/home/user/.kube/config", "/home/user/.config/gcloud", "/home/user/.config/gcloud/creds.db",
+    "/home/user/.git-credentials", "/home/user/.netrc", "/home/user/.npmrc", "/home/user/.azure",
+    "/home/user/.local/share/keyrings", "${HOME}", "$HOME", "${HOME}/.ssh", "$HOME/.ssh", "${HOME}/.aws/credentials",
     "${HOME:-/root}/.ssh", "../..", "../../.git", "../../.git/config", "../../.env", "./.env", "./sub/.env", "../../.env.local",
     "/tmp/buildkitd.sock", "/tmp/dockershim.sock", "/tmp/cri-o.sock", "/var/lib/lxd", "/var/lib/lxc/x", "/var/lib/rancher",
     "/var/lib/k0s", "/var/lib/etcd", "/var/lib/snapd",
@@ -923,9 +923,9 @@ def test_the_parents_and_the_other_credential_places_of_a_forbidden_path_are_for
 
 
 @pytest.mark.parametrize("source", [
-    # (C-442: `/home/spinner/.config` itself is no longer here: the parent of a credential tree is forbidden exactly)
-    "/home/spinner/x", "/home/spinner/x/.ssh", "/home/a/b/.ssh", "/home/spinner/.config/app",
-    "/home/spinner/.local/share/app", "/home/spinner/.gnupg-notes", "${HOME}/data", "$HOME/data", "$HOMEDIR", "${HOMEDIR}",
+    # (C-442: `/home/user/.config` itself is no longer here: the parent of a credential tree is forbidden exactly)
+    "/home/user/x", "/home/user/x/.ssh", "/home/a/b/.ssh", "/home/user/.config/app",
+    "/home/user/.local/share/app", "/home/user/.gnupg-notes", "${HOME}/data", "$HOME/data", "$HOMEDIR", "${HOMEDIR}",
     "/tmp/docker.sock.d", "/tmp/buildkitd.sock.d", "/var/lib/lxdata", "../../.github", "../../.envrc", "../../.envrc-docs/x", "./environment",
     "../../envs/.env.d/x/y", "./a/b/../../..", "${A:-${B:-${C:-${D:-./operators}}}}",
 ])
@@ -954,7 +954,7 @@ def test_a_gb10_override_of_a_base_volume_merges_with_it_key_by_key():
     assert label != gb10
     with pytest.raises(AssertionError, match="volume evil: binds a host path"):
         check_compose(mb, label)
-    fixed = gb10.replace("\nvolumes:\n", "\nvolumes:\n  evil:\n    driver_opts: {device: /home/spinner/.field-local/caller-keys/ledger}\n", 1)   # C-453: an allowed root
+    fixed = gb10.replace("\nvolumes:\n", "\nvolumes:\n  evil:\n    driver_opts: {device: /home/user/.field-local/caller-keys/ledger}\n", 1)   # C-453: an allowed root
     check_compose(mb, fixed)
 
 
@@ -967,7 +967,7 @@ def test_a_gb10_reset_of_a_base_volume_removes_it():
 
 
 @pytest.mark.parametrize("src", [
-    "/home/spinner", "/home/spinner/.gnupg", "/home/spinner/.kube", "${HOME}", "$HOME/.ssh", "../..", "../../.git", "./.env",
+    "/home/user", "/home/user/.gnupg", "/home/user/.kube", "${HOME}", "$HOME/.ssh", "../..", "../../.git", "./.env",
     "/tmp/buildkitd.sock", "/var/lib/rancher",
 ])
 def test_a_registry_bind_of_each_new_source_is_red(src):
@@ -993,10 +993,10 @@ def test_a_variable_with_a_settled_meaning_is_read_as_its_value_whatever_its_def
 
 
 @pytest.mark.parametrize("source", [
-    "/home/spinner/.config/gh", "/home/spinner/.config/rclone/rclone.conf", "/home/spinner/.pgpass", "/home/spinner/.my.cnf",
-    "/home/spinner/.vault-token", "/home/spinner/.s3cfg", "/home/spinner/.boto", "/home/spinner/.oci", "/home/spinner/.terraform.d",
-    "/home/spinner/.pypirc", "/home/spinner/.cargo", "/home/spinner/.cargo/registry", "/home/spinner/.m2", "/home/spinner/.gradle",
-    "/home/spinner/.password-store", "/home/spinner/.bash_history", "/home/spinner/.mozilla", "/home/spinner/.pki",
+    "/home/user/.config/gh", "/home/user/.config/rclone/rclone.conf", "/home/user/.pgpass", "/home/user/.my.cnf",
+    "/home/user/.vault-token", "/home/user/.s3cfg", "/home/user/.boto", "/home/user/.oci", "/home/user/.terraform.d",
+    "/home/user/.pypirc", "/home/user/.cargo", "/home/user/.cargo/registry", "/home/user/.m2", "/home/user/.gradle",
+    "/home/user/.password-store", "/home/user/.bash_history", "/home/user/.mozilla", "/home/user/.pki",
     "/tmp/dockerd.sock", "/tmp/nerdctl.sock", "/tmp/rootlesskit.sock", "/tmp/k3s.sock", "/tmp/kubelet.sock", "/tmp/containerd-shim.sock",
     "/var/lib/containers", "/var/lib/podman/x", "/var/lib/libvirt", "/var/lib/k3s", "/var/lib/microk8s", "/var/lib/kubernetes",
     "/var/lib/cni", "/var/lib/buildkit", "/var/lib/nerdctl",
@@ -1007,7 +1007,7 @@ def test_the_credential_places_runtime_sockets_and_state_one_step_further_out_ar
 
 @pytest.mark.parametrize("source", [
     "$HOMEDIR", "${HOMEDIR}", "$HOME_DIR", "${HOME_DIR}", "${HOME_DIR:-./operators}", "${HOMEDIR:-/opt/field/data}", "$SSH_AUTH_SOCKET",
-    "${XDG_RUNTIME_DIR_X:-./a}", "${MYHOME:-./a}", "/home/spinner/.config/app", "/home/spinner/.cargo-notes", "/home/spinner/.m2x",
+    "${XDG_RUNTIME_DIR_X:-./a}", "${MYHOME:-./a}", "/home/user/.config/app", "/home/user/.cargo-notes", "/home/user/.m2x",
     "/tmp/kubelet.sock.d", "/var/lib/containersx", "/var/lib/cnis",
 ])
 def test_names_and_paths_that_only_resemble_the_settled_ones_are_not_forbidden(source):
@@ -1053,22 +1053,22 @@ NEW_CREDENTIAL_PLACES = [
 
 @pytest.mark.parametrize("place", NEW_CREDENTIAL_PLACES)
 def test_the_further_credential_places_are_forbidden_by_path_and_through_home(place):
-    assert _denylist_forbids("/home/spinner/" + place) is True, place
+    assert _denylist_forbids("/home/user/" + place) is True, place
     assert _denylist_forbids("${HOME}/" + place) is True, place
 
 
 @pytest.mark.parametrize("parent", [
-    "${HOME}/.config", "$HOME/.config", "/home/spinner/.config", "/home/spinner/.config/", "/home/spinner/./.config",
-    "/home/spinner/.local", "/home/spinner/.local/share", "${HOME}/.local/share", "${HOME:-/tmp}/.local",
-    "${XDG_CONFIG_HOME}", "${XDG_CONFIG_HOME:-/x}", "/home/spinner/.config/git",
+    "${HOME}/.config", "$HOME/.config", "/home/user/.config", "/home/user/.config/", "/home/user/./.config",
+    "/home/user/.local", "/home/user/.local/share", "${HOME}/.local/share", "${HOME:-/tmp}/.local",
+    "${XDG_CONFIG_HOME}", "${XDG_CONFIG_HOME:-/x}", "/home/user/.config/git",
 ])
 def test_the_parent_of_a_credential_tree_is_forbidden_exactly(parent):
     assert _denylist_forbids(parent) is True, parent
 
 
 @pytest.mark.parametrize("fine", [
-    "/home/spinner/.config/myapp", "/home/spinner/.local/bin", "/home/spinner/.local/share/applications",
-    "/home/spinner/.configuration", "/home/spinner/.local-data", "/home/spinner/.histories", "/home/spinner/.agent",
+    "/home/user/.config/myapp", "/home/user/.local/bin", "/home/user/.local/share/applications",
+    "/home/user/.configuration", "/home/user/.local-data", "/home/user/.histories", "/home/user/.agent",
 ])
 def test_a_directory_beside_or_below_a_parent_that_is_not_listed_stays_legal(fine):
     assert _denylist_forbids(fine) is False, fine
@@ -1150,7 +1150,7 @@ def test_a_bare_home_variable_is_read_as_home_with_and_without_braces():
 
 
 REGISTRY_BIND_MUTANTS = [
-    "${HOME}/.config:/h:ro", "/home/spinner/.local/share:/h", "${HOME}/.config/git:/h", "/home/spinner/.terraformrc:/h",
+    "${HOME}/.config:/h:ro", "/home/user/.local/share:/h", "${HOME}/.config/git:/h", "/home/user/.terraformrc:/h",
     "${PWD}/..:/h", "${PWD}:/h", "${GNUPGHOME}:/h", "${A}/.ssh:/h", "/tmp/libpod.sock:/h", "/var/lib/crio:/h",
     "${HOME?}/.ssh:/h", "${HOME+/x}/.ssh:/h", "${HOME=/tmp}/.ssh:/h",
 ]
@@ -1221,16 +1221,16 @@ def test_the_same_documents_with_a_harmless_value_are_accepted(monkeypatch):
 
 @pytest.mark.parametrize("source", [
     "./operators", "../../manifests", "field-data", "caddy_data", "${FIELD_OPERATORS_DIR:-./operators}", "./Caddyfile.gb10",
-    "/home/spinner/.field-local/caller-keys/witness", "${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/registry",
-    "/home/spinner/.field-local/caller-keys/a/b", None,
+    "/home/user/.field-local/caller-keys/witness", "${FIELD_CALLER_KEYS_DIR:-/home/user/.field-local/caller-keys}/registry",
+    "/home/user/.field-local/caller-keys/a/b", None,
 ])
 def test_what_the_estate_binds_today_is_allowed(source):
     assert _binds_forbidden_host_path(source) is False, source
 
 
 @pytest.mark.parametrize("source", [
-    "/home/spinner/.field-local/caller-keys", "/home/spinner/.field-local/caller-keys/", "/home/spinner/.field-local/caller-keys/.",
-    "/home/spinner/.field-local", "/home/spinner", "/home/spinner/.field-local/caller-keys/../x", "/home/spinner/.field-local/caller-keysX/a",
+    "/home/user/.field-local/caller-keys", "/home/user/.field-local/caller-keys/", "/home/user/.field-local/caller-keys/.",
+    "/home/user/.field-local", "/home/user", "/home/user/.field-local/caller-keys/../x", "/home/user/.field-local/caller-keysX/a",
     "${FIELD_CALLER_KEYS_DIR}/registry", "~", "~/x", "etc/x", "docker-image://alpine", "file://x", "`id`", "", "   ",
 ])
 def test_the_root_itself_its_parents_siblings_and_unresolvable_forms_are_refused(source):
