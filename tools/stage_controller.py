@@ -51,7 +51,7 @@ import sys
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping, Protocol, Sequence
+from typing import Any, Callable, Mapping, Protocol, Sequence
 
 from field_core import alert_senders, alerts
 
@@ -424,12 +424,17 @@ class Controller:
         for thread in pending:
             thread.join()
 
-    def run(self, stage: int, *, go_sentence: Any = None, live: bool = False) -> Result:
+    def run(self, stage: int, *, go_sentence: Any = None, live: bool = False,
+            preflight: Callable[[], None] | None = None) -> Result:
         """A live run (``live`` and a driver) holds the records file's exclusive lock from the checks to the end, so two
-        live runs never both execute (F-H3-2); a plan takes no lock."""
+        live runs never both execute (F-H3-2); a plan takes no lock. ``preflight`` (a driver's own estate check, which
+        may raise ``Refused``) runs first INSIDE that lock, so no other run can change the estate between that check and
+        the arming steps (B-1054-ARM-RACE)."""
         locked = _RunLock(self.records.path) if live and self.actions is not None else contextlib.nullcontext()
         try:
             with locked:
+                if preflight is not None:
+                    preflight()
                 return self._run_locked(stage, go_sentence, live)
         except Refused as exc:
             if exc.reason == "run_in_progress":
