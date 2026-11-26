@@ -73,11 +73,14 @@ def test_pack_happy_path_200_with_disclaimer_and_signer(client):
     assert body["pack"]["staleness"]["active"] == []
 
 
-def test_pack_equals_generate_pack_for_same_inputs(client, store):
+def test_pack_equals_generate_pack_for_same_inputs(client, store, monkeypatch):
     """Thin adapter: the HTTP result is exactly generate_pack's result for
     the same inputs. The only free variable is the clock, so the response's
     own generated_at is fed back through the ``now=`` seam (no sleeps, no
-    monkeypatched datetime)."""
+    monkeypatched datetime). Body sources are caller-asserted (B2), so the
+    live collection the route runs for the agent_id is part of the inputs."""
+    live = EvidenceSources(registry_record={"owner": "Controller"})
+    monkeypatch.setattr(api_module, "collect_evidence", lambda agent_id: live)
     manifest = resolved_manifest()
     sources = EvidenceSources(
         ledger_verify={"ok": False, "reason": "hash mismatch at index 2"},
@@ -99,13 +102,14 @@ def test_pack_equals_generate_pack_for_same_inputs(client, store):
         signer=SIGNER,
         stale_store=store,
         agent_id="agent-1",
-        sources=sources,
+        sources=live,
+        caller_sources=sources,
         now=now,
     )
     assert body["markdown"] == md
     assert body["pack"] == payload
-    # the not-evidenced gap survived the HTTP round trip verbatim
-    assert ("FC-L-01", "not-evidenced") in {
+    # F1: the live run asked the ledger and got no answer: its not-checked gap stands over the caller's claim
+    assert ("FC-L-01", "not-checked") in {
         (g["control_id"], g["kind"]) for g in body["pack"]["gaps"]
     }
 
@@ -208,7 +212,9 @@ def test_default_store_path_used_when_nothing_injected(tmp_path, monkeypatch):
 
 # --- evidence collection precedence mirrors the CLI ---------------------------
 
-def test_sources_in_body_take_precedence_over_live_collection(client, monkeypatch):
+def test_body_sources_never_skip_live_collection(client, monkeypatch):
+    """B2: body sources no longer replace live collection; with an agent_id the
+    route still collects, and that collection is what can confirm a verdict."""
     calls: list[str] = []
 
     def fake_collect(agent_id: str) -> EvidenceSources:
@@ -217,7 +223,7 @@ def test_sources_in_body_take_precedence_over_live_collection(client, monkeypatc
 
     monkeypatch.setattr(api_module, "collect_evidence", fake_collect)
 
-    # explicit sources: no live collection
+    # body sources + agent_id: collected anyway; a caller's negative claim still stands as a gap
     r = client.post(
         "/pack",
         json={
@@ -228,8 +234,12 @@ def test_sources_in_body_take_precedence_over_live_collection(client, monkeypatc
         },
     )
     assert r.status_code == 200, r.text
-    assert calls == []
-    assert "broken chain" in r.json()["markdown"]
+    assert calls == ["agent-1"]
+    # F1: the live verdict (verified) stands; the caller's contrary body cannot replace it
+    assert "broken chain" not in r.json()["markdown"]
+    row = next(c for c in r.json()["pack"]["controls"] if c["control_id"] == "FC-L-01")
+    assert row["evidenced"] is True
+    assert r.json()["pack"]["evidence_status"] == "caller-asserted"
 
     # agent_id only: collect, exactly as ``crosswalk pack --agent-id`` does
     r = client.post(
@@ -237,15 +247,17 @@ def test_sources_in_body_take_precedence_over_live_collection(client, monkeypatc
         json={"signer": SIGNER, "manifest": resolved_manifest(), "agent_id": "agent-1"},
     )
     assert r.status_code == 200, r.text
-    assert calls == ["agent-1"]
+    assert calls == ["agent-1", "agent-1"]
     row = next(c for c in r.json()["pack"]["controls"] if c["control_id"] == "FC-L-01")
     assert row["evidenced"] is True
+    assert r.json()["pack"]["evidence_status"] == "collected"
 
     # neither: manifest-only, nothing collected
     r = client.post("/pack", json={"signer": SIGNER, "manifest": resolved_manifest()})
     assert r.status_code == 200, r.text
-    assert calls == ["agent-1"]
+    assert len(calls) == 2
     assert "manifest-only" in r.json()["markdown"]
+    assert r.json()["pack"]["evidence_status"] == "not-requested"
 
 
 # --- perimeter and seams ------------------------------------------------------

@@ -6,7 +6,9 @@ import logging
 import threading
 from contextlib import asynccontextmanager
 
-from field_core.authn import auth_headers
+from field_core.ids import REGISTRY_ID_PATTERN
+from field_core.startup import warn_open
+from field_core.guarded_operator import perimeter_headers
 
 from typing import Any
 
@@ -28,11 +30,17 @@ from compliance_crosswalk.engine import (
 from compliance_crosswalk.mapping import CONTROLS, FRAMEWORKS
 
 
+#: The registry's own id grammar (agent_registry.models), or empty (no agent: unchanged). An id outside it can be no
+#: registry record, and ``collect_evidence`` puts the id into URL paths and queries (S5-17).
+AGENT_ID_MAX = 200
+AGENT_ID_PATTERN = "^(" + REGISTRY_ID_PATTERN[1:-1] + ")?$"     # the registry's rule, or empty
+
+
 class CrosswalkRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     manifest: dict[str, Any] = Field(description="FIELD manifest data")
-    agent_id: str | None = None
+    agent_id: str | None = Field(default=None, max_length=AGENT_ID_MAX, pattern=AGENT_ID_PATTERN)
     sources: EvidenceSources | None = None
 
 
@@ -54,7 +62,8 @@ class PackRequest(BaseModel):
     signer: str = Field(description="Named human signer — no pack without one")
     manifest: dict[str, Any] = Field(description="FIELD manifest data")
     agent_id: str | None = Field(
-        default=None, description="Collect live evidence for this agent"
+        default=None, max_length=AGENT_ID_MAX, pattern=AGENT_ID_PATTERN,
+        description="Collect live evidence for this agent",
     )
     sources: EvidenceSources | None = None
 
@@ -125,6 +134,16 @@ def create_app(stale_store: Any = None, fetcher: Any = None, every: int = 0) -> 
     app.state.scheduler_stop = threading.Event()
     app.state.scheduler_thread = None
 
+    from compliance_crosswalk.staleness import StaleStoreError
+
+    @app.exception_handler(StaleStoreError)
+    async def _damaged_store(_request: Any, exc: StaleStoreError):
+        # the service's own state cannot be trusted: a fixed 503 (the file's name and what is wrong, never its text),
+        # no pack is generated, and the file is not touched, so a standing flag stays
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse(status_code=503, content={"detail": str(exc)})
+
     def _store() -> Any:
         from compliance_crosswalk.staleness import StaleStore
 
@@ -178,13 +197,16 @@ def create_app(stale_store: Any = None, fetcher: Any = None, every: int = 0) -> 
         """Evidence pack (ADR 07) over HTTP — a thin adapter over
         ``generate_pack`` mirroring the ``crosswalk pack`` CLI exactly; the
         CLI stays the canonical path. 422 on a blank/whitespace signer; 409
-        when active stale flags block generation (no override exists)."""
+        when active stale flags block generation (no override exists). Body
+        ``sources`` are caller-asserted: a verdict is evidenced only when this
+        run's live collection (``agent_id``) confirms it (B2)."""
         from compliance_crosswalk.evidence_pack import StalePackError, generate_pack
         from compliance_crosswalk.staleness import StaleStore
 
-        sources = req.sources or (
-            collect_evidence(req.agent_id) if req.agent_id else None
-        )
+        # B2: body sources are the caller's word, never evidence on their own. With an agent_id the live
+        # collection runs either way and is the only thing that can make a verdict "evidenced"; without one,
+        # every positive verdict from body sources is reported caller-asserted (a gap), not evidenced.
+        sources = collect_evidence(req.agent_id) if req.agent_id else None
         store = app.state.stale_store
         try:
             md, payload = generate_pack(
@@ -193,6 +215,7 @@ def create_app(stale_store: Any = None, fetcher: Any = None, every: int = 0) -> 
                 stale_store=store if store is not None else StaleStore(),
                 agent_id=req.agent_id,
                 sources=sources,
+                caller_sources=req.sources,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc))
@@ -207,11 +230,14 @@ def create_app(stale_store: Any = None, fetcher: Any = None, every: int = 0) -> 
             )
         return {"markdown": md, "pack": payload}
 
+    warn_open("compliance-crosswalk")
     return app
 
 
 def collect_evidence(agent_id: str) -> EvidenceSources:
     """Gather live artifacts from the running platform (used by the CLI)."""
+    from urllib.parse import quote
+
     import httpx
 
     from field_core.clients import RegistryClient
@@ -224,10 +250,52 @@ def collect_evidence(agent_id: str) -> EvidenceSources:
 
     def _get(url: str) -> Any:
         try:
-            resp = httpx.get(url, timeout=5.0, headers=auth_headers())
+            resp = httpx.get(url, timeout=5.0, headers=perimeter_headers())
             return resp.json() if resp.status_code == 200 else None
         except Exception:
             return None
+
+    def _is_tls_failure(exc: BaseException) -> bool:
+        import ssl
+
+        seen: set[int] = set()
+        stack: list[BaseException] = [exc]
+        while stack:
+            cur = stack.pop()
+            if id(cur) in seen:
+                continue
+            seen.add(id(cur))
+            if isinstance(cur, ssl.SSLError) or "CERTIFICATE_VERIFY_FAILED" in str(cur):
+                return True
+            # walk BOTH links: a non-ssl __cause__ must not hide an SSLError in __context__
+            for nxt in (cur.__cause__, cur.__context__):
+                if nxt is not None:
+                    stack.append(nxt)
+        return False
+
+    def _get_verify(url: str) -> Any:
+        # None only for "busy or unreachable" (503, transport error): retryable, not a finding.
+        # Any other answer (401/403 shared-secret fault, 404, 500, unparseable 200) means the
+        # ledger answered and the chain was NOT verified: carry the status so the engine keeps
+        # it a gap (mirrors attestation-reporter "answered HTTP n ... investigate").
+        try:
+            resp = httpx.get(url, timeout=5.0, headers=perimeter_headers())   # C-1181 (rebuild of PR 572): perimeter only
+        except Exception as exc:
+            if _is_tls_failure(exc):
+                # a bad/expired/mismatched certificate is a standing fault (or an interposer): a gap
+                return {"tls_failed": True}
+            return None
+        if resp.status_code == 503:
+            return None
+        if resp.status_code == 200:
+            try:
+                body = resp.json()
+            except Exception:
+                body = None
+            if isinstance(body, dict):
+                return body
+            # a 200 that is not a JSON object (list, string, number) is an answer we cannot read: a gap, not a crash
+        return {"http_status": resp.status_code}
 
     import os
 
@@ -235,15 +303,28 @@ def collect_evidence(agent_id: str) -> EvidenceSources:
     delegation_base = os.environ.get("FIELD_DELEGATION_URL", "http://127.0.0.1:8003")
     governor_base = os.environ.get("FIELD_GOVERNOR_URL", "http://127.0.0.1:8006")
 
-    events = _get(f"{ledger_base}/events?agent_id={agent_id}") or []
+    # The id is caller input: one encoded path segment / query value, never a
+    # second parameter, a fragment or a path step.
+    aid = quote(agent_id, safe="")
+    events = _get(f"{ledger_base}/events?agent_id={aid}")
     event_types: dict[str, int] = {}
-    for e in events:
-        event_types[e["event_type"]] = event_types.get(e["event_type"], 0) + 1
+    for e in events if isinstance(events, list) else []:
+        etype = e.get("event_type") if isinstance(e, dict) else None
+        if isinstance(etype, str):
+            event_types[etype] = event_types.get(etype, 0) + 1
+
+    def _dict(v: Any) -> dict[str, Any] | None:
+        # a reply of the wrong shape is "not collected", not an exception (a 500)
+        return v if isinstance(v, dict) else None
+
+    tokens = _get(f"{delegation_base}/tokens?agent_id={aid}")
+    if not (isinstance(tokens, list) and all(isinstance(t, dict) for t in tokens)):
+        tokens = None
 
     return EvidenceSources(
         registry_record=registry_record,
-        ledger_verify=_get(f"{ledger_base}/verify"),
+        ledger_verify=_get_verify(f"{ledger_base}/verify"),
         ledger_event_types=event_types or None,
-        tokens=_get(f"{delegation_base}/tokens?agent_id={agent_id}"),
-        governor_cap=_get(f"{governor_base}/caps/{agent_id}"),
+        tokens=tokens,
+        governor_cap=_dict(_get(f"{governor_base}/caps/{aid}")),
     )

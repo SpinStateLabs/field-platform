@@ -28,7 +28,7 @@ failing open: BEFORE passthrough and BEFORE any bypass window, ``/v1/messages``
 requires ``x-field-agent-id`` AND ``x-field-token`` (the delegation token id —
 B2's OAuth-style pattern at the egress; missing either ⇒ 401 naming both) and
 asks the sentinel ``POST /check {agent_id, token_id, action}`` through
-``SentinelClient`` (``FIELD_SENTINEL_URL``, ``auth_headers()``,
+``SentinelClient`` (``FIELD_SENTINEL_URL``, ``perimeter_headers()``,
 ``FORCE_GATEWAY_SENTINEL_TIMEOUT`` default 30 s). ``action`` is the
 ``x-field-action`` header when present (scope enforced against the manifest
 like any governed action), else exactly ``llm.messages``. ALLOW ⇒ the call
@@ -55,11 +55,15 @@ import base64
 import hmac
 import ipaddress
 import logging
+import math
 import os
+import re
 import sqlite3
 import time
+import unicodedata
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from collections.abc import Mapping
 from typing import Any, Callable
 from urllib.parse import urlparse
 
@@ -67,9 +71,12 @@ from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from field_core import posture_flag
-from field_core.authn import auth_headers, install as install_authn, shared_secret
+from field_core.startup import warn_open
+from field_core.authn import install as install_authn, shared_secret
+from field_core.guarded_operator import perimeter_headers
 from field_core.http_errors import install_validation_handler
 from field_core.buildinfo import build_sha
+from field_core.http import pooled_limits
 from field_core.llm import AGENT_ID_HEADER, EGRESS_ACTION, TOKEN_HEADER
 from pydantic import BaseModel
 
@@ -86,6 +93,9 @@ Upstream = Callable[[dict[str, Any], dict[str, str]], tuple[int, dict[str, Any]]
 #: the only `x-force-passthrough` value the gateway honours (field_core.llm)
 PASSTHROUGH_JUDGE = "judge"
 DEFAULT_TELEMETRY_WINDOW = 50
+#: the largest `last_N` window (S6-20): a number above SQLite's 2**63-1 `LIMIT` is an OverflowError on every
+#: `/telemetry` read, and a window this large is no longer "the last N"
+MAX_TELEMETRY_WINDOW = 10_000
 ALL_ROUTES = "_all"
 
 
@@ -214,17 +224,29 @@ def real_upstream(body: dict[str, Any], headers: dict[str, str]) -> tuple[int, d
             raise HTTPException(502, f"{REQUIRE_TLS_ENV}=1: refusing to send the upstream key over "
                                      "plain http to a non-private host (set ANTHROPIC_BASE_URL to https)")
         _warn_once(warning)
-    resp = httpx.post(
-        f"{base}/v1/messages",
-        json=body,
-        headers={
-            "x-api-key": api_key,
-            "anthropic-version": headers.get("anthropic-version", "2023-06-01"),
-            "content-type": "application/json",
-        },
-        timeout=120.0,
-    )
-    return resp.status_code, scrub_secret(resp.json(), api_key)
+    try:
+        resp = httpx.post(
+            f"{base}/v1/messages",
+            json=body,
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": headers.get("anthropic-version", "2023-06-01"),
+                "content-type": "application/json",
+            },
+            timeout=120.0,
+        )
+    except httpx.HTTPError as exc:
+        # Class name only: the exception text can carry the base URL.
+        raise HTTPException(502, f"upstream unreachable: {type(exc).__name__}") from None
+    try:
+        answer = resp.json()
+    except ValueError:
+        raise HTTPException(502, f"upstream answered a non-JSON body (status {resp.status_code})") from None
+    if not isinstance(answer, dict):
+        # valid JSON that is not an object ([], null, a string, a number) is not a model reply either: the route would call
+        # .get on it and end as a 500 (R-PR699-516d9cb C1)
+        raise HTTPException(502, f"upstream answered JSON that is not an object (status {resp.status_code})") from None
+    return resp.status_code, scrub_secret(answer, api_key)
 
 
 def resolve_upstream(upstream: Upstream | None = None) -> Upstream:
@@ -239,11 +261,16 @@ def resolve_upstream(upstream: Upstream | None = None) -> Upstream:
 
 
 def resolve_telemetry_window(default: int = DEFAULT_TELEMETRY_WINDOW) -> int:
-    """`FORCE_TELEMETRY_WINDOW`: the count-based `last_N` window (>= 1)."""
+    """`FORCE_TELEMETRY_WINDOW`: the count-based `last_N` window, 1..``MAX_TELEMETRY_WINDOW``; junk is the default."""
     try:
-        return max(1, int(os.environ.get("FORCE_TELEMETRY_WINDOW", "")))
+        return checked_telemetry_window(int(os.environ.get("FORCE_TELEMETRY_WINDOW", "")))
     except ValueError:
         return default
+
+
+def checked_telemetry_window(n: int) -> int:
+    """A window inside 1..``MAX_TELEMETRY_WINDOW`` (the env value and ``create_app``'s explicit argument alike)."""
+    return min(MAX_TELEMETRY_WINDOW, max(1, n))
 
 
 def passthrough_honoured(value: str | None, presented_auth: str | None) -> bool:
@@ -278,6 +305,8 @@ SENTINEL_TIMEOUT_ENV = "FORCE_GATEWAY_SENTINEL_TIMEOUT"
 #: A check that reaches the semantic judge adds the judge's 30 s: set
 #: FORCE_GATEWAY_SENTINEL_TIMEOUT >= 60 on a judge-on sentinel (README).
 DEFAULT_SENTINEL_TIMEOUT = 30.0
+#: the longest sentinel wait (S6-20). `inf` was accepted and put into `/health`, which JSON cannot encode (a 500)
+MAX_SENTINEL_TIMEOUT = 600.0
 _DECISIONS = ("ALLOW", "BLOCK", "ESCALATE")
 _ESCALATION_SENTENCE = (
     "an LLM call cannot pause for a human: the escalation is refused at the "
@@ -306,6 +335,16 @@ def resolve_enforce() -> bool:
     return _posture_flag(ENFORCE_ENV)
 
 
+def _enforce_off_names() -> list[str]:
+    """C-804: ``FORCE_GATEWAY_ENFORCE`` as a name for the startup open-mode line
+    when it is off. A refused value is not "off": it fails at the resolver, so
+    the line says nothing about it (and never reads it back)."""
+    try:
+        return [] if resolve_enforce() else [ENFORCE_ENV]
+    except InvalidPostureFlag:
+        return []
+
+
 def resolve_tool_check() -> bool:
     """`FORCE_GATEWAY_TOOL_CHECK`: see ``_posture_flag``; meaningful only with enforce."""
     return _posture_flag(TOOL_CHECK_ENV)
@@ -322,35 +361,149 @@ def resolve_sentinel_url() -> str | None:
     return value or None
 
 
+def sentinel_check_url(base: str) -> str:
+    """The sentinel's ``/check`` URL for a configured base (backlog B17). ``/check`` is appended to the base's PATH,
+    so a base that carries a query keeps it after ``/check`` (``http://s:8004/p?x=1`` -> ``http://s:8004/p/check?x=1``)
+    instead of ``/check`` landing inside the query or the fragment. The fragment is dropped: it is never sent."""
+    from urllib.parse import urlsplit, urlunsplit
+
+    parts = urlsplit(base)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path.rstrip("/") + "/check", parts.query, ""))
+
+
 def resolve_sentinel_timeout(default: float = DEFAULT_SENTINEL_TIMEOUT) -> float:
-    """`FORCE_GATEWAY_SENTINEL_TIMEOUT` in seconds (> 0); junk ⇒ the default."""
+    """`FORCE_GATEWAY_SENTINEL_TIMEOUT` in seconds (> 0, at most ``MAX_SENTINEL_TIMEOUT``); junk, NaN, infinity and
+    a non-positive value ⇒ the default."""
     try:
         value = float(os.environ.get(SENTINEL_TIMEOUT_ENV, ""))
     except ValueError:
         return default
-    return value if value > 0 else default
+    return checked_sentinel_timeout(value, default)
+
+
+def checked_sentinel_timeout(value: float, default: float = DEFAULT_SENTINEL_TIMEOUT) -> float:
+    """A finite, positive timeout capped at ``MAX_SENTINEL_TIMEOUT``, else ``default`` (the env value and the explicit
+    argument alike)."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value) or value <= 0:
+        return default
+    return min(float(value), MAX_SENTINEL_TIMEOUT)
+
+
+_HOSTNAME = re.compile(r"[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?")
+
+
+def public_origin(url: str | None) -> str | None:
+    """scheme://host[:port] of a configured URL, the only part ever shown (`/health`, the 503 detail, logs): userinfo,
+    path, query and fragment are dropped, an unparsable value shows as a fixed word (C-623, reviewer C-596 F-C596-2)."""
+    if not url:
+        return None
+    try:
+        parts = urlparse(url)
+        host, port = parts.hostname, parts.port
+    except ValueError:
+        return "(unparsable url)"
+    if parts.scheme not in ("http", "https") or not _is_host(host):   # a junk host is text from the value: fixed word instead
+        return "(unparsable url)"
+    return f"{parts.scheme}://{'[' + host + ']' if ':' in host else host}" + (f":{port}" if port else "")
+
+
+def _is_host(host: str | None) -> bool:
+    """A hostname (letters, digits, dot, hyphen, underscore) or an IP literal; anything else is not shown (C-734 F-C734-1)."""
+    if not host or "%" in host:                           # a scope id (a link-local IPv6 address + `%text`) is accepted by ipaddress: refuse it (C-846 F-C846-1)
+        return False
+    if _HOSTNAME.fullmatch(host):
+        return True
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return True
+
+
+class _SentinelUrlLogFilter(logging.Filter):
+    """roley.reviewer C1 on #1272: httpx logs every request at INFO as ``HTTP Request: <method> <url> ...`` and the
+    url there is the whole sentinel URL, userinfo, path and query included. For a request to a sentinel origin this
+    filter puts the origin (``_httpx_origin``) in its place, so the success path logs no userinfo, path or query.
+    It does not depend on that message format (independent verdict on 6ab6b25f: fail closed on a record format it does
+    not know): EVERY argument of an httpx record, positional or in a mapping, that reads as a URL to a sentinel origin
+    is replaced by that origin, whatever the message says. Requests to any other origin are left as httpx logs them.
+    The record is kept, not dropped."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.origins: set[str] = set()
+
+    def _shown(self, value: object) -> object:
+        """``value`` itself, or the sentinel origin when ``value`` reads as a URL to one (numbers and bytes are left)."""
+        if isinstance(value, (int, float, bytes, bytearray)) or value is None:
+            return value
+        shown = _httpx_origin(value)
+        return shown if shown is not None and shown in self.origins else value
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not self.origins:
+            return True
+        args = record.args
+        if isinstance(args, tuple):
+            record.args = tuple(self._shown(a) for a in args)
+        elif isinstance(args, Mapping):
+            record.args = {k: self._shown(v) for k, v in args.items()}
+        return True
+
+
+def _httpx_origin(url: object) -> str | None:
+    """``scheme://host[:port]`` as httpx itself normalises it, for BOTH sides of the filter's comparison: the host as
+    ``raw_host`` (an IDN name in punycode), the port as a number and absent when it is the scheme's default. httpx logs
+    that form, so a base written with an IDN host, a non-ASCII-digit port or an explicit :80 / :443 still matches
+    (reviewer-R1, don.reviewer N1 and teammate-don F1 on #1272). None when httpx cannot read it."""
+    import httpx
+
+    try:
+        parsed = httpx.URL(str(url))
+        host = parsed.raw_host.decode("ascii")
+    except (httpx.InvalidURL, ValueError, TypeError):
+        return None
+    if parsed.scheme not in ("http", "https") or not host:
+        return None
+    shown = f"[{host}]" if ":" in host else host
+    return f"{parsed.scheme}://{shown}" + (f":{parsed.port}" if parsed.port is not None else "")
+
+
+_SENTINEL_URL_LOG_FILTER = _SentinelUrlLogFilter()
+logging.getLogger("httpx").addFilter(_SENTINEL_URL_LOG_FILTER)
 
 
 class SentinelUnavailable(RuntimeError):
     """The sentinel could not be asked, or did not answer a verdict: transport
     error, timeout, any non-200, or a body that is not a verdict. The caller
-    refuses 503 — a check that did not happen is never an ALLOW."""
+    refuses 503 — a check that did not happen is never an ALLOW. ``failure`` is
+    the transport exception's class name when there was one: the log names it
+    without chaining the exception, whose text can carry the URL (C-734)."""
+
+    def __init__(self, message: str, failure: str | None = None):
+        super().__init__(message)
+        self.failure = failure
 
 
 class SentinelClient:
     """`POST /check` on the conformance-sentinel (base `FIELD_SENTINEL_URL`,
-    perimeter `auth_headers()`, timeout `FORCE_GATEWAY_SENTINEL_TIMEOUT`).
+    perimeter `perimeter_headers()`, timeout `FORCE_GATEWAY_SENTINEL_TIMEOUT`).
     Injectable like field-core's clients (a TestClient qualifies)."""
 
     def __init__(self, client=None, base_url: str | None = None,
                  timeout: float | None = None):
         self._base = (base_url or resolve_sentinel_url() or "http://127.0.0.1:8004").rstrip("/")
-        self.timeout = timeout if timeout is not None else resolve_sentinel_timeout()
+        self.timeout = checked_sentinel_timeout(timeout) if timeout is not None else resolve_sentinel_timeout()
         self._client = client
+        # C1: httpx's request line for this sentinel shows its origin only
+        origin = _httpx_origin(self._base)
+        if origin is not None:
+            _SENTINEL_URL_LOG_FILTER.origins.add(origin)
         if self._client is None:
             import httpx
 
-            self._client = httpx.Client(timeout=self.timeout, headers=auth_headers())
+            # B16: idle connections expire before the sentinel's keep-alive closes them; POST /check is not retried
+            self._client = httpx.Client(timeout=self.timeout, headers=perimeter_headers(), limits=pooled_limits())
 
     @property
     def base_url(self) -> str:
@@ -358,12 +511,15 @@ class SentinelClient:
 
     def check(self, agent_id: str, token_id: str, action: str) -> dict[str, Any]:
         try:
-            resp = self._client.post(f"{self._base}/check", json={
+            resp = self._client.post(sentinel_check_url(self._base), json={   # B17: /check goes on the path
                 "agent_id": agent_id, "token_id": token_id, "action": action})
         except Exception as exc:
-            raise SentinelUnavailable(
-                f"sentinel unreachable at {self._base}: {type(exc).__name__}: {exc}"
-            ) from exc
+            failure = type(exc).__name__
+        else:
+            failure = None
+        if failure is not None:                           # raised outside the handler: no cause or context keeps the transport text
+            raise SentinelUnavailable(f"sentinel unreachable at {public_origin(self._base)}: {failure}",
+                                      failure=failure)
         if resp.status_code != 200:
             raise SentinelUnavailable(f"sentinel returned {resp.status_code}")
         try:
@@ -508,7 +664,9 @@ def _meter_usage(app: FastAPI, agent_id: str | None, model: str,
     """Best-effort token report for a call that names an agent. Cost-aware
     `/usage` (model + input/output tokens, so the governor prices it and runs
     rogue detection); raw-token `/spend` for older governors (404 on /usage).
-    Never raises: metering must not fail traffic (the sentinel gates actions)."""
+    Never raises: metering must not fail traffic (the sentinel gates actions).
+    A report the governor answers with any other non-2xx status is counted and
+    logged like a failed one; 404 (no such route, or no cap for the agent) is not."""
     gov = app.state.governor
     if gov is None or not agent_id:
         return
@@ -518,13 +676,22 @@ def _meter_usage(app: FastAPI, agent_id: str | None, model: str,
             "input_tokens": input_tokens, "output_tokens": output_tokens,
             "note": note,
         })
-        if getattr(resp, "status_code", 201) == 404:
-            gov.post("/spend", json={
+        status = getattr(resp, "status_code", 201)
+        if status == 404:
+            resp = gov.post("/spend", json={
                 "agent_id": agent_id, "tokens": input_tokens + output_tokens,
                 "note": note,
             })
-    except Exception:
-        pass
+            status = getattr(resp, "status_code", 201)
+        if status != 404 and not 200 <= status < 300:
+            app.state.spend_forwards_dropped += 1
+            log.warning("spend forward to the governor refused (HTTP %s); request kept", status)
+    except Exception as exc:
+        # Traffic stands; the metering gap is now visible: counted for /health and
+        # logged (the exception TYPE only: its text can carry a URL or a value).
+        app.state.spend_forwards_dropped += 1
+        log.warning("spend forward to the governor dropped (%s); request kept",
+                    type(exc).__name__)
 
 
 def _ledger_event(app: FastAPI, event_type: str, payload: dict) -> None:
@@ -535,8 +702,39 @@ def _ledger_event(app: FastAPI, event_type: str, payload: dict) -> None:
     try:
         app.state.ledger.append(event_type, payload=payload,
                                 agent_id=SELF_AGENT_ID)
-    except Exception:
-        pass
+    except Exception as exc:
+        app.state.ledger_appends_dropped += 1
+        log.warning("ledger append %s dropped (%s); request kept",
+                    event_type, type(exc).__name__)
+
+
+#: What a caller may be told about a sentinel check that did not happen: a fixed category, never the sentinel's URL or the
+#: transport's exception text (S12-28). The three fixed texts and the status code come from SentinelClient.check.
+_SENTINEL_FIXED_REASONS = ("sentinel returned a non-JSON body", "sentinel returned no verdict")
+
+
+def _public_sentinel_reason(message: str) -> str:
+    if message in _SENTINEL_FIXED_REASONS or re.fullmatch(r"sentinel returned [0-9]{3}", message):
+        return message
+    if message.startswith("sentinel unreachable"):
+        return "sentinel unreachable"
+    return "sentinel check failed"
+
+
+#: `anthropic-version` is a date. It is forwarded to the upstream with the real x-api-key, so an arbitrary caller string
+#: must not reach it (a non-ASCII one raises UnicodeEncodeError inside httpx: a 500).
+_ANTHROPIC_VERSION = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+_HEADER_ID_MAX = 128
+
+
+def _header_value_ok(value: str) -> bool:
+    """1..128 characters, one line, no control or invisible-format character (S12-28)."""
+    return 1 <= len(value) <= _HEADER_ID_MAX and not any(
+        unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp") for ch in value)
+
+
+def _bad_header(name: str) -> HTTPException:
+    return HTTPException(422, f"{name} is not valid: 1 to {_HEADER_ID_MAX} characters, one line, no control characters")
 
 
 def _refuse(app: FastAPI, status: int, agent_id: str, action: str,
@@ -563,8 +761,11 @@ def _authorize(app: FastAPI, agent_id: str, token_id: str,
     try:
         verdict = sentinel.check(agent_id, token_id, action)
     except SentinelUnavailable as exc:
+        # the caller gets a fixed category; the log gets the exception CLASS (never its text, which can name the URL)
+        log.warning("sentinel check did not happen: %s",
+                    getattr(exc, "failure", None) or type(exc.__cause__ or exc).__name__)   # #1272: not chained
         return _refuse(app, 503, agent_id, action, None, {
-            "detail": f"sentinel check did not happen — refusing: {exc}",
+            "detail": f"sentinel check did not happen — refusing: {_public_sentinel_reason(str(exc))}",
             "decision": None, "clause_id": None})
     decision = verdict["decision"]
     context = verdict.get("context") or {}
@@ -674,13 +875,19 @@ def _maybe_judge(app: FastAPI, preset: str, text: str,
     except Exception:
         _count(app, "judge_bypassed", "governor_unreachable", pending)
         return None
-    if resp.status_code == 404:
+    status = getattr(resp, "status_code", None)
+    if status == 404:
         _count(app, "judge_bypassed", "no_cap", pending)
         return None
-    if resp.status_code != 200:
+    if status != 200:
         _count(app, "judge_bypassed", "governor_error", pending)
         return None
-    if resp.json().get("state") == "BLOCK":
+    try:
+        state = resp.json().get("state")      # a body that is not a JSON object is a governor error too (S7-31)
+    except Exception:
+        _count(app, "judge_bypassed", "governor_error", pending)
+        return None
+    if state == "BLOCK":
         _count(app, "judge_bypassed", "budget", pending)
         return None
     try:
@@ -754,6 +961,39 @@ def _load_state(app: FastAPI) -> None:
         app.state.drift.record(route, dimension, score, model, rubric)
 
 
+#: The longest bypass cooldown the environment may set (requests forwarded uninstrumented after a fault).
+MAX_BYPASS_COOLDOWN = 1_000_000
+
+
+def _env_number(name: str, default, parse, minimum, maximum, exclusive: bool):
+    """Read a tuning variable. Blank is unset (the default). Anything that does not parse, is not
+    finite, or is outside the bounds refuses the start with a ValueError that names the variable and
+    never its value (S8-31): a window or baseline of 0, a NaN or negative band and a NaN or negative
+    latency budget each quietly break drift detection or bypass, so they are refused, not clamped."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = parse(raw)
+    except ValueError:
+        raise ValueError(f"{name} is not a valid number") from None
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"{name} must be finite")
+    if (value <= minimum) if exclusive else (value < minimum):
+        raise ValueError(f"{name} must be {'greater than' if exclusive else 'at least'} {minimum}")
+    if maximum is not None and value > maximum:
+        raise ValueError(f"{name} must be at most {maximum}")
+    return value
+
+
+def _env_int(name: str, default: int, *, minimum: int, maximum: int | None = None) -> int:
+    return _env_number(name, default, int, minimum, maximum, False)
+
+
+def _env_float(name: str, default: float, *, minimum: float, exclusive: bool = False) -> float:
+    return _env_number(name, default, float, minimum, None, exclusive)
+
+
 def create_app(upstream: Upstream | None = None, governor_client=None,
                ledger_client=None, hygiene_judge=None,
                sample_every: int | None = None, drift: DriftTracker | None = None,
@@ -794,20 +1034,22 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
     app.state.sample_every = (sample_every if sample_every is not None
                               else resolve_sample_every())
     app.state.drift = drift or DriftTracker(
-        window_size=int(os.environ.get("FORCE_HYGIENE_WINDOW", "5")),
-        band=float(os.environ.get("FORCE_HYGIENE_BAND", "0.15")),
-        baseline_windows=int(os.environ.get("FORCE_HYGIENE_BASELINE_WINDOWS", "2")),
+        window_size=_env_int("FORCE_HYGIENE_WINDOW", 5, minimum=1),
+        band=_env_float("FORCE_HYGIENE_BAND", 0.15, minimum=0.0, exclusive=True),  # > 0, as DriftTracker (S-2-15)
+        baseline_windows=_env_int("FORCE_HYGIENE_BASELINE_WINDOWS", 2, minimum=1),
     )
     app.state.latency_budget_ms = (
         latency_budget_ms if latency_budget_ms is not None
-        else float(os.environ.get("FORCE_GATEWAY_LATENCY_BUDGET_MS", "250")))
+        else _env_float("FORCE_GATEWAY_LATENCY_BUDGET_MS", 250.0, minimum=0.0, exclusive=True))
     app.state.bypass_cooldown = (
         bypass_cooldown if bypass_cooldown is not None
-        else int(os.environ.get("FORCE_GATEWAY_BYPASS_COOLDOWN", "10")))
+        else _env_int("FORCE_GATEWAY_BYPASS_COOLDOWN", 10, minimum=0, maximum=MAX_BYPASS_COOLDOWN))
     app.state.telemetry_window = (
-        max(1, telemetry_window) if telemetry_window is not None
+        checked_telemetry_window(telemetry_window) if telemetry_window is not None
         else resolve_telemetry_window())
     app.state.request_count = 0
+    app.state.ledger_appends_dropped = 0
+    app.state.spend_forwards_dropped = 0
     app.state.bypass_remaining = 0
     app.state.coverage = _fresh_coverage(app.state.sample_every)
     app.state.store_error = None
@@ -817,7 +1059,7 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
     app.state.require_tls_upstream = resolve_require_tls_upstream()    # validated at startup (C-180)
     app.state.enforce = enforce if enforce is not None else resolve_enforce()
     app.state.tool_check = tool_check if tool_check is not None else resolve_tool_check()
-    app.state.sentinel_timeout = (sentinel_timeout if sentinel_timeout is not None
+    app.state.sentinel_timeout = (checked_sentinel_timeout(sentinel_timeout) if sentinel_timeout is not None
                                   else resolve_sentinel_timeout())
     if sentinel_client is not None:
         app.state.sentinel = sentinel_client
@@ -857,8 +1099,10 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
                 "enforce": app.state.enforce,
                 "tool_check": app.state.tool_check,
                 "tool_check_active": app.state.enforce and app.state.tool_check,
-                "sentinel_url": app.state.sentinel_url,
+                "sentinel_url": public_origin(app.state.sentinel_url),
                 "sentinel_timeout_seconds": app.state.sentinel_timeout,
+                "ledger_appends_dropped": app.state.ledger_appends_dropped,
+                "spend_forwards_dropped": app.state.spend_forwards_dropped,
                 "build_sha": build_sha()}
 
     @app.get("/presets")
@@ -869,8 +1113,8 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
     def preset_text(name: str) -> dict[str, str]:
         try:
             return {"preset": name, "system_block": preset_block(name)}
-        except KeyError as exc:
-            raise HTTPException(404, str(exc))
+        except KeyError:  # the text of the KeyError holds the caller's name: a fixed refusal instead
+            raise HTTPException(404, f"unknown FORCE preset; choose from {', '.join(PRESETS)}")
 
     @app.post("/v1/messages")
     def messages(
@@ -884,6 +1128,14 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
         x_field_token: str | None = Header(default=None),
         x_field_action: str | None = Header(default=None),
     ) -> dict[str, Any]:
+        # S12-28: what is forwarded or ledgered is bounded first, with fixed 422 text.
+        if not _ANTHROPIC_VERSION.fullmatch(anthropic_version):
+            raise HTTPException(422, "anthropic-version must be a date such as 2023-06-01")
+        for name, value in (("x-field-agent-id", x_field_agent_id), ("x-field-token", x_field_token)):
+            if value and (value != value.strip() or not _header_value_ok(value)):   # "" stays the 401 below
+                raise _bad_header(name)
+        if x_field_action is not None and (x_field_action.strip() and not _header_value_ok(x_field_action.strip())):
+            raise _bad_header("x-field-action")
         # F1 (enforce=1): identity and authority FAIL-CLOSED, before the
         # passthrough exemption and before any bypass window — the Gateway's
         # own trouble may drop instrumentation, never enforcement.
@@ -951,9 +1203,7 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
             return _enforce_tool_blocks(app, response, x_field_agent_id, x_field_token)
 
         if x_force_preset not in PRESETS:
-            raise HTTPException(
-                422, f"unknown preset '{x_force_preset}'; use {', '.join(PRESETS)}"
-            )
+            raise HTTPException(422, f"unknown preset; use {', '.join(PRESETS)}")
         injected = inject_force_block(body, x_force_preset)
         t0 = time.perf_counter()
         status, response = app.state.upstream(
@@ -1102,4 +1352,5 @@ def create_app(upstream: Upstream | None = None, governor_client=None,
             recent=[TelemetryRecord(**r) for r in recent],
         )
 
+    warn_open("force-gateway", extra=_enforce_off_names())
     return app

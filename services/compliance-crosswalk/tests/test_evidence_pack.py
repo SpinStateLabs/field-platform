@@ -89,7 +89,7 @@ def test_no_override_parameter_exists():
     """ADR 07 §4: blocked until re-reviewed — there is no bypass."""
     params = inspect.signature(generate_pack).parameters
     assert set(params) == {
-        "manifest", "signer", "stale_store", "agent_id", "sources", "now",
+        "manifest", "signer", "stale_store", "agent_id", "sources", "caller_sources", "now",
     }
     assert not any("override" in name or "force" in name for name in params)
 

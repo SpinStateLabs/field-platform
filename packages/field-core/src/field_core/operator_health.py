@@ -166,12 +166,13 @@ _LABEL_RE = re.compile(r"[A-Za-z0-9._:/-]{1,64}")
 
 def shown_label(value: Any) -> str | None:
     """A short caller-supplied label (an event type) fit for a ledger row:
-    printable id-like text up to 64 chars and without the key prefix, else
+    printable id-like text up to 64 chars, without the key prefix and (S7-8, as
+    ``shown_id`` / ``printable_id``) not a 40+ character unbroken token, else
     NOT_SHOWN."""
     if value is None:
         return None
     if (not isinstance(value, str) or not _LABEL_RE.fullmatch(value)
-            or value.startswith(KEY_PREFIX)):
+            or value.startswith(KEY_PREFIX) or oa._TOKEN_ID_RE.fullmatch(value)):
         return NOT_SHOWN
     return value
 
@@ -399,10 +400,14 @@ class OperatorHealth:
                           agent_id=agent_id)
         return HTTPException(exc.status, exc.detail)
 
-    def guard(self, action: str, rows_loader: Callable[[], list[dict]] | None = None):
+    def guard(self, action: str, rows_loader: Callable[[], list[dict]] | None = None,
+              row_agent_id: Callable[[str | None], str | None] | None = None):
         """operator_auth.guard for ``action`` (same checks, same LOG-ONLY
         ``operator.unauthenticated`` record through this app's ledger), plus:
-        every refusal it returns is counted and, under ENFORCE, ledgered."""
+        every refusal it returns is counted and, under ENFORCE, ledgered.
+        ``row_agent_id`` maps the route's raw ``agent_id`` path text to what the
+        ``operator.refused`` row carries as its agent id (the guard refuses
+        before the route can check the id); None keeps the path text."""
         from fastapi import HTTPException, Request
         from starlette.concurrency import run_in_threadpool
 
@@ -412,10 +417,13 @@ class OperatorHealth:
             try:
                 return await inner(request)
             except HTTPException as exc:      # the inner guard raises only refusals
+                agent_id = request.path_params.get("agent_id")
+                if row_agent_id is not None:
+                    agent_id = row_agent_id(agent_id)
                 await run_in_threadpool(
                     self.note_refused, oa.OperatorRefused(exc.status_code, str(exc.detail)),
                     action=action, path=request.url.path, headers=request.headers,
-                    agent_id=request.path_params.get("agent_id"))
+                    agent_id=agent_id)
                 raise
 
         _guard.__annotations__ = {"request": Request, "return": oa.OperatorAuth}
@@ -574,6 +582,16 @@ def _iso(epoch: int | None) -> str | None:
     return None if epoch is None else oa.format_time(epoch)
 
 
+def _refuse_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """json object_pairs_hook: a key repeated in one object is a ValueError (the caller's fixed-text 422)."""
+    out: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in out:
+            raise ValueError("duplicate JSON key")
+        out[key] = value
+    return out
+
+
 def verify_hash_answer(body: bytes, now: float | None = None) -> tuple[int, dict[str, Any]]:
     """(status, JSON) for ``POST /operator/verify-hash``. The body is exactly
     ``{"operator_id": <id>, "key_sha256": <64 lower-case hex>}``; anything
@@ -591,9 +609,12 @@ def verify_hash_answer(body: bytes, now: float | None = None) -> tuple[int, dict
 
     The break-glass identity (BREAKGLASS_ID or a sealed row) is never answered:
     403, counted as a break-glass attempt. Every row and slot is compared (no
-    early exit). Never ledgered, never counted as a refusal."""
+    early exit). Never ledgered, never counted as a refusal.
+
+    A body that repeats a key (``{"operator_id": "don", ..., "operator_id": "x"}``) is 422 too, never read
+    last-wins (B13 sibling): a reader of the request would otherwise see one id while the answer is for another."""
     try:
-        req = json.loads(body.decode("utf-8"))
+        req = json.loads(body.decode("utf-8"), object_pairs_hook=_refuse_duplicate_keys)
     except (UnicodeDecodeError, ValueError, RecursionError):
         return 422, {"detail": BAD_BODY_DETAIL}
     if (not isinstance(req, dict) or set(req) != _VERIFY_FIELDS

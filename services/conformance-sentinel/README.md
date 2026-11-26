@@ -12,7 +12,7 @@ This is the service that turns FIELD from *declared* into *enforced*.
 | # | Check | Clause on failure |
 |---|---|---|
 | 1 | Sealed ledger reachable AND appendable (no audit ⇒ no action): `GET /health` must be 200 with `ok: true`, and (F2) an `appendable` key that is not `true` — `FIELD_LEDGER_REQUIRE_SIGNING=1` with no signing key loaded — counts as unreachable; a body with no `appendable` key (an older ledger) counts as appendable | `L.unreachable` BLOCK |
-| 2 | Agent registered & active (killed ⇒ instant block) | `R.unregistered` / `E.kill_switch` BLOCK |
+| 2 | Agent registered & active (killed ⇒ instant block). A registry that cannot be reached or answers unusably (transport error, any status other than 200/404, a body that is not an agent object) is still a BLOCK, under its own clause (B16) | `R.unregistered` (the registry says no such agent, or the status is not active) / `R.registry_unreachable` (identity cannot be established) / `E.kill_switch` BLOCK |
 | 3 | Manifest present & valid (`field validate`) | `I.manifest` BLOCK |
 | 4 | Token presented, active, bound to this agent | `D.token` / `D.expired` / `D.revoked` BLOCK |
 | 5 | Action in **both** token scope and manifest scope | `D.scope` BLOCK |
@@ -166,7 +166,7 @@ manifest ships in the package (`self_manifest.yaml`; inspect with
 
 `sentinel score` runs a deterministic 100-action seeded suite against a
 **log-only** estate (it refuses anything else) and emits a sourced scorecard
-(`--out-md/--out-json`; exit 0 gates pass, 3 gates fail). Categories:
+(`--out-md/--out-json`; exit 0 gates pass, 3 gates fail, 1 a refused measurement or a scorecard file that could not be written, the gate summary having been printed first; each file is written through a temporary file, so a failed run leaves no half file). Categories:
 scope-breach, expired-token, revoked-token, ledger-unreachable,
 ambiguous-violating, exact-conforming, ambiguous-conforming. Gated metrics
 *(proposed; ratified at PoC exit)*: **gated catch ≥ 95%** (would-be verdict
@@ -189,11 +189,24 @@ binding gates for enforce-by-default remain live (2-week log-only burn-in;
 `POST /check` `{agent_id, action, token_id?, irreversible?}` → verdict ·
 `GET /clauses` · `GET /health`
 
+The verdict's `context` never repeats the presented `token_id`: it carries `token_presented` (bool) and `token_ref`
+(first 12 hex of sha256 of the id) so a caller can correlate without the credential appearing in logs or reports.
+
 ```
 sentinel check <agent-id> "<action>" [--token-id T] [--irreversible]   # exit 0/2/1 = ALLOW/ESCALATE/BLOCK
 sentinel clauses
 sentinel serve [--port 8004]
+sentinel version
+sentinel self-manifest                                                 # exit 1 if the self-manifest fails validation
+sentinel score [--out-md P] [--out-json P]                             # exit 0 gates pass / 3 gates fail; log-only estate only
 ```
+
+*Added 2026-11-04 (item B-P-22, verified against main
+cd3b76901f9aabfd45cee546f597177b8739d6ea):* the last three lines above were
+missing from this block; all three commands exist in
+`src/conformance_sentinel/cli.py` (`version`, `self-manifest`, `score`).
+`score` also takes `--ledger-down-cmd` and `--manifest-dir`; `serve` also
+takes `--host`.
 
 ## `@governed` — one decorator to govern any Python tool call
 
@@ -213,6 +226,8 @@ raises `ActionEscalated`; sentinel unreachable fails closed.
 | Guarantee | Status | How |
 |---|---|---|
 | Killed agents fail their next check instantly | **Enforced in code** | registry read per check; test proves it |
+| A registry that cannot be reached is a BLOCK `R.registry_unreachable`, never an ALLOW and never reported as `R.unregistered` | **Enforced in code** (B16) | `engine._decide` step 2 maps `RegistryUnreachableError` to `R.registry_unreachable`; `tests/test_backlog_b16_registry_unreachable.py` (transport error, 500/502/503, a non-object body: BLOCK with the new clause; a real 404 stays `R.unregistered`), `tests/test_fail_closed_pins_c168.py::test_a_registry_error_answer_is_a_block_never_an_allow`, `tests/test_upstream_text_not_echoed.py::test_a_registry_outage_names_the_class_only` |
+| The sentinel's pooled clients (registry, ledger, governor, delegation) do not reuse a connection the server is about to close, and an idempotent GET on a dead pooled connection is sent once more | **Enforced in code** (B16) | `field_core.http.pooled_limits()` (`keepalive_expiry` 2 s, below uvicorn's default 5 s keep-alive that every service's `serve` uses) on `RegistryClient`, `LedgerClient`, `SpendStatusClient`, `DelegationIntrospectClient`; `field_core.http.get_retrying_once` on the registry, ledger and governor GETs (exactly one retry, only on `RemoteProtocolError` / `ReadError` / `WriteError`; never a timeout, a refused connection, an HTTP answer or a POST); `packages/field-core/tests/test_pooled_keepalive_b16.py`. The B16 follow-up gives the same pool to attestation-reporter's upstream clients, force-gateway's `SentinelClient`, incident-replay's ledger and token clients, the ops-console `ServiceClient` and this service's `@governed` `Governor` (their GETs retried once; their POSTs never), each pinned by a `test_b16_pooled_client_*` test in that service (this service: `test_backlog_b16_governed_pool.py`). **Not covered:** clients that talk to hosts outside the estate (kill-switch endpoint calls, the LLM client, the crosswalk regwatch feeds) , one-shot CLI clients, and these long-lived in-estate clients, which still use httpx's default keep-alive expiry: force-gateway's `serve` governor client, lifecycle-manager's delegation and kill-switch clients, claude-approver's client and the field-agent SDK clients |
 | Out-of-scope actions blocked with `D.scope` | **Enforced in code** | intersection of token + manifest scope; narrower grant wins (test) |
 | Expired/revoked tokens blocked with exact clause | **Enforced in code** | live introspection per check |
 | Invalid/missing manifest ⇒ all authority lost | **Enforced in code** | adversarial test edits the manifest on disk |

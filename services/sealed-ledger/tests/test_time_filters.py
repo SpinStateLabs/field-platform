@@ -108,7 +108,8 @@ def test_api_events_filters_by_instant_and_422s_on_garbage(fixed_store):
     assert "until" in bad.json()["detail"]
 
 
-def test_export_window_selects_the_same_events_as_events(fixed_store, tmp_path):
+def test_export_window_selects_the_same_events_as_events(fixed_store, tmp_path, monkeypatch):
+    monkeypatch.setenv("FIELD_EXPORT_ROOT", str(tmp_path))  # Backlog B10: out_dir is confined when unarmed too
     client = TestClient(create_app(store=fixed_store))
     params = {"since": "2026-09-12T10:00:00.500000Z", "until": "2026-09-12T12:00:00Z"}
     r = client.post("/export", params={"out_dir": str(tmp_path / "exports"), **params})

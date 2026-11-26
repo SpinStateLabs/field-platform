@@ -38,15 +38,26 @@ def _first_line(exc: Exception) -> str:
     text = str(exc)
     for line in text.splitlines():
         line = line.strip()
-        if "allow_ips entry" in line:
-            return line.removeprefix("Value error, ")
+        if line.startswith("Value error, "):
+            # pydantic appends "[type=value_error, input_value=..., input_type=...]": that tail echoes the refused value
+            return line.removeprefix("Value error, ").split(" [type=", 1)[0]
     return text.splitlines()[0] if text else type(exc).__name__
 
 
 def _load_config(path: Optional[Path], **overrides) -> RetroConfig:
     data: dict = {}
     if path is not None:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        except OSError as exc:
+            raise ValueError(f"--config cannot be read ({type(exc).__name__})") from None
+        except ValueError:                      # not UTF-8, or not JSON: nothing of the file is echoed
+            raise ValueError("--config is not valid UTF-8 JSON") from None
+        except RecursionError:                  # nested deeper than the JSON decoder allows (PR 533, S-B8)
+            raise ValueError("--config nests too deeply") from None
+        if not isinstance(loaded, dict):
+            raise ValueError("--config must hold a JSON object")
+        data = loaded
     for key, value in overrides.items():
         if value is not None:
             data[key] = value
@@ -92,7 +103,10 @@ def scan(
         report_path, pack_path = write_outputs(
             result, out, key.read_text(encoding="utf-8"), _now_iso(), list(logs), force=force
         )
-    except (ValueError, FileExistsError, FileNotFoundError) as exc:
+    except OSError as exc:      # FileExistsError, FileNotFoundError, a directory key...: the class only, never a path
+        typer.echo(f"error: could not read or write a file: {type(exc).__name__}", err=True)
+        raise typer.Exit(1)
+    except ValueError as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(1)
     total_lines = sum(i.lines for i in result.inputs)
@@ -127,14 +141,38 @@ def verify(
     sources: list[Path] = typer.Option(None, "--sources", help="the original log files, to re-hash every cited line"),
 ):
     """Verify a pack against a public key you supply (never trust the pack's own)."""
-    data = json.loads(pack.read_text(encoding="utf-8"))
-    report_bytes = report.read_bytes() if report else None
+    def refuse(what: str, exc: Exception) -> "typer.Exit":
+        # one line, the exception class only (never its text or a path from inside it)
+        typer.echo(f"error: could not read {what}: {type(exc).__name__}", err=True)
+        return typer.Exit(1)
+
+    try:
+        data = json.loads(pack.read_text(encoding="utf-8"))
+    except (OSError, ValueError, RecursionError) as exc:   # unreadable, a directory, not UTF-8, not JSON, nested too deep
+        raise refuse("the pack", exc)
+    if not isinstance(data, dict):
+        # one stderr line (rebuild of PR 991); the checks below still FAIL "pack shape" and exit 1 (main)
+        typer.echo("error: the pack is not a JSON object", err=True)
+    try:
+        pub_pem = pub.read_text(encoding="utf-8")
+    except (OSError, ValueError) as exc:
+        raise refuse("--pub (the public key)", exc)
+    try:
+        report_bytes = report.read_bytes() if report else None
+    except OSError as exc:
+        raise refuse("--report", exc)
     source_map = None
     if sources:
         from .parsers import unique_labels
 
-        source_map = {label: p.read_bytes() for p, label in zip(sources, unique_labels(list(sources)))}
-    result = _verify_pack(data, pub.read_text(encoding="utf-8"), report_bytes, source_map)
+        try:
+            source_map = {label: p.read_bytes() for p, label in zip(sources, unique_labels(list(sources)))}
+        except OSError as exc:
+            raise refuse("--sources", exc)
+    try:
+        result = _verify_pack(data, pub_pem, report_bytes, source_map)
+    except RecursionError as exc:   # nests deep enough to load but not to canonicalise (json.loads allows ~16000 on 3.14)
+        raise refuse("the pack", exc)
     for check in result.checks:
         typer.echo(f"[{'ok ' if check.ok else 'FAIL'}] {check.name}: {check.detail}")
     skipped = []
@@ -157,6 +195,12 @@ def keygen(
     force: bool = typer.Option(False, "--force"),
 ):
     """Generate an Ed25519 signing keypair. Keep the private key off-box."""
+    import os
+
+    if pub is not None and os.path.realpath(out) == os.path.realpath(pub):
+        # the private PEM would be written and then overwritten by the public one: the private key silently lost
+        typer.echo("error: --out and --pub are the same file; nothing written", err=True)
+        raise typer.Exit(1)
     for target in (out, pub) if pub else (out,):
         if target.exists() and not force:
             typer.echo(f"{target} exists (use --force)", err=True)
@@ -166,13 +210,14 @@ def keygen(
     # which it exists world-readable (chmod-after-write leaves such a window).
     # The mode in os.open applies only when the file is CREATED; with --force
     # over an existing key the chmod below brings a 0644 file down to 0600.
-    import os
-
     try:
         fd = os.open(str(out), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(private_pem)
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        if os.name != "nt":   # a default-mode write could leave a 0644 key on POSIX
+            typer.echo(f"error: could not create {out} with mode 0600 ({type(exc).__name__}); nothing written", err=True)
+            raise typer.Exit(1)
         out.write_text(private_pem, encoding="utf-8")  # platforms without O_* modes
     try:
         os.chmod(out, 0o600)
@@ -180,7 +225,14 @@ def keygen(
         pass  # platforms without POSIX modes
     typer.echo(f"wrote private key {out}")
     if pub:
-        pub.write_text(public_pem, encoding="utf-8")
+        try:
+            pub.write_text(public_pem, encoding="utf-8")
+        except OSError as exc:
+            # the private key is already on disk: say so, and print the public half so nothing is lost
+            typer.echo(f"error: the private key was written to {out} but the public key could NOT be written "
+                       f"({type(exc).__name__}); the public key is printed on stdout", err=True)
+            typer.echo(public_pem)
+            raise typer.Exit(1)
         typer.echo(f"wrote public key {pub}")
     else:
         typer.echo(public_pem)

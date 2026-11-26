@@ -19,15 +19,25 @@ characters of the event hash, never a payload, a key, a key hash or the perimete
 one write yourself (the runbook's live-verification step), then run this with your operator id; the session never
 needs your key.
 
-Exit status: 0 a signed authenticated row was found, 1 none was (or only claimed-name rows), 2 usage error or the
-ledger could not be read. Standard library only (``--base`` uses tools/estate_probe.py).
+Transport (Backlog B1, the G19/C-20 rule of tools/estate_probe.py and tools/renew_token.py): with ``--base`` the
+perimeter secret travels as a header, so a cleartext ``http://`` base is refused unless its host is loopback or private
+(RFC 1918). This tool sends the perimeter secret only: it builds ``estate_probe.Estate`` without an operator pair, so
+no operator key is sent. As a fail-closed precaution, when ``FIELD_OPERATOR_KEY`` is set in the environment only a
+loopback host is allowed (the rule estate_probe applies when it does send a key); that is stricter than this tool
+needs, never looser. Only the http and https schemes are accepted.
+There is no override flag. The refusal is exit 2 and no request is made.
+
+Exit status: 0 a signed authenticated row was found, 1 none was (or only claimed-name rows), 2 usage error, a
+cleartext refusal, or the ledger could not be read. Standard library only (``--base`` uses tools/estate_probe.py).
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -62,7 +72,7 @@ def check_events(events: list, operator_id: str) -> tuple[bool, list[str]]:
         claimed = p.get("operator_claimed")
         fp = p.get("operator_key_fp")
         if authenticated == operator_id:
-            has_claim = isinstance(claimed, str) and claimed != ""
+            has_claim = isinstance(claimed, str) and claimed.strip() != ""      # a blank name is no name (S9-26)
             has_fp = isinstance(fp, str) and _FP_RE.fullmatch(fp) is not None
             h = ev.get("hash") if isinstance(ev, dict) else None
             hp = h[:HASH_PREFIX] if isinstance(h, str) and _HASH_RE.fullmatch(h) else "(no hash)"
@@ -81,6 +91,23 @@ def check_events(events: list, operator_id: str) -> tuple[bool, list[str]]:
     lines.append(f"[{'PASS' if ok else 'FAIL'}] D16 positive write recorded for {_shown_id(operator_id)}: "
                  f"{proof} signed authenticated row(s)")
     return ok, lines
+
+
+def cleartext_refusal(base: str, has_key: bool) -> str | None:
+    """The refusal message when the perimeter secret (and an env operator key) would travel in cleartext, else None.
+
+    Same rule as estate_probe.main and renew_token (G19 / C-20): https is always allowed; plain http only to a
+    loopback host when an operator key is in play, or to a loopback or private host for the secret alone. No override."""
+    import estate_probe as ep
+    parts = urllib.parse.urlsplit(base)
+    host = parts.hostname or ""
+    if parts.scheme == "https":
+        return None
+    local = ep._loopback_host(host) if has_key else ep._internal_host(host)
+    if parts.scheme == "http" and local:
+        return None
+    return ("the secret or operator key would travel in cleartext: use https://, or a loopback address "
+            "(a private address is allowed for the secret alone, never with an operator key)")
 
 
 def _load_events(path: str) -> list | None:
@@ -114,9 +141,15 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         import estate_probe as ep
         try:
-            secret = Path(args.secret_file).read_text(encoding="utf-8").strip()
-        except OSError:
+            secret = Path(args.secret_file).read_text(encoding="utf-8-sig").strip()
+        except (OSError, UnicodeDecodeError):       # as estate_probe._secret(): a non-UTF-8 file is exit 2, not a traceback
+            secret = ""
+        if not secret:                              # unreadable, not UTF-8, empty or blank: nothing is sent (S9-26)
             print("error: the secret file cannot be read")
+            return 2
+        refusal = cleartext_refusal(args.base, bool(os.environ.get("FIELD_OPERATOR_KEY")))
+        if refusal:
+            print(f"error: {refusal}")
             return 2
         status, body = ep.Estate(args.base, secret).call("GET", "/ledger/events")
         events = body if status == 200 and isinstance(body, list) else None

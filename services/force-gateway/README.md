@@ -23,7 +23,10 @@ presets from it and authors no FORCE language of its own:
 `FORCE_GATEWAY_ENFORCE=1` — optional `x-field-action`, platform-only
 `x-force-passthrough: judge`) · `GET /presets[/{name}]` ·
 `GET /telemetry[?limit=20]` · `GET /health` (adds `enforce`, `tool_check`,
-`tool_check_active`, `sentinel_url`, `sentinel_timeout_seconds`)
+`tool_check_active`, `sentinel_url`, `sentinel_timeout_seconds`,
+`ledger_appends_dropped`, `spend_forwards_dropped`: audit appends and governor
+usage reports that failed or were refused (a non-2xx status other than 404) and
+were skipped, never affecting the request)
 
 ```
 forcegw presets [--show analysis]
@@ -184,7 +187,8 @@ manifest like any governed action), else the fixed action **`llm.messages`**
 | sentinel ALLOW | as today | forwarded, injected, instrumented, metered; a log-only shadow ALLOW is forwarded and surfaced as `gateway.shadowed{agent_id, action, would_be}` |
 | sentinel BLOCK | `403` | `{decision, clause_id, reasons, agent_id, action}` (+ `retry_after_seconds` for `E.rate_limit`) |
 | sentinel ESCALATE | `403` | the same + `escalation: true` and a last reason: an LLM call cannot pause for a human — a human clears it before the agent calls again |
-| sentinel unreachable, timed out, non-200, no verdict | `503` | `{"detail": ...}`; **no upstream call** |
+| sentinel unreachable, timed out, non-200, no verdict | `503` | `{"detail": "sentinel check did not happen — refusing: <category>"}`, the category being one of `sentinel unreachable`, `sentinel returned <status>`, `sentinel returned a non-JSON body`, `sentinel returned no verdict` (never the sentinel's URL or the transport's exception text; the log keeps the exception class); **no upstream call** |
+| `anthropic-version` not of the shape `NNNN-NN-NN` (four, two and two ASCII digits; only the shape is checked, not that it is a real date), or `x-field-agent-id` / `x-field-token` / `x-field-action` not 1 to 128 characters of one line without control characters (`x-field-agent-id` and `x-field-token` also without surrounding space) | `422` | fixed text naming the header; nothing is forwarded, sent to the sentinel or ledgered. An empty identity header is still the `401` above |
 | `FIELD_SENTINEL_URL` unset | `503` | `detail` names the variable; `/health` `sentinel_url: null`; never a process exit |
 
 Every 403/503 appends `gateway.refused{agent_id, action, clause_id, status}`
@@ -240,7 +244,7 @@ upstream, enforce=1, kill-switch, `gateway.refused` in the ledger).
 
 | Guarantee | Status | How |
 |---|---|---|
-| Every proxied call carries the preset's FORCE block | **Enforced in code** | injection before forward; tests pin verbatim protocol lines per preset |
+| Every instrumented proxied call carries the preset's FORCE block. **Exceptions, by design (ADR 10): calls forwarded in a bypass window and `x-force-passthrough: judge` calls (when honoured: secret presented if one is configured; under enforce=1 self ids only) go upstream with the caller's body unchanged, with no FORCE block**; both are counted (`coverage.bypassed`, `coverage.passthrough`) | **Enforced in code** | injection before forward; tests pin verbatim protocol lines per preset; `tests/test_readme_force_block_claim.py` pins the instrumented call (block present) and both exceptions (body unchanged, counted) and this row's wording |
 | The caller's own system prompt survives injection | **Enforced in code** | string and block-list forms tested |
 | Telemetry figures are deterministic | **Enforced in code** | pure regex; labeled on every payload |
 | Token spend reaches the governor | **Enforced in code** (best-effort delivery) | usage forwarded per call with agent id, `x-force-passthrough` calls included (`tests/test_d2_upstream_passthrough.py`: passthrough + agent id ⇒ exactly one `/usage`, secret and secretless); not during a bypass window, which forwards uninstrumented |

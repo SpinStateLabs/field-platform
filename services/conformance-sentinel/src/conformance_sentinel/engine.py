@@ -9,14 +9,19 @@ token, unreachable ledger — all refuse the action rather than assume.
 
 from __future__ import annotations
 
-from field_core.authn import auth_headers
+from field_core.guarded_operator import perimeter_headers
 
+import hashlib
+import json
 import logging
+import math
+import re
+import threading
 from datetime import datetime, timezone
 from decimal import ROUND_FLOOR, Decimal, InvalidOperation
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from field_core.clients import (
     AgentNotRegisteredError,
@@ -30,25 +35,79 @@ from field_core.clients import (
     RegistryClient,
 )
 from field_core.conformance import ConformanceVerdict, Decision
+from field_core.http import get_retrying_once, pooled_limits
+from field_core.ids import REGISTRY_ID_RE, registry_id_ok
 from field_core.ledger_context import correlation_context
+from field_core.operator_health import NOT_SHOWN, shown_label
 
 from conformance_sentinel.judge import injection_screen
 from conformance_sentinel.mode import SentinelMode
 from conformance_sentinel.routing import needs_semantic_judgment
 
 
+# S5-13: caps on what a caller can put into every verdict's ledger payload and the governor /spend body.
+AGENT_ID_MAX = 200
+TOKEN_ID_MAX = 200
+ACTION_MAX = 2000
+CONTEXT_MAX_KEYS = 50
+CONTEXT_MAX_BYTES = 16 * 1024
+
+#: The registry's own id pattern (agent_registry.models). An id outside it cannot be registered, so it is answered as
+#: R.unregistered WITHOUT a registry call (RegistryClient refuses such an id too, before it builds a URL, and also
+#: refuses one over its own length bound).
+_REGISTRY_ID = REGISTRY_ID_RE
+
+
+def _row_agent_id(agent_id: str) -> str | None:
+    """The agent id a ledger row is keyed by: the request's own inside the registry's id rule; otherwise a short
+    printable label of it (``shown_label``), or none."""
+    if registry_id_ok(agent_id):
+        return agent_id
+    label = shown_label(agent_id)
+    return None if label == NOT_SHOWN else label
+
+
+def _shown_id(agent_id: str) -> str:
+    """The id as a verdict's reason quotes it: as sent inside the rule, else its label or the not-shown marker."""
+    return agent_id if registry_id_ok(agent_id) else str(shown_label(agent_id))
+
+
 class CheckRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    agent_id: str = Field(min_length=1)
-    action: str = Field(min_length=1, description="Proposed action, e.g. 'draft invoices'")
+    agent_id: str = Field(min_length=1, max_length=AGENT_ID_MAX)
+    action: str = Field(min_length=1, max_length=ACTION_MAX, description="Proposed action, e.g. 'draft invoices'")
     token_id: str | None = Field(
-        default=None, description="Delegation token presented by the agent"
+        default=None, max_length=TOKEN_ID_MAX, description="Delegation token presented by the agent"
     )
     irreversible: bool = Field(
         default=False, description="Caller marks one-way actions (send, delete, pay)"
     )
     context: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("context")
+    @classmethod
+    def _context_is_bounded(cls, v: dict[str, Any]) -> dict[str, Any]:
+        if len(v) > CONTEXT_MAX_KEYS:
+            raise ValueError(f"context holds more than {CONTEXT_MAX_KEYS} keys")
+        try:
+            size = len(json.dumps(v, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+        except (TypeError, ValueError, RecursionError):
+            raise ValueError("context is not plain JSON") from None
+        if size > CONTEXT_MAX_BYTES:
+            raise ValueError(f"context is larger than {CONTEXT_MAX_BYTES} bytes")
+        return v
+
+
+def _token_context(token_id: str | None) -> dict[str, Any]:
+    """What a verdict says about the presented delegation token WITHOUT repeating it. The id is a credential-shaped value
+    the caller already holds; echoing it put it into every client log, report and quoted verdict (git-post-agent
+    leaked a live id that way, 2026-11-13). ``token_ref`` is the first 12 hex of sha256(token_id): enough to correlate
+    a verdict with the caller's own token, useless as a credential."""
+    return {
+        "token_presented": bool(token_id),
+        "token_ref": hashlib.sha256(token_id.encode()).hexdigest()[:12] if token_id else None,
+    }
 
 
 def _caller_payload(req: CheckRequest) -> dict[str, Any]:
@@ -57,6 +116,52 @@ def _caller_payload(req: CheckRequest) -> dict[str, Any]:
     byte-for-byte what it was before P30(5))."""
     ctx = correlation_context(req.context)
     return {"caller_context": ctx} if ctx else {}
+
+
+class UpstreamAnswerError(ConnectionError):
+    """An upstream answered with a status or a body shape this client refuses. The text is built HERE from a service
+    name and a status code or a fixed body-shape phrase (never the body), so a verdict reason may show it; it stays a
+    ConnectionError for every caller."""
+
+
+def _why(exc: BaseException) -> str:
+    """What a verdict reason may say about a failed call: the exception CLASS, never its text (an httpx error's text
+    carries the URL, userinfo included, and this reason is returned by POST /check and ledgered). The exceptions whose
+    text is built in this service from a name and a status code (the judge's JudgeError, UpstreamAnswerError) keep it."""
+    from conformance_sentinel.judge import JudgeError
+
+    if isinstance(exc, (JudgeError, UpstreamAnswerError)):
+        return str(exc)
+    if isinstance(exc, RegistryUnreachableError) and exc.__cause__ is None:
+        # field-core builds the status and body-shape texts of this error itself ("registry returned 503") with no
+        # cause; its transport path is `RegistryUnreachableError(str(exc)) from exc`, whose text can carry the URL
+        return str(exc)
+    return type(exc).__name__
+
+
+#: The states the spend-governor's /status can answer (spend_governor.core.SpendState). Anything else, or no `state`, is no
+#: answer: a body that is an object but names none of them used to fall through to ALLOW (R-PR606 C1).
+_SPEND_STATES = ("OK", "ESCALATE", "THROTTLED", "BLOCK")
+
+
+def _retry_after(value: Any) -> float | int | None:
+    """``retry_after_seconds`` only when it is a finite, non-negative number (not a bool), else None."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+        return None
+    return value
+
+
+def _object_body(resp, what: str) -> dict[str, Any]:
+    """A 200 answer's JSON body, which must be an object. Anything else (a list, ``null``, a string, a number, text that
+    is not JSON) raises with a fixed text that never carries the body, and the engine turns that into the same BLOCK as
+    an unreachable upstream: this is a policy enforcement point and a body of the wrong shape is no answer."""
+    try:
+        body = resp.json()
+    except Exception:
+        raise UpstreamAnswerError(f"{what} answered with a body that is not JSON") from None
+    if not isinstance(body, dict):
+        raise UpstreamAnswerError(f"{what} answered with an unusable body (not an object)")
+    return body
 
 
 class SpendStatusClient:
@@ -72,7 +177,8 @@ class SpendStatusClient:
         if self._client is None:
             import httpx
 
-            self._client = httpx.Client(timeout=5.0, headers=auth_headers())
+            # B16: idle connections expire before the governor's keep-alive closes them
+            self._client = httpx.Client(timeout=5.0, headers=perimeter_headers(), limits=pooled_limits())
 
     def status(self, agent_id: str, *, action: str | None = None) -> dict[str, Any] | None:
         """None means 'no cap configured' (404) — treated as ungoverned-spend,
@@ -80,15 +186,15 @@ class SpendStatusClient:
         ``action`` (keyword) asks the governor to include that action's rate
         windows (``?action=``); the judge gate calls without it."""
         if action is None:
-            resp = self._client.get(f"{self._base}/status/{agent_id}")
+            resp = get_retrying_once(self._client, f"{self._base}/status/{_seg(agent_id)}")
         else:
-            resp = self._client.get(f"{self._base}/status/{agent_id}",
-                                    params={"action": action})
+            resp = get_retrying_once(self._client, f"{self._base}/status/{_seg(agent_id)}",
+                                     params={"action": action})
         if resp.status_code == 404:
             return None
         if resp.status_code != 200:
-            raise ConnectionError(f"governor returned {resp.status_code}")
-        return resp.json()
+            raise UpstreamAnswerError(f"governor returned {resp.status_code}")
+        return _object_body(resp, "governor /status")
 
     def record_action(self, agent_id: str, action: str, *, shadowed: bool) -> str:
         """Meter ONE allowed action (option A): ``POST /spend`` with
@@ -101,18 +207,18 @@ class SpendStatusClient:
         if resp.status_code == 404:
             return "no_cap"
         if resp.status_code != 201:
-            raise ConnectionError(f"governor /spend returned {resp.status_code}")
+            raise UpstreamAnswerError(f"governor /spend returned {resp.status_code}")
         return "metered"
 
     def totals_since(self, agent_id: str, since: str) -> dict[str, Any] | None:
         """Spend since ``since`` (``GET /totals``); None when uncapped (404)."""
-        resp = self._client.get(f"{self._base}/totals/{agent_id}",
-                                params={"since": since})
+        resp = get_retrying_once(self._client, f"{self._base}/totals/{_seg(agent_id)}",
+                                 params={"since": since})
         if resp.status_code == 404:
             return None
         if resp.status_code != 200:
-            raise ConnectionError(f"governor /totals returned {resp.status_code}")
-        return resp.json()
+            raise UpstreamAnswerError(f"governor /totals returned {resp.status_code}")
+        return _object_body(resp, "governor /totals")
 
     def report_usage(self, agent_id: str, model: str,
                      input_tokens: int, output_tokens: int) -> None:
@@ -124,7 +230,7 @@ class SpendStatusClient:
             "note": "sentinel semantic judgment",
         })
         if resp.status_code != 201:
-            raise ConnectionError(f"governor /usage returned {resp.status_code}")
+            raise UpstreamAnswerError(f"governor /usage returned {resp.status_code}")
 
 
 class DelegationIntrospectClient:
@@ -138,15 +244,17 @@ class DelegationIntrospectClient:
         if self._client is None:
             import httpx
 
-            self._client = httpx.Client(timeout=5.0, headers=auth_headers())
+            # B16: idle connections expire before delegation's keep-alive closes them. POST /introspect is not
+            # retried: only idempotent GETs are (field_core.http.get_retrying_once)
+            self._client = httpx.Client(timeout=5.0, headers=perimeter_headers(), limits=pooled_limits())
 
     def introspect(self, token_id: str) -> dict[str, Any]:
         resp = self._client.post(
             f"{self._base}/introspect", json={"token_id": token_id}
         )
         if resp.status_code != 200:
-            raise ConnectionError(f"delegation returned {resp.status_code}")
-        return resp.json()
+            raise UpstreamAnswerError(f"delegation returned {resp.status_code}")
+        return _object_body(resp, "delegation /introspect")
 
 
 class SentinelEngine:
@@ -177,11 +285,13 @@ class SentinelEngine:
         # metering gap) the ledger refused or lost since start. The verdict
         # is never changed by one; the loss is counted and shown in /health.
         self.ledger_appends_dropped = 0
+        self._drops_lock = threading.Lock()   # request threads increment it; a bare += can lose an update
 
     def _note_drop(self, event_type: str, exc: BaseException) -> None:
         """Count and log a lost best-effort append. Exception TYPE only: its
         text can carry a URL or a payload value."""
-        self.ledger_appends_dropped += 1
+        with self._drops_lock:
+            self.ledger_appends_dropped += 1
         logging.getLogger(__name__).warning(
             "ledger append %s dropped (%s); verdict kept",
             event_type, type(exc).__name__)
@@ -220,7 +330,7 @@ class SentinelEngine:
                         "mode": "log_only",
                         **caller,
                     },
-                    agent_id=req.agent_id,
+                    agent_id=_row_agent_id(req.agent_id),
                 )
             except Exception as drop:
                 self._note_drop(shadow_type, drop)
@@ -235,7 +345,7 @@ class SentinelEngine:
                 checked_at=datetime.now(timezone.utc),
                 context={
                     **extra,
-                    "token_id": req.token_id,
+                    **_token_context(req.token_id),
                     "irreversible": req.irreversible,
                     "shadowed": True,
                     "would_be": {"decision": decision.value, "clause_id": clause_id},
@@ -249,7 +359,7 @@ class SentinelEngine:
             clause_id=clause_id,
             reasons=reasons,
             checked_at=datetime.now(timezone.utc),
-            context={**extra, "token_id": req.token_id,
+            context={**extra, **_token_context(req.token_id),
                      "irreversible": req.irreversible},
         )
         # Blocks and escalations are ledger events (spec). Allows too — the
@@ -272,7 +382,7 @@ class SentinelEngine:
                     "reasons": reasons,
                     **caller,
                 },
-                agent_id=req.agent_id,
+                agent_id=_row_agent_id(req.agent_id),
             )
         except Exception as exc:
             if decision is Decision.ALLOW and self.mode is SentinelMode.ENFORCE:
@@ -284,7 +394,7 @@ class SentinelEngine:
                     reasons=["sealed-ledger refused or failed the allow record",
                              f"{type(exc).__name__}: {' '.join(str(exc).split())[:300]}"],
                     checked_at=datetime.now(timezone.utc),
-                    context={"token_id": req.token_id, "irreversible": req.irreversible,
+                    context={**_token_context(req.token_id), "irreversible": req.irreversible,
                              "allow_record_failed": True},
                 )
         return verdict
@@ -309,7 +419,7 @@ class SentinelEngine:
         except Exception as exc:
             return self._verdict(
                 req, Decision.ESCALATE, "D.semantic",
-                [f"judge spend unverifiable (governor: {exc}) — "
+                [f"judge spend unverifiable (governor: {_why(exc)}) — "
                  "structural-only throttle"],
             )
         if spend is None:
@@ -317,6 +427,12 @@ class SentinelEngine:
                 req, Decision.ESCALATE, "D.semantic",
                 [f"no spend cap configured for '{self.judge_spend_agent_id}' "
                  "— refusing unmetered semantic judgment"],
+            )
+        if spend.get("state") not in _SPEND_STATES:
+            return self._verdict(
+                req, Decision.ESCALATE, "D.semantic",
+                ["sentinel judgment budget state unverifiable (the governor answered a missing or unknown state) — "
+                 "structural-only throttle"],
             )
         if spend.get("state") == "BLOCK":
             return self._verdict(
@@ -330,7 +446,7 @@ class SentinelEngine:
         except Exception as exc:
             return self._verdict(
                 req, Decision.ESCALATE, "D.semantic",
-                [f"semantic judge failed ({exc}) — fail-to-escalate"],
+                [f"semantic judge failed ({_why(exc)}) — fail-to-escalate"],
             )
 
         # Strict metering: a judgment that cannot be metered escalates.
@@ -342,7 +458,7 @@ class SentinelEngine:
         except Exception as exc:
             return self._verdict(
                 req, Decision.ESCALATE, "D.semantic",
-                [f"semantic judgment unmeterable ({exc}) — fail-to-escalate"],
+                [f"semantic judgment unmeterable ({_why(exc)}) — fail-to-escalate"],
             )
 
         # Model output is untrusted text: collapse whitespace + truncate
@@ -357,7 +473,7 @@ class SentinelEngine:
                     "input_tokens": jv.input_tokens,
                     "output_tokens": jv.output_tokens,
                 },
-                agent_id=req.agent_id,
+                agent_id=_row_agent_id(req.agent_id),
             )
         except Exception as drop:
             self._note_drop("sentinel.judge", drop)
@@ -415,7 +531,7 @@ class SentinelEngine:
                     payload={"action": req.action, "shadowed": shadowed,
                              "error": " ".join(str(exc).split())[:300],
                              **_caller_payload(req)},
-                    agent_id=req.agent_id,
+                    agent_id=_row_agent_id(req.agent_id),
                 )
             except Exception as drop:
                 self._note_drop("sentinel.metering_gap", drop)
@@ -452,7 +568,7 @@ class SentinelEngine:
         except Exception as exc:
             return self._verdict(
                 req, Decision.BLOCK, "E.spend_cap",
-                [f"spend-governor cannot total spend under this token: {exc}"],
+                [f"spend-governor cannot total spend under this token: {_why(exc)}"],
             )
         if totals is None:
             return self._verdict(
@@ -471,7 +587,16 @@ class SentinelEngine:
                 extra_context={"token_max_spend_cents": ceiling_cents,
                                "cap_currency": currency},
             )
-        spent = int(totals.get("spent_cents", 0))
+        spent = totals.get("spent_cents")
+        if isinstance(spent, bool) or not isinstance(spent, int) or spent < 0:
+            # a missing key used to count as 0 and the ceiling PASSED (fail open); a string, null, float or negative
+            # total is as unverifiable as no total. The reason names the field, never its value.
+            return self._verdict(
+                req, Decision.BLOCK, "E.spend_cap",
+                ["spend-governor's total under this token is unusable (spent_cents is missing, not a whole number "
+                 "or negative) — refusing"],
+                extra_context={"token_max_spend_cents": ceiling_cents},
+            )
         if spent >= ceiling_cents:
             return self._verdict(
                 req, Decision.BLOCK, "E.spend_cap",
@@ -494,17 +619,25 @@ class SentinelEngine:
             )
 
         # 2. Registry: the agent must exist and be active.
+        if not _REGISTRY_ID.fullmatch(req.agent_id):
+            # same verdict as the registry's 404, without sending this text into a URL path
+            return self._verdict(
+                req, Decision.BLOCK, "R.unregistered",
+                [f"agent '{_shown_id(req.agent_id)}' is not in the registry"],
+            )
         try:
             record = self.registry.get_agent(req.agent_id)
         except AgentNotRegisteredError:
             return self._verdict(
                 req, Decision.BLOCK, "R.unregistered",
-                [f"agent '{req.agent_id}' is not in the registry"],
+                [f"agent '{_shown_id(req.agent_id)}' is not in the registry"],
             )
         except RegistryUnreachableError as exc:
+            # B16: still a BLOCK (fail closed), but not "unregistered": the identity could not be established,
+            # which is a different fact from "the registry says no such agent" and is read differently by an operator.
             return self._verdict(
-                req, Decision.BLOCK, "R.unregistered",
-                [f"registry unreachable — cannot establish identity: {exc}"],
+                req, Decision.BLOCK, "R.registry_unreachable",
+                [f"registry unreachable — cannot establish identity: {_why(exc)}"],
             )
         status = record.get("status")
         if status == "killed":
@@ -536,16 +669,18 @@ class SentinelEngine:
         except Exception as exc:
             return self._verdict(
                 req, Decision.BLOCK, "D.token",
-                [f"delegation-authority unreachable: {exc}"],
+                [f"delegation-authority unreachable: {_why(exc)}"],
             )
-        if not intro.get("active"):
-            token_status = intro.get("status", "unknown")
+        if intro.get("active") is not True:      # a JSON boolean true, exactly: "true", 1 and "false" are not (R-PR606 C2)
+            token_status = intro.get("status")
+            if not isinstance(token_status, str):        # an unhashable or non-text status must neither raise nor be echoed
+                token_status = "unknown"
             clause = {"expired": "D.expired", "revoked": "D.revoked"}.get(
                 token_status, "D.token"
             )
             return self._verdict(
                 req, Decision.BLOCK, clause,
-                [f"token inactive: {intro.get('reason') or token_status}"],
+                [f"token inactive: {token_status if token_status in ('expired', 'revoked') else 'not active'}"],
             )
         if intro.get("agent_id") != req.agent_id:
             return self._verdict(
@@ -557,7 +692,16 @@ class SentinelEngine:
         #    go to the semantic judge — judged against the EFFECTIVE scope
         #    (token∩manifest) so the narrower grant still wins. Judge off or
         #    predicate not fired: block exactly as before.
-        token_scope = intro.get("scope") or []
+        token_scope = intro.get("scope")
+        if token_scope is None:
+            token_scope = []
+        elif not isinstance(token_scope, list) or not all(isinstance(s, str) for s in token_scope):
+            # a bare string would make `req.action not in token_scope` a SUBSTRING test; any non-string entry is not a
+            # scope either. The reason says what was wrong, never the value.
+            return self._verdict(
+                req, Decision.BLOCK, "D.scope",
+                ["token scope is unusable (not a list of strings) — refusing"],
+            )
         manifest_scope = manifest.delegation.scope
         if req.action not in token_scope or req.action not in manifest_scope:
             judged_conforming = False
@@ -612,10 +756,15 @@ class SentinelEngine:
         except Exception as exc:
             return self._verdict(
                 req, Decision.BLOCK, "E.spend_cap",
-                [f"spend-governor unreachable — cannot verify remaining budget: {exc}"],
+                [f"spend-governor unreachable — cannot verify remaining budget: {_why(exc)}"],
             )
         probe["spend_reached"] = True
         probe["spend_status"] = spend
+        if spend is not None and spend.get("state") not in _SPEND_STATES:
+            return self._verdict(
+                req, Decision.BLOCK, "E.spend_cap",
+                ["spend-governor answered a status with a missing or unknown state — cannot verify remaining budget"],
+            )
         if spend is None:
             if manifest.enforcement.spend_cap is not None:
                 return self._verdict(
@@ -632,7 +781,7 @@ class SentinelEngine:
         else:
             if spend.get("state") == "BLOCK":
                 return self._verdict(
-                    req, Decision.BLOCK, "E.spend_cap", [spend.get("detail", "cap reached")]
+                    req, Decision.BLOCK, "E.spend_cap", ["cap reached"]
                 )
             if intro.get("max_spend_usd") is not None:
                 ceiling_verdict = self._token_ceiling(req, intro)
@@ -641,14 +790,26 @@ class SentinelEngine:
             if spend.get("state") == "THROTTLED":
                 return self._verdict(
                     req, Decision.BLOCK, "E.rate_limit",
-                    [spend.get("detail", "rate limit exhausted")],
+                    ["rate limit exhausted"],
                     extra_context={
-                        "retry_after_seconds": spend.get("retry_after_seconds")},
+                        "retry_after_seconds": _retry_after(spend.get("retry_after_seconds"))},
                 )
             if spend.get("state") == "ESCALATE":
                 return self._verdict(
                     req, Decision.ESCALATE, "E.spend_threshold",
-                    [spend.get("detail", "threshold crossed")],
+                    ["threshold crossed"],
                 )
 
         return self._verdict(req, Decision.ALLOW, None, ["all clauses satisfied"])
+
+
+def _seg(value: str) -> str:
+    """One URL path segment from a caller-chosen id (same rule as ops-console's ``_seg``):
+    every reserved character is percent-encoded, so an encoded ``?``, ``#`` or ``/`` stays
+    inside the segment, and a pure-dot segment is encoded too so ``..`` cannot collapse the
+    governor path. (Defined last, and imports inside, so the env-read lines above keep the
+    line numbers docs/ENVIRONMENT.md cites.)"""
+    from urllib.parse import quote
+
+    seg = quote(str(value), safe="")
+    return seg.replace(".", "%2E") if seg and set(seg) == {"."} else seg

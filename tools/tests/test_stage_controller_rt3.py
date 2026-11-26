@@ -61,17 +61,19 @@ class Driver:
 
 
 def _records(tmp_path):
+    # Bound to the runs' build sha: a live run needs one (RT-832-R1, rebuild of PR 840), and the alerts and gate
+    # records must then carry its first 8 characters (F-816-5).
     r = sc.Records(tmp_path / "records.jsonl")
-    r.append("alerts_proven", ok=True)
-    r.append("gate", gate="G22", ok=True)
-    r.append("gate", gate="G18", ok=True)
-    r.append("gate", gate="G21", ok=True)
+    r.append("alerts_proven", ok=True, sha8=SHA[:8])
+    r.append("gate", gate="G22", ok=True, sha8=SHA[:8])
+    r.append("gate", gate="G18", ok=True, sha8=SHA[:8], window_hours=30.0, window_end=1_790_000_000, services=8)
+    r.append("gate", gate="G21", ok=True, sha8=SHA[:8])
     r.append("stage_done", stage=2)
     return r
 
 
 def _ctl(records, driver):
-    return sc.Controller(records, driver, estate="gb10", env={})
+    return sc.Controller(records, driver, estate="gb10", env={}, build_sha=SHA)
 
 
 def _fail_stage2(records):

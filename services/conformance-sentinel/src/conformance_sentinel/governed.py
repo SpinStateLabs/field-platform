@@ -21,7 +21,8 @@ ALLOW. Fail closed: sentinel unreachable ⇒ ``ActionBlocked``.
 
 from __future__ import annotations
 
-from field_core.authn import auth_headers
+from field_core.guarded_operator import perimeter_headers
+from field_core.http import pooled_limits
 
 import functools
 import os
@@ -31,11 +32,23 @@ from typing import Any, Callable
 import httpx
 
 
+def _reasons_text(verdict: dict[str, Any]) -> str:
+    """The verdict's reasons as one line. A reply from the sentinel is data: ``reasons`` that is not a list
+    (a string, a number, null) or holds non-strings must still give the typed exception, not a TypeError from
+    ``join`` (S7-23)."""
+    reasons = verdict.get("reasons")
+    if isinstance(reasons, str):
+        return reasons
+    if not isinstance(reasons, list):
+        return ""
+    return "; ".join(r for r in reasons if isinstance(r, str))
+
+
 class ActionBlocked(RuntimeError):
     def __init__(self, verdict: dict[str, Any]):
         self.verdict = verdict
         super().__init__(
-            f"BLOCK [{verdict.get('clause_id')}] {'; '.join(verdict.get('reasons', []))}"
+            f"BLOCK [{verdict.get('clause_id')}] {_reasons_text(verdict)}"
         )
 
     @property
@@ -55,7 +68,7 @@ class ActionEscalated(RuntimeError):
     def __init__(self, verdict: dict[str, Any]):
         self.verdict = verdict
         super().__init__(
-            f"ESCALATE [{verdict.get('clause_id')}] {'; '.join(verdict.get('reasons', []))}"
+            f"ESCALATE [{verdict.get('clause_id')}] {_reasons_text(verdict)}"
         )
 
 
@@ -72,7 +85,8 @@ class Governor:
         self._base = (sentinel_url or os.environ.get(
             "FIELD_SENTINEL_URL", "http://127.0.0.1:8004"
         )).rstrip("/")
-        self._client = client or httpx.Client(timeout=10.0, headers=auth_headers())
+        # B16: idle connections expire before the sentinel's keep-alive closes them; POST /check is not retried
+        self._client = client or httpx.Client(timeout=10.0, headers=perimeter_headers(), limits=pooled_limits())
 
     def close(self) -> None:
         """Close the HTTP client (also a client that was passed in: the Governor
@@ -110,7 +124,7 @@ class Governor:
         except Exception as exc:
             raise ActionBlocked(
                 {"clause_id": "E.kill_switch",
-                 "reasons": [f"sentinel unreachable — failing closed: {exc}"],
+                 "reasons": [f"sentinel unreachable — failing closed: {type(exc).__name__}"],
                  "decision": "BLOCK"}
             ) from exc
         # Fail closed on anything that is not exactly ALLOW, BLOCK or ESCALATE: a

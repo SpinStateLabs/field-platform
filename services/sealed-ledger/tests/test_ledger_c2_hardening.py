@@ -18,6 +18,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 from fastapi.testclient import TestClient
@@ -969,7 +970,7 @@ def test_an_unparseable_record_is_a_break_on_verify_never_a_500(tmp_path, how, w
     """C4R-9: GET /verify on a record that does not parse answers 200 ok=false
     with its GLOBAL first_break_index and a reason — single-file and segmented.
     A running store's appends refuse (500 LedgerCorrupt) instead of chaining
-    past it. LIMIT (pinned, as before C2 — test_torn_last_line_raises_as_today):
+    past it. LIMIT (pinned, as before C2 — test_torn_last_line_raises_on_open_and_the_cli_prints_one_tampered_line):
     a store cannot be OPENED on an open segment holding such a line, so a
     ledger process restarted on it does not start at all."""
     if where == "single-file":
@@ -1132,6 +1133,50 @@ def test_heavy_read_gate_width(tmp_path, monkeypatch, setting, width):
             t.join(10)
 
 
+@pytest.mark.parametrize("method,path_fn", [
+    ("GET", lambda tmp: "/verify"),
+    ("GET", lambda tmp: "/events"),
+    ("POST", lambda tmp: "/export?out_dir=" + quote(str(tmp / "bundles"), safe="")),   # encoded: a "+" or "&" in the temp path must stay part of the value
+])
+def test_every_served_heavy_read_waits_on_the_read_gate(tmp_path, monkeypatch, method, path_fn):
+    """B-1075-TESTS: test_heavy_read_gate_width only drives store.snapshot(); a /verify, /events or /export that
+    skipped the gate survived it. Hold the ONLY slot; the served route must not answer until it is released."""
+    monkeypatch.setenv("FIELD_LEDGER_READ_CONCURRENCY", "1")
+    # Backlog B10: out_dir is confined to FIELD_EXPORT_ROOT in every operator mode, and an out_dir outside it is refused
+    # 422 BEFORE the read gate (a refusal is not a served heavy read). The /export case must be a SERVED read, so its
+    # out_dir (tmp_path / "bundles") is put under the export root.
+    monkeypatch.setenv("FIELD_EXPORT_ROOT", str(tmp_path))
+    s, p, hashes = three_segments(tmp_path / "ledger")
+    app = create_app(store=s)
+    held, release, done = threading.Event(), threading.Event(), threading.Event()
+    answers: list = []
+
+    def hold():
+        with s._gate():
+            held.set()
+            release.wait(30)
+
+    def call():
+        answers.append(TestClient(app).request(method, path_fn(tmp_path)))
+        done.set()
+
+    holder = threading.Thread(target=hold)
+    holder.start()
+    assert held.wait(10)
+    caller = threading.Thread(target=call, daemon=True)
+    caller.start()
+    try:
+        assert not done.wait(0.7), f"{method} {path_fn(tmp_path)} answered while the only read-gate slot was held"
+        release.set()
+        assert done.wait(10) and answers[0].status_code == 200, answers
+    finally:
+        release.set()
+        holder.join(10)
+        caller.join(10)
+        for lane in app.state.lanes.values():
+            lane.shutdown(wait=False, cancel_futures=True)
+
+
 # ------------------------------------------ C2PD-6 / C2PD-7: served startup
 
 
@@ -1231,12 +1276,17 @@ def test_rotate_with_a_key_of_an_unknown_algorithm_is_503(tmp_path, monkeypatch)
 # ------------------------------------- C2PD-1 / C2R-12: real uvicorn serving
 
 
-def test_health_and_appends_do_not_wait_behind_queued_heavy_reads(tmp_path):
+def test_health_and_appends_do_not_wait_behind_queued_heavy_reads(tmp_path, monkeypatch):
     """C2PD-1: 60 /verify queued on the read gate used to hold 40 of them in
     Starlette's shared 40-thread pool, so /health and appends waited for a
     thread. The gate is HELD by the test here, so every queued read waits
     without using CPU: what is measured is thread starvation alone, not the
-    GIL contention a running parse adds (see README LIMITS)."""
+    GIL contention a running parse adds (see README LIMITS).
+
+    B-GL-heavy-route-inflight: the served default now refuses a second whole-ledger request instead of queueing it
+    (tests/test_heavy_route_inflight.py). This test is about the QUEUED lane, so it turns that admission off
+    (FIELD_LEDGER_HEAVY_INFLIGHT=0), the pre-change behaviour that remains available."""
+    monkeypatch.setenv("FIELD_LEDGER_HEAVY_INFLIGHT", "0")
     s, p, hashes = three_segments(tmp_path / "ledger")
     app = create_app(store=s)
     server, thread, port = _serve(app, graceful=1.0)
@@ -1280,7 +1330,11 @@ def test_health_and_appends_do_not_wait_behind_queued_heavy_reads(tmp_path):
 def test_served_concurrency_uvicorn(tmp_path, monkeypatch):
     """Build spec §6: a real server with 4 /verify loops, appends and two
     POST /rotate at once. Every append is kept in order, every /verify is ok
-    (or busy, never a break) and never shorter than what was acked before it."""
+    (or busy, never a break) and never shorter than what was acked before it.
+
+    B-GL-heavy-route-inflight: 4 concurrent /verify loops are a queue here, not refusals, so the admission limit is
+    turned off (FIELD_LEDGER_HEAVY_INFLIGHT=0); the refusing default is pinned in test_heavy_route_inflight.py."""
+    monkeypatch.setenv("FIELD_LEDGER_HEAVY_INFLIGHT", "0")
     keyfile = tmp_path / "keys" / "anchor.pem"
     keyfile.parent.mkdir()
     keyfile.write_text(KEY_PRIV, encoding="ascii")

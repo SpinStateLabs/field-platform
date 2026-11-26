@@ -22,6 +22,8 @@ C4 — the window, the canary row and the signature fields:
 
 from __future__ import annotations
 
+import os
+import time
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal, localcontext
@@ -29,6 +31,8 @@ from typing import Any, Literal
 from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
+
+from field_core.http import get_retrying_once
 
 from attestation_reporter.window import InvalidWindow, Window, normalise_bound, resolve_window
 
@@ -146,6 +150,41 @@ def _target(path: str, params: dict[str, Any] | None = None) -> str:
 _DOWN: ContextVar[set[int] | None] = ContextVar("attestation_down_upstreams", default=None)
 
 
+#: B-GL-attest-pack-gate: a 503 with a Retry-After is waited out and asked again, inside a build only. It can only
+#: matter for the ledger's /verify (the one whole-ledger read a pack sends; its filtered /events are never gated) and
+#: only runs when the ledger answers the 503 itself: with its default one-thread read lane a slow read queues the
+#: filtered /events and the first one times out ("ledger unreachable", no retry). Each wait <= RETRY_AFTER_CAP_S, 3 per call,
+#: FIELD_ATTEST_RETRY_BUDGET_S seconds in all per build (default 20; 0 = never retry, even for a Retry-After of 0;
+#: not a whole number of at most 9 digits = 20). ``_sleep`` is a module name so a test can replace it.
+RETRY_BUDGET_ENV = "FIELD_ATTEST_RETRY_BUDGET_S"
+DEFAULT_RETRY_BUDGET_S = 20
+RETRY_AFTER_CAP_S = 10
+MAX_RETRIES_PER_CALL = 3
+_sleep = time.sleep
+#: [seconds of waiting left] for the current ``build``; None outside a build (a direct ``_fetch`` never retries).
+_RETRY_LEFT: ContextVar[list[float] | None] = ContextVar("attestation_retry_left", default=None)
+
+
+def retry_budget_s() -> int:
+    raw = os.environ.get(RETRY_BUDGET_ENV, "").strip()
+    return int(raw) if raw.isdecimal() and len(raw) <= 9 else DEFAULT_RETRY_BUDGET_S
+
+
+def _retry_wait(resp: Any) -> int | None:
+    """Seconds to wait before asking again when ``resp`` is a 503 with an integer-seconds Retry-After, else None."""
+    if getattr(resp, "status_code", None) != 503:
+        return None
+    headers = getattr(resp, "headers", None)
+    try:
+        raw = headers.get("Retry-After") if headers is not None else None
+    except Exception:  # noqa: BLE001 - an odd headers object is simply no header
+        return None
+    raw = raw.strip() if isinstance(raw, str) else ""
+    if not raw.isdecimal() or len(raw) > 9:
+        return None
+    return min(int(raw), RETRY_AFTER_CAP_S)
+
+
 def _fetch_answer(client, base: str, path: str, params: dict[str, Any] | None = None):
     """Return (raw_json, query, ok, http_status): ``_fetch`` plus the HTTP
     status the service answered with — None when no answer came back (not
@@ -159,12 +198,21 @@ def _fetch_answer(client, base: str, path: str, params: dict[str, Any] | None = 
         # This upstream already failed with no answer in this build: say so at once, with the same
         # literal query, instead of waiting out the timeout again for every remaining metric.
         return None, query, False, None
-    try:
-        resp = client.get(target)
-    except Exception:
-        if down is not None:
-            down.add(id(client))
-        return None, query, False, None
+    left = _RETRY_LEFT.get()
+    retries = 0
+    while True:
+        try:
+            resp = get_retrying_once(client, target)   # B16: one more GET on a dead pooled connection only
+        except Exception:
+            if down is not None:
+                down.add(id(client))
+            return None, query, False, None
+        wait = _retry_wait(resp) if left is not None and retries < MAX_RETRIES_PER_CALL else None
+        if wait is None or left[0] <= 0 or wait > left[0]:
+            break
+        left[0] -= wait
+        retries += 1
+        _sleep(wait)
     if resp.status_code != 200:
         return None, query, False, resp.status_code
     try:
@@ -198,6 +246,11 @@ def _verify_unanswered(http_status: int | None) -> str:
     return f"ledger answered HTTP {http_status} to /verify — chain NOT verified; investigate"
 
 
+
+def _count_value(v) -> bool:
+    """B97: a count or a number of days the signed note may print: a non-negative int, never a bool."""
+    return isinstance(v, int) and not isinstance(v, bool) and v >= 0
+
 def _without_canaries(data: Any) -> tuple[Any, int]:
     """Drop gate-verification records (any dict whose ``agent_id`` is a canary)."""
     if not isinstance(data, list):
@@ -207,6 +260,21 @@ def _without_canaries(data: Any) -> tuple[Any, int]:
     kept = [x for x in data if not (isinstance(x, dict) and isinstance(x.get("agent_id"), str)
                                     and x["agent_id"] in CANARY_AGENTS)]
     return kept, len(data) - len(kept)
+
+
+class RevokedFlagNotBoolean(ValueError):
+    """A token whose ``revoked`` is present and is not a JSON boolean (a string, a number, a list, null). The metric
+    that needed the flag is unavailable (``_metric`` names this class in its note): a signed governance figure is
+    never built on truthiness (S5-16)."""
+
+
+def _revoked(token: dict) -> bool:
+    """The token's ``revoked`` flag, read strictly: ``True`` and ``False`` only; an absent key is ``False`` (a token
+    list from before the flag existed); any other value raises."""
+    flag = token.get("revoked", False)
+    if flag is True or flag is False:
+        return flag
+    raise RevokedFlagNotBoolean(type(flag).__name__)
 
 
 def _non_records(data: list) -> str | None:
@@ -328,22 +396,61 @@ class PackEngine:
         if data.get("status") == "unavailable":
             return policy, unavailable(count_name, "manifests",
                                        "the ledger could not read the agent registry at generation time")
-        offending, n_off = _without_canaries(data.get("offending") or [])
-        unresolvable, n_unres = _without_canaries(data.get("unresolvable") or [])
+        # A missing key or null means "none listed"; any other value must be a list of
+        # records, falsy or not: `or []` turned {} / "" / 0 / False into a published zero.
+        raw_offending = [] if data.get("offending") is None else data["offending"]
+        raw_unresolvable = [] if data.get("unresolvable") is None else data["unresolvable"]
+        for raw in (raw_offending, raw_unresolvable):
+            # a wrong-shaped list fails this ONE metric closed (as _metric does), not build()
+            if not isinstance(raw, list) or _non_records(raw):
+                return policy, unavailable(
+                    count_name, "manifests",
+                    "the ledger's /retention/check answer is not a list of records; "
+                    "figure not published")
+        offending, n_off = _without_canaries(raw_offending)
+        unresolvable, n_unres = _without_canaries(raw_unresolvable)
         offending = sorted(offending, key=lambda o: str(o.get("agent_id")))
         unresolvable = sorted(unresolvable, key=lambda u: str(u.get("agent_id")))
+        def ident(rec: dict) -> str:
+            # An id that is not a str (a dict or list a caller wrote into the record) is never
+            # printed into the signed note; the record stays counted and prints as missing, as the
+            # distinct-agents rows treat it.
+            return rec["agent_id"] if isinstance(rec.get("agent_id"), str) else "(no agent_id)"
+
+        # B97: the same rule for every other field the signed note prints. A value of the wrong type
+        # is never interpolated; it prints as a fixed placeholder, the record stays counted, and the
+        # note says how many records carried a malformed field.
+        def days(rec: dict) -> str:
+            d = rec.get("retention_days")
+            return f"{d} d" if _count_value(d) else "no retention_days"
+
+        def reason(rec: dict) -> str:
+            r = rec.get("reason")
+            return r if isinstance(r, str) else "(no reason)"
+
+        malformed = sum(1 for o in offending
+                        if not isinstance(o.get("agent_id"), str) or not _count_value(o.get("retention_days")))
+        malformed += sum(1 for u in unresolvable
+                         if not isinstance(u.get("agent_id"), str) or not isinstance(u.get("reason"), str))
+
         parts = []
         if offending:
-            parts.append("offending: " + ", ".join(
-                f"{o.get('agent_id')} ({o.get('retention_days')} d)" for o in offending))
+            parts.append("offending: " + ", ".join(f"{ident(o)} ({days(o)})" for o in offending))
         if unresolvable:
-            parts.append("unresolvable: " + ", ".join(
-                f"{u.get('agent_id')} ({u.get('reason')})" for u in unresolvable))
+            parts.append("unresolvable: " + ", ".join(f"{ident(u)} ({reason(u)})" for u in unresolvable))
             parts.append(f"a lower bound: {len(unresolvable)} manifest ref(s) could not be read")
         if not parts:
-            parts.append(f"none among {data.get('manifests_checked', 0)} resolvable manifest(s)")
-        if data.get("agents_without_manifest"):
-            parts.append(f"{data['agents_without_manifest']} agent(s) without a manifest_ref not checked")
+            checked = data.get("manifests_checked", 0)
+            parts.append(f"none among {checked} resolvable manifest(s)" if _count_value(checked)
+                         else "none among the resolvable manifests (the ledger's count is malformed)")
+        without = data.get("agents_without_manifest")
+        if _count_value(without):
+            if without:
+                parts.append(f"{without} agent(s) without a manifest_ref not checked")
+        elif without is not None:
+            parts.append("agents without a manifest_ref not checked (the ledger's count is malformed)")
+        if malformed:
+            parts.append(f"{malformed} record(s) with a malformed field, printed as a placeholder")
         if n_off or n_unres:
             parts.append(f"excludes {n_off + n_unres} gate-verification (canary) finding(s)")
         count = Metric(name=count_name, value=len(offending), unit="manifests",
@@ -448,6 +555,12 @@ class PackEngine:
             return Metric(name=name, source_query=query, status="unavailable",
                           note=_verify_unanswered(answered))
         reason = v.get("reason")
+        if not isinstance(v.get("ok"), bool):
+            # Not a verification result: INTACT is only ever `ok is True`. A truthy
+            # string or number used to read as intact; a missing key read as broken.
+            return Metric(name=name, source_query=query, status="unavailable",
+                          note="the ledger's /verify answer carries no boolean ok "
+                               "— not a verification result; chain NOT verified")
         if not v.get("ok") and isinstance(reason, str) and reason.startswith("ledger busy:"):
             # "ledger busy: unreadable: ..." is a genuine permission refusal on every
             # attempt (sealed-ledger's LedgerUnreadable): retrying will not help, so
@@ -458,7 +571,7 @@ class PackEngine:
                                + ("" if unreadable else "; retry"))
         return Metric(
             name=name,
-            value="INTACT" if v.get("ok") else f"BROKEN — {reason}",
+            value="INTACT" if v["ok"] is True else f"BROKEN — {reason}",
             source_query=query,
             note=_join(f"chain length {v.get('length')}",
                        f"{POINT_IN_TIME} (the whole live chain, not the window)",
@@ -502,9 +615,11 @@ class PackEngine:
         unavailable at once (same query text and note as before), so a dropped host costs one
         timeout per build, not one per metric. See ``_build`` for the window arguments."""
         token = _DOWN.set(set())
+        retry_token = _RETRY_LEFT.set([float(retry_budget_s())])
         try:
             return self._build(period, now, since=since, until=until)
         finally:
+            _RETRY_LEFT.reset(retry_token)
             _DOWN.reset(token)
 
     def _build(self, period: str | None = None, now: datetime | None = None, *,
@@ -595,7 +710,7 @@ class PackEngine:
         revoked = self._metric(
             "Tokens revoked (all time)", self.delegation,
             self.delegation_base, "/tokens", unit="tokens",
-            transform=lambda toks: sum(1 for t in toks if t.get("revoked")),
+            transform=lambda toks: sum(1 for t in toks if _revoked(t)),
             note="computed client-side from the token list: revoked == true; "
                  f"{POINT_IN_TIME}, not windowed",
         )
@@ -606,7 +721,7 @@ class PackEngine:
             self.delegation_base, "/tokens", unit="tokens",
             transform=lambda toks: sum(
                 1 for t in toks
-                if not t.get("revoked")
+                if not _revoked(t)
                 and now <= datetime.fromisoformat(
                     t["expires_at"].replace("Z", "+00:00")
                 ) <= now + timedelta(days=30)
