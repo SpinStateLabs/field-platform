@@ -16,9 +16,9 @@ THE NATIVE PATH. Only ``Controller.run`` writes ``stage_start`` / ``step_done`` 
   2. The Stage 2 go sentence is passed in as an argument (G25). It is Don's: this module never reads, builds or
      defaults one.
   3. Pre-flight: if the estate is ALREADY armed (the override file exists) the run is ``Refused("stage2_already_armed")``
-     before the controller is even built, because ``Controller.run(2)`` re-executes ``write_override`` and
-     ``recreate_killswitch``, and any abort rolls back with ``delete_override`` + ``recreate_killswitch``: on an armed
-     Stage 2 that disarms it. ``allow_already_armed=True`` is the explicit, narrower alternative: the driver then takes a
+     before any precondition or step, and the check runs inside the controller's run lock (B-1054-ARM-RACE), because
+     ``Controller.run(2)`` re-executes ``write_override`` and ``recreate_killswitch``, and any abort rolls back with
+     ``delete_override`` + ``recreate_killswitch``: on an armed Stage 2 that disarms it. ``allow_already_armed=True`` is the explicit, narrower alternative: the driver then takes a
      snapshot and treats the arming steps as no-ops and the rollback steps as no-ops, so an abort never disarms what was
      armed before the run (the rollback verification then expects ``enforce``, not ``log-only``).
   4. ``live=False`` (the default) is the controller's dry run: no action runs, a ``plan`` record is written.
@@ -139,15 +139,19 @@ def run_stage2(records: "sc.Records", estate: Stage2Estate, *, go_sentence: Any,
     missing, and ``Refused("stage2_already_armed")`` when the estate is armed and ``allow_already_armed`` is not set.
     ``build_sha`` and ``expected_services`` are required: the alerts and G22 records must carry the sha, and a baseline
     that names no service judges none. Not live (the default): the controller's dry run, no estate call at all."""
-    armed = False
-    if live:
-        armed = estate.override_present()
-        if armed and not allow_already_armed:
+    actions = Stage2Actions(estate)
+
+    def preflight() -> None:
+        # runs inside the controller's run lock (B-1054-ARM-RACE): a check made before the lock let a stalled run read
+        # "not armed", re-arm after another run armed, and then disarm that run's Stage 2 with its own rollback
+        actions.armed_before = estate.override_present()
+        if actions.armed_before and not allow_already_armed:
             try:
                 records.append("refused", stage=STAGE, reason=REFUSE_ARMED)
             except OSError:
                 pass                                 # the refusal stands even when it cannot be recorded
             raise sc.Refused(REFUSE_ARMED)
-    controller = sc.Controller(records, Stage2Actions(estate, armed_before=armed), estate=alert_estate, env=env,
+
+    controller = sc.Controller(records, actions, estate=alert_estate, env=env,
                                expected_services=expected_services, build_sha=build_sha)
-    return controller.run(STAGE, go_sentence=go_sentence, live=live)
+    return controller.run(STAGE, go_sentence=go_sentence, live=live, preflight=preflight if live else None)

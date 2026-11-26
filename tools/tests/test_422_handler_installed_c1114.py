@@ -228,10 +228,12 @@ def test_the_serving_app_reading_accepts_the_real_shape_and_refuses_the_three_su
 # valid field, so the handler's replacement of a validator's text and its refusal to echo the whole input are seen end to end.
 def test_a_422_from_a_custom_validator_keeps_a_fixed_reason_and_never_the_value(tmp_path):
     client = TestClient(_delegation(tmp_path), raise_server_exceptions=False)
-    body = {"agent_id": MARK, "granted_by": "g", "scope": ["s"], "ttl_seconds": 60, "expires_at": "2999-01-01T00:00:00Z"}
+    # the marker in ``agent_id`` is inside the registry's id rule, so only the model validator refuses the body
+    body = {"agent_id": MARK.lower(), "granted_by": MARK, "scope": ["s"], "ttl_seconds": 60,
+            "expires_at": "2999-01-01T00:00:00Z"}
     r = client.post("/tokens", json=body)
     assert r.status_code == 422, r.status_code
-    assert MARK not in r.text, r.text
+    assert MARK not in r.text and MARK.lower() not in r.text, r.text
     detail = r.json()["detail"]
     assert isinstance(detail, list) and detail, detail
     assert any("body" in err["loc"] for err in detail), detail                 # the location (the request body) is kept
@@ -239,7 +241,7 @@ def test_a_422_from_a_custom_validator_keeps_a_fixed_reason_and_never_the_value(
         assert set(err) == {"type", "loc", "msg"}, err                         # no input (the whole body), no ctx
         assert err["type"] == "value_error", err                               # it really is the custom validator
         assert err["msg"] == "Value error", err                                # fixed text; the validator's own words are dropped
-    other = dict(body, agent_id="ANOTHER-MADE-UP-VALUE-987654321")
+    other = dict(body, agent_id="another-made-up-value-987654321")
     r2 = client.post("/tokens", json=other)
-    assert r2.status_code == 422 and "ANOTHER-MADE-UP-VALUE" not in r2.text
+    assert r2.status_code == 422 and "another-made-up-value" not in r2.text
     assert r2.json()["detail"] == detail

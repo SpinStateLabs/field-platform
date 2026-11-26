@@ -63,6 +63,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from field_core.clients import AgentNotRegisteredError, RegistryUnreachableError
 from field_core.manifest import FieldManifest
+from field_core.stop_text import OPERATOR_RULE, REASON_RULE, operator_ok, reason_ok
 from field_core.validation import (
     ValidationStatus,
     load_manifest,
@@ -1265,6 +1266,10 @@ class LifecycleEngine:
                 f"--reason must be non-blank and at most {MAX_DECOMMISSION_REASON} "
                 "characters — nothing decommissioned"
             )
+        if not operator_ok(by):
+            raise LifecycleError(f"--by {OPERATOR_RULE} — nothing decommissioned")
+        if not reason_ok(reason):
+            raise LifecycleError(f"--reason {REASON_RULE} — nothing decommissioned")
         now = now or datetime.now(timezone.utc)
         try:
             record = self.registry.get_agent(agent_id)

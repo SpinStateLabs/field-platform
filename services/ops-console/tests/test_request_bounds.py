@@ -74,9 +74,8 @@ def test_the_boundary_is_accepted_and_one_over_is_one_422_with_zero_upstream_cal
     assert "x" * 20 not in over.text
 
 
-# Not carried (controller ruling (a) on the rebuild of PR 936): a whitespace-only operator, reason or resolved_by is NOT
-# refused here. Main's README and test_readme_operator_row_revoke.py say only the empty string is refused; the console
-# must not refuse a kill over a whitespace operator, and the kill-switch records what it is given.
+# A stop action's blank operator or reason is refused here, as the kill-switch refuses it
+# (test_stop_text_at_the_console.py). ``resolved_by`` is not a stop action: whitespace-only is not refused.
 
 
 def test_a_201_character_operator_on_a_bulk_of_100_agents_is_one_422_not_100_calls(console):
@@ -93,7 +92,7 @@ def test_the_resolver_name_is_bounded(console):
     assert client.post(path, json={"resolved_by": "r" * 200}).status_code != 422
     assert gov.calls
     gov.calls.clear()
-    for bad in ("r" * 201, ""):          # whitespace-only is not refused (ruling (a))
+    for bad in ("r" * 201, ""):          # whitespace-only is not refused: not a stop action
         assert client.post(path, json={"resolved_by": bad}).status_code == 422, repr(bad)
     assert gov.calls == []
 

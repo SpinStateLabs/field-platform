@@ -36,7 +36,9 @@ from field_core.clients import (
 )
 from field_core.conformance import ConformanceVerdict, Decision
 from field_core.http import get_retrying_once, pooled_limits
+from field_core.ids import REGISTRY_ID_RE, registry_id_ok
 from field_core.ledger_context import correlation_context
+from field_core.operator_health import NOT_SHOWN, shown_label
 
 from conformance_sentinel.judge import injection_screen
 from conformance_sentinel.mode import SentinelMode
@@ -51,9 +53,23 @@ CONTEXT_MAX_KEYS = 50
 CONTEXT_MAX_BYTES = 16 * 1024
 
 #: The registry's own id pattern (agent_registry.models). An id outside it cannot be registered, so it is answered as
-#: R.unregistered WITHOUT a registry call: RegistryClient builds f"{base}/agents/{agent_id}" unquoted, and an id like
-#: 'x/../health' or 'a?b=1' would otherwise address another route.
-_REGISTRY_ID = re.compile(r"[a-z0-9][a-z0-9._-]*")
+#: R.unregistered WITHOUT a registry call (RegistryClient refuses such an id too, before it builds a URL, and also
+#: refuses one over its own length bound).
+_REGISTRY_ID = REGISTRY_ID_RE
+
+
+def _row_agent_id(agent_id: str) -> str | None:
+    """The agent id a ledger row is keyed by: the request's own inside the registry's id rule; otherwise a short
+    printable label of it (``shown_label``), or none."""
+    if registry_id_ok(agent_id):
+        return agent_id
+    label = shown_label(agent_id)
+    return None if label == NOT_SHOWN else label
+
+
+def _shown_id(agent_id: str) -> str:
+    """The id as a verdict's reason quotes it: as sent inside the rule, else its label or the not-shown marker."""
+    return agent_id if registry_id_ok(agent_id) else str(shown_label(agent_id))
 
 
 class CheckRequest(BaseModel):
@@ -314,7 +330,7 @@ class SentinelEngine:
                         "mode": "log_only",
                         **caller,
                     },
-                    agent_id=req.agent_id,
+                    agent_id=_row_agent_id(req.agent_id),
                 )
             except Exception as drop:
                 self._note_drop(shadow_type, drop)
@@ -366,7 +382,7 @@ class SentinelEngine:
                     "reasons": reasons,
                     **caller,
                 },
-                agent_id=req.agent_id,
+                agent_id=_row_agent_id(req.agent_id),
             )
         except Exception as exc:
             if decision is Decision.ALLOW and self.mode is SentinelMode.ENFORCE:
@@ -457,7 +473,7 @@ class SentinelEngine:
                     "input_tokens": jv.input_tokens,
                     "output_tokens": jv.output_tokens,
                 },
-                agent_id=req.agent_id,
+                agent_id=_row_agent_id(req.agent_id),
             )
         except Exception as drop:
             self._note_drop("sentinel.judge", drop)
@@ -515,7 +531,7 @@ class SentinelEngine:
                     payload={"action": req.action, "shadowed": shadowed,
                              "error": " ".join(str(exc).split())[:300],
                              **_caller_payload(req)},
-                    agent_id=req.agent_id,
+                    agent_id=_row_agent_id(req.agent_id),
                 )
             except Exception as drop:
                 self._note_drop("sentinel.metering_gap", drop)
@@ -607,14 +623,14 @@ class SentinelEngine:
             # same verdict as the registry's 404, without sending this text into a URL path
             return self._verdict(
                 req, Decision.BLOCK, "R.unregistered",
-                [f"agent '{req.agent_id}' is not in the registry"],
+                [f"agent '{_shown_id(req.agent_id)}' is not in the registry"],
             )
         try:
             record = self.registry.get_agent(req.agent_id)
         except AgentNotRegisteredError:
             return self._verdict(
                 req, Decision.BLOCK, "R.unregistered",
-                [f"agent '{req.agent_id}' is not in the registry"],
+                [f"agent '{_shown_id(req.agent_id)}' is not in the registry"],
             )
         except RegistryUnreachableError as exc:
             # B16: still a BLOCK (fail closed), but not "unregistered": the identity could not be established,

@@ -130,8 +130,8 @@ def test_half_pair_is_dropped_in_off_and_log_only_and_401_in_enforce(console, mo
         assert dg.calls == []
 
 
-def test_whitespace_only_kill_operator_passes_the_consoles_own_check():
-    # The README says so honestly: only the empty string is refused (422).
+def test_a_blank_kill_operator_is_refused_by_the_console_and_nothing_is_sent():
+    # As the kill-switch does: empty and whitespace-only are both 422 here.
     kill = Rec()
     sc = lambda c: ServiceClient(client=c, base_url="http://t")  # noqa: E731
     other = Rec()
@@ -140,8 +140,8 @@ def test_whitespace_only_kill_operator_passes_the_consoles_own_check():
     c = TestClient(app)
     assert c.post("/api/agents/a1/kill", json={"operator": ""}).status_code == 422
     assert kill.calls == []
-    assert c.post("/api/agents/a1/kill", json={"operator": " "}).status_code == 200
-    assert kill.calls[-1][1]["json"]["operator"] == " "
+    assert c.post("/api/agents/a1/kill", json={"operator": " "}).status_code == 422
+    assert kill.calls == []
 
 
 def test_real_governor_replaces_resolved_by_with_the_authenticated_id(tmp_path, monkeypatch):
@@ -216,8 +216,8 @@ def test_readme_row_pins_the_corrected_sentences():
     assert "not checked" not in row
     assert "the governor replaces it with the authenticated id" in row
     assert "bind_body_operator" in row and "recorded as typed" in row
-    # honest about the whitespace-only gap
-    assert "whitespace-only name passes" in row
+    # empty and whitespace-only alike
+    assert "422 on an empty or whitespace-only `operator`" in row
 
 
 def test_readme_intro_says_headers_are_forwarded_whenever_well_formed():
