@@ -985,6 +985,8 @@ def create_app(
         if record.get("status") == "retired":
             # The one that matters: without this, one console click undoes a
             # decommission and the agent is `active` again. Before the authorized_operators list, as on /kill.
+            # Its own event type: neither a revive nor a failed kill, and the attempt leaves a trace.
+            _ledger_note("kill.revive.refused", {"operator": req.operator, "reason": "agent is retired"}, agent_id)
             raise HTTPException(
                 409,
                 f"agent '{agent_id}' is retired — reviving a decommissioned "
@@ -1146,6 +1148,7 @@ def create_app(
             # accepts. Drill-then-revive laundered a decommissioned agent back
             # to active. A drill on a decommissioned agent proves nothing.
             # Before the authorized_operators list, as on /kill.
+            _ledger_note("kill.drill.refused", {"operator": req.operator, "reason": "agent is retired"}, agent_id)
             raise HTTPException(
                 409,
                 f"agent '{agent_id}' is retired — a drill on a decommissioned "

@@ -53,6 +53,7 @@ FIXTURES: dict[str, tuple[str | None, dict[str, Any]]] = {
                                   "failure_class": "registry_failure"}),
     "kill.endpoint_failed": (AGENT, {"operator": "rollback-check", "reason": "signal_error", "outcome": "failed"}),
     "kill.drill.refused": (AGENT, {"operator": "rollback-check", "reason": "a real kill is in flight"}),
+    "kill.revive.refused": (AGENT, {"operator": "rollback-check", "reason": "agent is retired"}),
     "kill.drill.restore_skipped": (AGENT, {"operator": "rollback-check", "target_status": "active",
                                            "current_status": "killed", "reason": "superseded by kill"}),
     "fleet.halt.skipped_rows": (None, {"operator": "rollback-check", "reason": "drill", "count": 1,

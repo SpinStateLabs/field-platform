@@ -126,7 +126,7 @@ def test_an_unauthenticated_or_out_of_scope_caller_learns_nothing_about_a_retire
         r = client.post(f"/{route}/{target}", json=BODY, headers=headers)
         assert r.status_code == status, (target, r.status_code, r.text)
         assert "retired" not in r.text, (target, r.text)
-    assert reg.writes == [] and led.of("kill.agent.failed") == []
+    assert reg.writes == [] and [t for t, _, _ in led.rows if t.startswith("kill.")] == []
 
 
 @pytest.mark.parametrize("route", ROUTES)
@@ -162,12 +162,31 @@ def test_the_ledger_row_of_a_refused_kill_of_a_retired_agent(stack, operator, ke
     assert (payload["status_code"], payload["failure_class"], payload["operator"]) == (409, "retired", operator)
 
 
-@pytest.mark.parametrize("route", ["revive", "drill"])
-def test_revive_and_drill_of_a_retired_agent_write_no_ledger_row(stack, route):
-    """as for a listed operator before this change; an unlisted one used to leave an operator.refused row here"""
+REFUSED_ROW = [("revive", "kill.revive.refused"), ("drill", "kill.drill.refused")]
+
+
+@pytest.mark.parametrize("route,event_type", REFUSED_ROW, ids=["revive", "drill"])
+@pytest.mark.parametrize("target", RETIRED)
+@pytest.mark.parametrize("operator,key", SCOPED, ids=["listed", "unlisted", "list-bound-verifier"])
+def test_the_ledger_row_of_a_refused_revive_or_drill_of_retired(stack, route, event_type, target, operator, key):
+    """exactly one row per attempt, naming the authenticated operator; never the success type, never a failed kill"""
     client, _, led = stack
+    assert client.post(f"/{route}/{target}", json=BODY, headers=hdr(operator, key)).status_code == 409
+    assert [(t, a) for t, _, a in led.rows] == [(event_type, target)]
+    payload = led.rows[0][1]
+    assert (payload["operator"], payload["reason"]) == (operator, "agent is retired")
+
+
+@pytest.mark.parametrize("route", ["revive", "drill"])
+def test_a_ledger_that_cannot_be_written_does_not_change_the_409(stack, route):
+    client, reg, led = stack
+
+    def refuse(event_type, payload, agent_id=None):
+        raise RuntimeError("ledger down")
+
+    led.append = refuse
     assert client.post(f"/{route}/ret-nomanifest", json=BODY, headers=hdr("other", KEY_OTHER)).status_code == 409
-    assert led.rows == []
+    assert reg.writes == []
 
 
 # --- a non-retired agent is unchanged --------------------------------------------------------------------------------
@@ -186,7 +205,7 @@ def test_an_unlisted_operator_is_still_403_on_a_live_agent(stack, route, target,
     refused = led.of("operator.refused")
     assert len(refused) == 1 and refused[0][1] == target
     assert refused[0][0]["action"] == route and refused[0][0]["reason"] == "forbidden"
-    assert led.of("kill.agent.failed") == []
+    assert [t for t, _, _ in led.rows if t.startswith("kill.")] == []
 
 
 def test_the_domain_kill_is_unchanged_retired_skipped_and_the_live_agent_still_checked(stack):
