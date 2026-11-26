@@ -230,8 +230,8 @@ class TokenQueryClient:
 AGENT_ID_MAX = 200
 
 #: The registry's own id pattern (agent_registry.models). An id outside it cannot be in the registry, so replay does
-#: not ask the registry about it: RegistryClient builds f"{base}/agents/{agent_id}" unquoted, and 'x/../health' or
-#: 'a?b=1' would address another route (S5-15). It still replays the ledger trail (ledger-only ids such as the
+#: not ask the registry about it (S5-15; RegistryClient refuses such an id too, before it builds a URL, and also
+#: refuses one over its own length bound). It still replays the ledger trail (ledger-only ids such as the
 #: federation broker's 'Org/agent' have events but no registry record).
 _REGISTRY_ID = re.compile(r"[a-z0-9][a-z0-9._-]*")
 
