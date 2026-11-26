@@ -28,7 +28,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable
 
-DEFAULT_OLD = "cb7a94f8"
+DEFAULT_OLD = "6c1f9aa6"   # the release both estates run since 2026-11-26 (was cb7a94f8)
 LEDGER_REL = Path("ledger") / "events.jsonl"
 SINCE, UNTIL = "2000-01-01T00:00:00Z", "2100-01-01T00:00:00Z"
 AGENT = "rollback-check-agent"

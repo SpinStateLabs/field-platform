@@ -12,7 +12,7 @@ From a field-platform checkout, with the interpreter that has the services' depe
 
 ```bash
 git fetch origin main
-python3 tools/rollback_read_check.py --repo . --old cb7a94f8 --new origin/main --python "$TRAIN_PYTHON" --json rollback-read.json
+python3 tools/rollback_read_check.py --repo . --old 6c1f9aa6 --new origin/main --python "$TRAIN_PYTHON" --json rollback-read.json
 ```
 
 Pass the exact deploy SHA as `--new` for the final run. `$TRAIN_PYTHON` stands for the train's virtual environment interpreter.
