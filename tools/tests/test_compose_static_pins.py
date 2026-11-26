@@ -192,6 +192,9 @@ CREDENTIAL_VARIABLES = (
 CREDENTIAL_VARIABLE_HEAD = re.compile(r"^\$\{?(" + "|".join(CREDENTIAL_VARIABLES) + r")(?![A-Za-z0-9_])")
 UNRESOLVED_HEAD = re.compile(r"^\$(\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*)(/.*)$")
 FORBIDDEN_BIND_SOURCES = FORBIDDEN_BIND_EXACT | set(FORBIDDEN_BIND_TREES)   # kept for the normalisation tests
+# The one required variable the pins can read: the caller-keys directory has no default, and the static text judges the
+# bind as if it named the committed placeholder root. Only the `:?` form (set AND non-empty) of exactly this name.
+REQUIRED_CALLER_KEYS = re.compile(r"\$\{FIELD_CALLER_KEYS_DIR:\?[^${}]*\}")
 
 
 def _expand_defaults(source: str) -> str:
@@ -200,6 +203,7 @@ def _expand_defaults(source: str) -> str:
     `${A:-${B:-/}}` is the root too. `${VAR}` and `$VAR` with no default are unknown and left as they are: a
     static check cannot tell what the estate's .env sets (the pins say so)."""
     source = _read_settled_variables(source)
+    source = REQUIRED_CALLER_KEYS.sub(CALLER_KEYS_ROOT, source)
     pattern = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*:?[-=+]([^${}]*)\}")
     for _ in range(16):
         expanded = pattern.sub(r"\1", source)
@@ -1223,6 +1227,7 @@ def test_the_same_documents_with_a_harmless_value_are_accepted(monkeypatch):
     "./operators", "../../manifests", "field-data", "caddy_data", "${FIELD_OPERATORS_DIR:-./operators}", "./Caddyfile.gb10",
     "/home/user/.field-local/caller-keys/witness", "${FIELD_CALLER_KEYS_DIR:-/home/user/.field-local/caller-keys}/registry",
     "/home/user/.field-local/caller-keys/a/b", None,
+    "${FIELD_CALLER_KEYS_DIR:?set FIELD_CALLER_KEYS_DIR to the caller-keys directory}/registry",
 ])
 def test_what_the_estate_binds_today_is_allowed(source):
     assert _binds_forbidden_host_path(source) is False, source
@@ -1231,7 +1236,8 @@ def test_what_the_estate_binds_today_is_allowed(source):
 @pytest.mark.parametrize("source", [
     "/home/user/.field-local/caller-keys", "/home/user/.field-local/caller-keys/", "/home/user/.field-local/caller-keys/.",
     "/home/user/.field-local", "/home/user", "/home/user/.field-local/caller-keys/../x", "/home/user/.field-local/caller-keysX/a",
-    "${FIELD_CALLER_KEYS_DIR}/registry", "~", "~/x", "etc/x", "docker-image://alpine", "file://x", "`id`", "", "   ",
+    "${FIELD_CALLER_KEYS_DIR}/registry", "${FIELD_CALLER_KEYS_DIR?e}/registry", "${FIELD_CALLER_KEYS_DIR:?e}",
+    "${FIELD_CALLER_KEYS_DIR:?e}/..", "${OTHER_DIR:?e}/registry", "~", "~/x", "etc/x", "docker-image://alpine", "file://x", "`id`", "", "   ",
 ])
 def test_the_root_itself_its_parents_siblings_and_unresolvable_forms_are_refused(source):
     assert _binds_forbidden_host_path(source) is True, repr(source)
@@ -1378,10 +1384,15 @@ def test_an_x_extension_key_is_not_a_violation(monkeypatch):
 # --- C-500 F-C454-3: the root constant is what the compose files default to ----------------------------------------------
 
 
-def test_the_allowed_absolute_root_is_the_default_the_compose_files_give_the_caller_keys_directory():
+def test_every_caller_key_bind_requires_the_directory_and_has_no_default():
+    """With a default, an estate whose .env lacks the variable mounts empty directories and starts without its keys."""
     _, base, gb10 = _texts()
-    defaults = set(re.findall(r"\$\{FIELD_CALLER_KEYS_DIR:-([^}]*)\}", base + gb10))
-    assert defaults == {CALLER_KEYS_ROOT}, defaults
+    binds = [str(v) for svc in _services(base, gb10).values() for v in svc.get("volumes") or []
+             if ":/run/caller-key" in str(v)]
+    assert len(binds) == 13, binds
+    for bind in binds:
+        assert bind.startswith("${FIELD_CALLER_KEYS_DIR:?set FIELD_CALLER_KEYS_DIR to the caller-keys directory}/"), bind
+    assert re.findall(r"\$\{?FIELD_CALLER_KEYS_DIR(?!:\?)\b", base + gb10) == []
     assert ALLOWED_ABSOLUTE_ROOTS == (CALLER_KEYS_ROOT,)
 
 

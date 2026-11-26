@@ -33,15 +33,19 @@ KEYS = "/home/user/.field-local/caller-keys"
 
 
 def _resolve(text: str, env: dict[str, str]) -> str:
-    """`${NAME:-default}` / `${NAME-default}` / `${NAME}` with `env` (what `docker compose config` does, for the
-    forms the shipped files use)."""
+    """`${NAME:-default}` / `${NAME-default}` / `${NAME:?message}` / `${NAME}` with `env` (what `docker compose config`
+    does, for the forms the shipped files use)."""
     def sub(m):
         name, op, default = m.group(1), m.group(2), m.group(3)
         value = env.get(name)
+        if op == ":?":
+            if not value:
+                raise ValueError(f"{name} is required")
+            return value
         if value is None or (op == ":-" and value == ""):
             return default or ""
         return value
-    return re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:-|-)([^}]*))?\}", sub, text)
+    return re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:-|-|:\?)([^}]*))?\}", sub, text)
 
 
 def _absolute(path: str) -> str:
@@ -51,7 +55,7 @@ def _absolute(path: str) -> str:
 def resolved_model(env: dict[str, str] | None = None) -> dict:
     """What `docker compose -f base -f gb10 config` would print for the shipped files under `env`, for the keys the
     allowlist reads (long-syntax volumes with absolute sources, secrets, configs, build contexts)."""
-    env = env or {}
+    env = {"FIELD_CALLER_KEYS_DIR": KEYS, **(env or {})}     # required by the files: no default
     base, gb10 = (static.DEMO / "docker-compose.yml").read_text(encoding="utf-8"), (static.DEMO / "docker-compose.gb10.yml").read_text(encoding="utf-8")
     services = {}
     for name, svc in static._services(base, gb10).items():
@@ -123,7 +127,7 @@ def test_an_allowed_value_of_an_estate_variable_stays_green(variable):
 
 
 def test_an_estate_variable_that_replaces_the_allowed_root_with_another_directory_is_red():
-    # the class Lane 10 named: ${FIELD_CALLER_KEYS_DIR:-<allowed root>}/registry passes on its default
+    # the class Lane 10 named: the static check reads the required variable as the allowed root and passes
     assert crc.check_model(resolved_model({"FIELD_CALLER_KEYS_DIR": "/opt/elsewhere"}), REPO) != []
     assert crc.check_model(resolved_model({"FIELD_CALLER_KEYS_DIR": "/home/user/.field-local/other"}), REPO) != []
 
