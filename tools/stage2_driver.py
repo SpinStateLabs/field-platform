@@ -67,10 +67,16 @@ class Stage2Estate(Protocol):
         """The kill-switch REQUIRE mode ``phase_g_check --expect-mode`` reports: ``enforce`` or ``log-only``."""
 
     def healthy(self) -> bool:
-        """True when every service answers /health."""
+        """True when every service answers /health. Only ``True`` (or the string ``"ok"``) counts as healthy: any other
+        answer, truthy or not, is a health failure."""
 
     def counters(self) -> Mapping[str, Mapping[str, int]]:
         """Per service ``dropped_unauthenticated_records`` and ``dropped_refused_records`` from its /health."""
+
+
+def _is_healthy(answer: Any) -> bool:
+    """An explicit ``True`` or ``"ok"``; never truthiness, so a ``healthy()`` returning ``"unhealthy"`` fails."""
+    return answer is True or (type(answer) is str and answer == "ok")
 
 
 class Stage2Actions:
@@ -111,13 +117,13 @@ class Stage2Actions:
             elif step == "recreate_killswitch":
                 if self.estate.mode() != ("enforce" if present else "log-only"):
                     failed.append(sc.Abort.PHASE_G_CHECK.value)
-                if not self.estate.healthy():
+                if not _is_healthy(self.estate.healthy()):
                     failed.append(sc.Abort.HEALTH.value)
             elif step == "rollback_verify":
                 expect_armed = self.armed_before
                 if present != expect_armed or self.estate.mode() != ("enforce" if expect_armed else "log-only"):
                     failed.append(sc.Abort.PHASE_G_CHECK.value)
-                if not self.estate.healthy():
+                if not _is_healthy(self.estate.healthy()):
                     failed.append(sc.Abort.HEALTH.value)
             else:
                 failed.append(sc.Abort.CONTROLLER_ERROR.value)
