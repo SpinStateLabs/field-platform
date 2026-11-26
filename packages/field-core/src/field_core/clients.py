@@ -63,6 +63,7 @@ from urllib.parse import quote
 
 from field_core.errors import upstream_error
 from field_core.http import get_retrying_once, pooled_limits
+from field_core.ids import registry_id_ok
 from field_core.manifest import FieldManifest
 from field_core.validation import parse_manifest_text, validate_manifest_data
 
@@ -392,12 +393,13 @@ class LedgerClient:
         return body
 
 
-def _path_segment(value: str) -> str:
-    """An id as ONE URL path segment: every reserved character is percent-encoded, so a ``?``, ``#`` or ``/`` in it
-    cannot change which record the registry reads or writes, and the dot segments ``.`` and ``..`` (which a URL resolver
-    collapses, and ``quote`` leaves alone) are spelled ``%2E``. An id in the registry's id rule is unchanged."""
-    out = quote(str(value), safe="")
-    return {".": "%2E", "..": "%2E%2E"}.get(out, out)
+def _agent_path(agent_id: str) -> str:
+    """``/agents/<id>``, or :class:`AgentNotRegisteredError` BEFORE any URL is built or request sent for an id outside
+    the registry's id rule (``field_core.ids.registry_id_ok``): such a text names no agent, and an unquoted ``?``, ``#``
+    or ``/`` in it used to address another record. The quoting is a second guard; an id inside the rule is unchanged."""
+    if not registry_id_ok(agent_id):
+        raise AgentNotRegisteredError(agent_id)
+    return f"/agents/{quote(agent_id, safe='')}"
 
 
 class RegistryClient:
@@ -416,7 +418,7 @@ class RegistryClient:
             self._client = httpx.Client(timeout=5.0, trust_env=False, limits=pooled_limits())
 
     def get_agent(self, agent_id: str) -> dict[str, Any]:
-        path = f"/agents/{_path_segment(agent_id)}"
+        path = _agent_path(agent_id)
         try:
             resp = get_retrying_once(self._client, f"{self._base}{path}",
                                      **_request_auth(self._own_client, "GET", path, REGISTRY_GUARDED))
@@ -473,7 +475,7 @@ class RegistryClient:
         ``updated_at`` still equals this value (the one an earlier read or write of the row returned); any other
         write in between makes the registry answer 412 and this method raise :class:`AgentRowChangedError`. ``None``
         (the default) is the unconditional write it always was."""
-        path = f"/agents/{_path_segment(agent_id)}"
+        path = _agent_path(agent_id)
         try:
             auth = _request_auth(self._own_client, "PATCH", path, REGISTRY_GUARDED)
             if extra_headers is not None:

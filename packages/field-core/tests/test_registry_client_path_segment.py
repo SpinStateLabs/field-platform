@@ -1,5 +1,5 @@
-"""``RegistryClient`` puts an agent id into the URL as ONE percent-encoded segment: a ``?``, ``#``, ``/`` or dot segment
-in it cannot change which record is read or written. An id in the registry's id rule is sent exactly as before."""
+"""``RegistryClient`` refuses an id outside the registry's id rule before it builds a URL or sends anything, so a ``?``,
+``#``, ``/`` or dot segment cannot make it read or write another record. An id inside the rule is sent as before."""
 
 from __future__ import annotations
 
@@ -7,21 +7,12 @@ import httpx
 import pytest
 
 from field_core.clients import AgentNotRegisteredError, RegistryClient
+from field_core.ids import REGISTRY_ID_MAX_LENGTH, registry_id_ok
 
-CASES = [
-    ("invoicing-agent.v2_x", "invoicing-agent.v2_x"),
-    ("a..b", "a..b"),
-    ("a1?status=killed", "a1%3Fstatus%3Dkilled"),
-    ("a1#frag", "a1%23frag"),
-    ("a1/attest", "a1%2Fattest"),
-    ("x/../health", "x%2F..%2Fhealth"),
-    ("..", "%2E%2E"),
-    (".", "%2E"),
-    ("a b", "a%20b"),
-    ("a\nb", "a%0Ab"),
-    ("a%3F", "a%253F"),
-    ("a" * 300, "a" * 300),
-]
+VALID = ["invoicing-agent", "invoicing-agent.v2_x", "a", "0", "a..b", "a-", "a_", "a" * 128]
+INVALID = ["", "a1?status=killed", "a1#frag", "a1/attest", "x/../health", "a/../x", "..", ".", "-a", ".a", "_a", "A1",
+           "a b", " a", "a ", "a\nb", "a\n", "a\x00", "a%3F", "a%2Fb", "a\u202e", "a\u200f", "a\u2028", "\ufeffa",
+           "\u00e9", "Org/agent", "a" * 129, "a" * 5000]
 
 
 def _client(seen: list, status: int = 200) -> RegistryClient:
@@ -32,21 +23,41 @@ def _client(seen: list, status: int = 200) -> RegistryClient:
     return RegistryClient(client=httpx.Client(transport=httpx.MockTransport(handler)), base_url="http://registry")
 
 
-@pytest.mark.parametrize("agent_id,segment", CASES)
-def test_get_agent_sends_one_segment(agent_id, segment):
+CALLS = [("GET", lambda c, i: c.get_agent(i)), ("GET", lambda c, i: c.require_active_agent(i)),
+         ("PATCH", lambda c, i: c.set_status(i, "killed")),
+         ("PATCH", lambda c, i: c.set_status(i, "active", if_updated_at="2026-01-01T00:00:00+00:00",
+                                             extra_headers={"x-field-operator-on-behalf-of": "don"}))]
+CALL_IDS = ["get_agent", "require_active_agent", "set_status", "set_status-conditional"]
+
+
+@pytest.mark.parametrize("method,call", CALLS, ids=CALL_IDS)
+@pytest.mark.parametrize("agent_id", VALID)
+def test_a_valid_id_is_sent_unchanged(method, call, agent_id):
     seen: list = []
-    _client(seen).get_agent(agent_id)
-    assert seen == [("GET", f"/agents/{segment}")]
+    call(_client(seen), agent_id)
+    assert seen == [(method, f"/agents/{agent_id}")]
 
 
-@pytest.mark.parametrize("agent_id,segment", CASES)
-def test_set_status_sends_one_segment(agent_id, segment):
+@pytest.mark.parametrize("method,call", CALLS, ids=CALL_IDS)
+@pytest.mark.parametrize("agent_id", INVALID)
+def test_an_invalid_id_is_not_registered_and_nothing_is_sent(method, call, agent_id):
     seen: list = []
-    _client(seen).set_status(agent_id, "killed")
-    assert seen == [("PATCH", f"/agents/{segment}")]
-
-
-def test_the_error_for_an_unknown_id_still_names_the_id_asked_for():
     with pytest.raises(AgentNotRegisteredError) as caught:
-        _client([], status=404).get_agent("a1?x")
-    assert caught.value.args == ("a1?x",)
+        call(_client(seen), agent_id)
+    assert seen == [] and caught.value.args == (agent_id,)
+
+
+@pytest.mark.parametrize("value", [None, 7, b"a1", ["a1"]])
+def test_a_value_that_is_not_text_is_not_an_id(value):
+    assert registry_id_ok(value) is False
+
+
+def test_the_bound():
+    assert REGISTRY_ID_MAX_LENGTH == 128
+
+
+def test_a_404_for_a_valid_id_is_still_not_registered():
+    seen: list = []
+    with pytest.raises(AgentNotRegisteredError):
+        _client(seen, status=404).get_agent("ghost")
+    assert seen == [("GET", "/agents/ghost")]
