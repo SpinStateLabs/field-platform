@@ -40,22 +40,14 @@ sys.path.insert(0, str(HERE))
 import estate_probe as ep  # noqa: E402
 import stage_controller as sc  # noqa: E402
 
-#: (label, /health path, service name): the eight operator-block services (the console owns the proxy root).
-OPERATOR_BLOCK_SERVICES = (
-    ("registry", "/registry/health", "agent-registry"),
-    ("ledger", "/ledger/health", "sealed-ledger"),
-    ("delegation", "/delegation/health", "delegation-authority"),
-    ("killswitch", "/killswitch/health", "kill-switch"),
-    ("governor", "/governor/health", "spend-governor"),
-    ("federation", "/federation/health", "federation-broker"),
-    ("lifecycle", "/lifecycle/health", "lifecycle-manager"),
-    ("console", "/health", "ops-console"),
-)
+# One definition: the stage 0 check owns the table; this module reuses it so the two cannot drift.
+from phase_g_stage0_check import OPERATOR_BLOCK_SERVICES  # noqa: E402
+
 GATE = "G18"
 SECONDS_PER_HOUR = 3600.0
 #: The shortest window that counts as a Stage 1 window (the runbook's Stage 2 entry states it). A shorter one, or one
 #: where the flag was forgotten, is not clean: the default is not zero.
-DEFAULT_MIN_HOURS = 24.0
+DEFAULT_MIN_HOURS = sc.G18_MIN_WINDOW_HOURS
 
 
 def _finite(value: Any) -> bool:
@@ -158,7 +150,11 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     if args.cmd == "snapshot":
         data = read_snapshot(ep.Estate(args.base, None))
-        Path(args.out).write_text(json.dumps(data, sort_keys=True) + "\n", encoding="utf-8")
+        try:
+            Path(args.out).write_text(json.dumps(data, sort_keys=True) + "\n", encoding="utf-8")
+        except OSError as exc:
+            print(f"error: cannot write the snapshot ({type(exc).__name__})")
+            return 2
         missing = [f"{s}:{k}" for s, c in data["counters"].items() for k, v in c.items() if v is None]
         print(f"snapshot of {len(data['counters'])} services written; {len(missing)} counter(s) not readable"
               + (f" ({', '.join(missing)})" if missing else ""))
@@ -176,17 +172,35 @@ def main(argv: list[str] | None = None) -> int:
         for p in problems:
             print(f"  - {p}")
         return 1
-    print("[PASS] the Stage 1 window is clean: no dropped-record counter rose on any service")
     if args.records:
         try:
             sha = {"sha8": sc.sha8_of(args.build_sha)} if args.build_sha else {}
         except sc.Refused as exc:
             print(f"refused: {exc.reason}")
             return 2
-        span = {"window_hours": round((after["taken_at"] - before["taken_at"]) / SECONDS_PER_HOUR, 2),
-                "window_end": int(after["taken_at"]),               # when the window closed: Stage 2 judges how old it is
+        hours = (after["taken_at"] - before["taken_at"]) / SECONDS_PER_HOUR
+        if hours < sc.G18_MIN_WINDOW_HOURS:
+            # B5: the controller counts a G18 row only for a window of at least that length; never write one it ignores
+            print(f"[FAIL] the window is clean but shorter than the {sc.G18_MIN_WINDOW_HOURS:g} hours a gate {GATE} row "
+                  "needs; no row written")
+            return 1
+        span = {"window_hours": round(hours, 2),
+                # when the window closed. Nothing judges its age yet (no freshness limit at Stage 2): a follow-up row
+                "window_end": int(after["taken_at"]),
                 "services": len(before["counters"])}
-        sc.Records(args.records).append("gate", gate=GATE, ok=True, **sha, **span)
+        if not sc.g18_evidence_ok(span):
+            # B5 review: the writer checks its row with the controller's own rule, so it never prints "recorded" for a
+            # row the controller ignores (a ninth service label, a window_end at or before the epoch)
+            print(f"[FAIL] the window is clean but its evidence is not a gate {GATE} row the stage controller counts "
+                  "(it needs window_hours >= 24, window_end > 0 and the eight services); no row written")
+            return 1
+        try:                         # the record is written BEFORE the PASS line: a failed write must not look recorded
+            sc.Records(args.records).append("gate", gate=GATE, ok=True, **sha, **span)
+        except OSError as exc:
+            print(f"error: cannot write the records file ({type(exc).__name__}); no gate {GATE} row written")
+            return 2
+    print("[PASS] the Stage 1 window is clean: no dropped-record counter rose on any service")
+    if args.records:
         print(f"recorded gate {GATE}")
     return 0
 

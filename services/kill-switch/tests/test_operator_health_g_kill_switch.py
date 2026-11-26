@@ -59,7 +59,7 @@ class Registry:
                 if (status is None or a["status"] == status)
                 and (domain is None or a.get("domain") == domain)]
 
-    def set_status(self, agent_id, status):
+    def set_status(self, agent_id, status, **kw):
         self.agents[agent_id]["status"] = status
         return dict(self.agents[agent_id])
 

@@ -32,6 +32,8 @@ done
 # --no-deps: field-agent depends on conformance-sentinel (not on PyPI);
 # everything it needs is already installed above.
 pip install --no-deps -e "packages/field-agent"
+# defence-shield/agent-incident-retro: pydantic, typer and field-core come from field-core above.
+pip install --no-deps -e "defence-shield/agent-incident-retro"
 pip install fastapi uvicorn httpx pytest
 ```
 
@@ -51,7 +53,15 @@ for s in agent-registry conformance-sentinel incident-replay compliance-crosswal
   (cd "services/$s" && python -m pytest -q tests)
 done
 (cd packages/field-agent && python -m pytest -q tests)
+(cd defence-shield/agent-incident-retro && python -m pytest -q tests)
+pytest -q tools/tests
 ```
+
+This is a **subset** of the `tests` job: CI also runs gates this guide does not
+repeat, namely the vendored-template check (`plugins/field-agent/verify_sync.sh`),
+the deployed-topology lint (`python tools/topology_lint.py`) and the environment-doc
+anchors check (`python tools/environment_anchors.py --check`). When the two differ,
+`ci.yml` wins.
 
 > Windows note: consoles default to cp1252 — every CLI forces UTF-8 stdout.
 > Write files with CLI flags (`--out`, `--markdown`), not shell redirects.
@@ -217,6 +227,7 @@ request.
 
 | Cadence | Command | Notes |
 |---|---|---|
+| Daily (served) | `lifecycle serve --every 86400` (`FIELD_LIFECYCLE_EVERY`; `FIELD_LIFECYCLE_ROSTER` names the owner roster) | the in-process scheduler sweeps on the interval and records `swept_at` in `GET /findings`; with no roster configured each tick is a recorded skip (`lifecycle.tick_skipped`), so a skip is not evidence that a sweep ran. Auto-kill is never armed by the schedule |
 | Weekly | `lifecycle sweep --roster owners.csv --markdown sweep.md` | exit 3 = findings → alert. `owners.csv` is HR's export (`owner` column). Auto-kill only ever with `--auto-kill-orphans` |
 | Quarterly | `attest render --out packs/2026-Q3 --period 2026-Q3 --signer "<name>" --sign-key <pem>` | archive each signed pack (`attest verify packs/2026-Q3/board-pack.json --pubkey <pem>`): its windowed counts are reproducible while the events are live, its point-in-time figures are evidence of generation day |
 | Daily (with the sweep) | `ledger retention check` (served via `FIELD_LEDGER_URL`) | exit 3 = the estate policy is unset, a manifest declares more than it, a ref does not resolve, or the check could not run. The lifecycle sweep also reports it |

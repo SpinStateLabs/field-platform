@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import unicodedata
 from pathlib import Path
 
 import typer
@@ -62,7 +63,7 @@ def append(
 ) -> None:
     """Append one event to the chain (signed when FIELD_LEDGER_SIGN_KEY names a
     usable key; exit 2 if FIELD_LEDGER_REQUIRE_SIGNING=1 refuses it unsigned)."""
-    from sealed_ledger.store import SigningRequired
+    from sealed_ledger.store import LedgerBusy, LedgerCorrupt, SigningRequired
 
     try:
         payload_obj = json.loads(payload)
@@ -76,7 +77,44 @@ def append(
     except SigningRequired as exc:
         typer.echo(f"error: append refused: {exc}", err=True)
         raise typer.Exit(code=2)
+    except ValueError:  # a blank event_type: the same refusal as POST /events
+        typer.echo("error: event_type must not be blank", err=True)
+        raise typer.Exit(code=2)
+    except LedgerBusy as exc:
+        _busy(str(exc))
+    except LedgerCorrupt as exc:
+        typer.echo(f"error: ledger corrupt: {exc}", err=True)
+        raise typer.Exit(code=1)
     typer.echo(event.model_dump_json())
+
+
+REASON_MAX_CHARS = 500
+_NAMED_ESCAPES = {chr(10): "\\n", chr(13): "\\r", chr(9): "\\t", chr(27): "\\x1b"}
+
+
+def _one_line(text: object, cap: int = REASON_MAX_CHARS) -> str:
+    """B87: a verification reason as ONE printable line. A reason can carry content of the file under test (an index,
+    twelve characters of a stored hash, a name); a newline in it would let that content start a line of its own, for
+    example the OK-looking "(signed rotation anchor verified ...)" text, and an escape sequence could repaint the
+    terminal. Every control, format, line-separator, surrogate, private-use and unassigned character is written as
+    a visible escape, and the line is cut at ``cap`` characters with the number of characters left out."""
+    out: list[str] = []
+    for ch in str(text):
+        if ch in _NAMED_ESCAPES:
+            out.append(_NAMED_ESCAPES[ch])
+        elif unicodedata.category(ch)[0] == "C" or unicodedata.category(ch) in ("Zl", "Zp"):
+            o = ord(ch)
+            out.append(f"\\x{o:02x}" if o < 0x100 else f"\\u{o:04x}" if o < 0x10000 else f"\\U{o:08x}")
+        else:
+            out.append(ch)
+    line = "".join(out)
+    return line if len(line) <= cap else f"{line[:cap]}... ({len(line) - cap} more characters not shown)"
+
+
+def _tampered(reason: object) -> "typer.Exit":
+    """Print the one ``TAMPERED`` line for a failed verification and return the exit-1 to raise."""
+    typer.echo(f"TAMPERED — {_one_line(reason)}")
+    return typer.Exit(code=1)
 
 
 def _busy(message: str) -> None:
@@ -101,22 +139,25 @@ def _no_ledger(target: Path) -> None:
     raise typer.Exit(code=2)
 
 
-def _load_event_pubkey(event_pubkey: Path | None) -> str | None:
-    """--event-pubkey must be a readable Ed25519 PUBLIC key PEM (exit 2 otherwise)."""
-    if event_pubkey is None:
+def _read_public_pem(path: Path | None, flag: str) -> str | None:
+    """A readable Ed25519 PUBLIC key PEM named by ``flag`` (exit 2 otherwise). The class name only is shown: a decode
+    error's text can carry key bytes."""
+    if path is None:
         return None
     try:
-        pem = event_pubkey.read_text(encoding="ascii")
+        pem = path.read_text(encoding="ascii")
         from field_core.signing import key_fingerprint
 
         key_fingerprint(pem)
     except (OSError, UnicodeError, ValueError, TypeError, UnsupportedAlgorithm) as exc:
-        typer.echo(
-            f"error: --event-pubkey is not a readable Ed25519 public key ({type(exc).__name__})",
-            err=True,
-        )
+        typer.echo(f"error: {flag} is not a readable Ed25519 public key ({type(exc).__name__})", err=True)
         raise typer.Exit(code=2)
     return pem
+
+
+def _load_event_pubkey(event_pubkey: Path | None) -> str | None:
+    """--event-pubkey must be a readable Ed25519 PUBLIC key PEM (exit 2 otherwise)."""
+    return _read_public_pem(event_pubkey, "--event-pubkey")
 
 
 def _check_event_signatures(indexed, public_key_pem: str) -> None:
@@ -141,7 +182,7 @@ def _check_event_signatures(indexed, public_key_pem: str) -> None:
             continue
         if not verify_event_signature(event, public_key_pem):
             typer.echo(
-                f"SIGNATURE INVALID — index {index}: event {event.event_id} ({event.event_type}) "
+                f"SIGNATURE INVALID — index {index}: event {_one_line(event.event_id)} ({_one_line(event.event_type)}) "
                 "does not verify under --event-pubkey (mutated after signing, or another key)"
             )
             raise typer.Exit(code=1)
@@ -194,20 +235,22 @@ def _check_caller_signatures(indexed, keyring) -> None:
             pem = keyring.public_pem(event.caller_id)
         except CallerRefused as exc:
             typer.echo(
-                f"CALLER UNKNOWN — index {index}: event {event.event_id} ({event.event_type}) claims "
-                f"caller {event.caller_id!r} but the keyring has no usable key for it ({exc})"
+                f"CALLER UNKNOWN — index {index}: event {_one_line(event.event_id)} ({_one_line(event.event_type)}) "
+                f"claims caller {_one_line(repr(event.caller_id))} but the keyring has no usable key for it "
+                f"({_one_line(exc)})"
             )
             raise typer.Exit(code=1)
         if not verify_caller_signature(event, pem):
             typer.echo(
-                f"CALLER SIGNATURE INVALID — index {index}: event {event.event_id} ({event.event_type}) "
-                f"does not verify under {event.caller_id}.pub.pem (mutated after the caller signed, "
+                f"CALLER SIGNATURE INVALID — index {index}: event {_one_line(event.event_id)} "
+                f"({_one_line(event.event_type)}) does not verify under {_one_line(event.caller_id)}.pub.pem "
+                "(mutated after the caller signed, "
                 "or another key)"
             )
             raise typer.Exit(code=1)
         signed += 1
         per_caller[event.caller_id] = per_caller.get(event.caller_id, 0) + 1
-    listed = ", ".join(f"{k}: {v}" for k, v in sorted(per_caller.items()))
+    listed = ", ".join(f"{_one_line(k)}: {v}" for k, v in sorted(per_caller.items()))
     typer.echo(
         f"caller_signed {signed} caller_unsigned {unsigned} per_caller {{{listed}}} "
         f"first_caller_unsigned_after_signed "
@@ -283,6 +326,7 @@ def verify(
     from sealed_ledger.store import (
         LedgerBusy,
         _parse_events,
+        _unparseable_text,
         journal_path_for,
         read_shared,
         sidecar_path_for,
@@ -310,13 +354,11 @@ def verify(
             raise typer.Exit(code=2)
         try:
             events = _parse_events(data)
-        except ValueError as exc:
-            typer.echo(f"TAMPERED — unparseable line: {exc}")
-            raise typer.Exit(code=1)
+        except (ValueError, RecursionError) as exc:
+            raise _tampered(f"unparseable line: {_unparseable_text(exc)}")
         result = verify_chain(events, genesis)
         if not result.ok:
-            typer.echo(f"TAMPERED — {result.reason}")
-            raise typer.Exit(code=1)
+            raise _tampered(result.reason)
         typer.echo(f"OK — chain intact over {result.length} events")
         _check_signatures(enumerate(events), event_pubkey_pem, keyring)  # indices local to the file
         return
@@ -329,11 +371,10 @@ def verify(
             )
             raise typer.Exit(code=2)
         side = verify_segment_file(
-            target, public_key_pem=pubkey.read_text(encoding="ascii") if pubkey else None
+            target, public_key_pem=_read_public_pem(pubkey, "--pubkey")
         )
         if not side["ok"]:
-            typer.echo(f"TAMPERED — {side['reason']}")
-            raise typer.Exit(code=1)
+            raise _tampered(side["reason"])
         typer.echo(
             f"OK — segment {side['segment']} of {side['logical']} intact over "
             f"{side['events']} events (global {side['global_first']}..{side['global_last']})"
@@ -359,8 +400,7 @@ def verify(
                 )
                 raise typer.Exit(code=2)
             if not result.ok:
-                typer.echo(f"TAMPERED — {result.reason}")
-                raise typer.Exit(code=1)
+                raise _tampered(result.reason)
             logical = target.stem[: -len(f"-{entry['n']}")] + target.suffix
             typer.echo(
                 f"OK — segment {entry['n']} of {logical} intact over "
@@ -368,7 +408,7 @@ def verify(
                 f"{entry['end_index']})"
             )
             if entry.get("state") == "pending-move":
-                typer.echo(f"(archived in the journal to {entry['archived_to']}: a pending move, "
+                typer.echo(f"(archived in the journal to {_one_line(entry['archived_to'])}: a pending move, "
                            "completed by the next retention apply)")
             elif entry.get("state") == "pending-rotation":
                 typer.echo(f"(rotation {entry['n']} is pending: the service or the next write "
@@ -392,6 +432,9 @@ def verify(
         store = _store(target)
     except LedgerBusy as exc:
         _busy(str(exc))
+    except (ValueError, RecursionError) as exc:
+        # opening the store takes a strict snapshot: a line that does not parse raises here, and its message is segment content
+        raise _tampered(f"unparseable line: {_unparseable_text(exc)}")
     result = store.verify()
     if not result.ok and (result.reason or "").startswith("ledger busy"):
         _busy(result.reason)
@@ -412,8 +455,7 @@ def verify(
                 f"{result.verified_events} events hash-verified)"
             )
     else:
-        typer.echo(f"TAMPERED — {result.reason}")
-        raise typer.Exit(code=1)
+        raise _tampered(result.reason)
     if event_pubkey_pem is not None or keyring is not None:
         # F2 / F2b: every LIVE event (global indices), after the chain walk
         try:
@@ -427,7 +469,7 @@ def verify(
         try:
             anchor_result = verify_anchors(
                 store, anchors,
-                public_key_pem=pubkey.read_text(encoding="ascii") if pubkey else None,
+                public_key_pem=_read_public_pem(pubkey, "--pubkey"),
                 min_anchors=min_anchors,
             )
         except LedgerBusy as exc:
@@ -444,7 +486,7 @@ def verify(
                 typer.echo("note: no --min-anchors floor given: anchors removed from the END of the file are not detected "
                            "(the guarantee depends on this being the complete off-box copy)")
         else:
-            typer.echo(f"ANCHOR FAILURE — {anchor_result.first_failure}")
+            typer.echo(f"ANCHOR FAILURE — {_one_line(anchor_result.first_failure)}")
             raise typer.Exit(code=1)
 
 
@@ -507,16 +549,22 @@ def export(
     (hash spine to head), signature.json (signed only with --sign-key)."""
     from sealed_ledger.bundle import InvalidSigningKey
     from sealed_ledger.filters import InvalidTimeBound
+    from sealed_ledger.store import LedgerBusy, LedgerCorrupt
 
     private_key_pem = None
     if sign_key is not None:
         try:
             private_key_pem = sign_key.read_text(encoding="ascii")
-        except (OSError, UnicodeDecodeError) as exc:
-            typer.echo(f"error: cannot read --sign-key: {exc}", err=True)
+        except UnicodeDecodeError:
+            # main's fixed text (B-EXPORT-KEY-BYTE-LEAK): a decode error's message carries one raw byte of the key and
+            # its offset, and no class name is printed either
+            typer.echo("error: cannot read --sign-key (not a readable ASCII PEM file)", err=True)
             raise typer.Exit(code=2)
-    store = _store(path)
+        except OSError as exc:
+            typer.echo(f"error: cannot read --sign-key ({type(exc).__name__})", err=True)   # PR 915: the class only
+            raise typer.Exit(code=2)
     try:
+        store = _store(path)   # opening a store takes a snapshot too: a busy ledger can refuse here as well
         summary = store.export(
             out_dir or store.path.parent / "exports",
             since=since,
@@ -528,6 +576,11 @@ def export(
     except (InvalidTimeBound, InvalidSigningKey) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=2)
+    except LedgerBusy as exc:   # a snapshot that could not be taken is never evidence of tampering (exit 4)
+        _busy(str(exc))
+    except (LedgerCorrupt, ValueError) as exc:   # the text can quote a stored line or ts: only the class is shown
+        typer.echo(f"error: export failed: the ledger cannot be exported ({type(exc).__name__})", err=True)
+        raise typer.Exit(code=1)
     except OSError as exc:
         typer.echo(f"error: export failed: {exc}", err=True)
         raise typer.Exit(code=1)
@@ -549,7 +602,7 @@ def verify_export(
         try:
             public_key_pem = pubkey.read_text(encoding="ascii")
         except (OSError, UnicodeDecodeError) as exc:
-            typer.echo(f"error: cannot read --pubkey: {exc}", err=True)
+            typer.echo(f"error: cannot read --pubkey ({type(exc).__name__})", err=True)
             raise typer.Exit(code=2)
     result = verify_bundle(bundle, public_key_pem=public_key_pem)
     if not result.ok:
@@ -558,7 +611,7 @@ def verify_export(
             if result.first_failing_index is not None
             else ""
         )
-        typer.echo(f"EXPORT FAILED — {where}{result.reason}")
+        typer.echo(f"EXPORT FAILED — {_one_line(where + str(result.reason))}")
         raise typer.Exit(code=1)
     if result.event_count:
         span = f"{result.event_count} event(s) at indices {result.first_index}..{result.last_index}"
@@ -567,7 +620,7 @@ def verify_export(
     if result.spine_attested:
         typer.echo(
             f"OK — {span}; hashes recomputed; spine {result.first_index}..{result.head_index} "
-            f"links to head_hash; signature valid (key {result.key_fingerprint})"
+            f"links to head_hash; signature valid (key {_one_line(result.key_fingerprint)})"
         )
     elif result.signed:
         typer.echo(
@@ -578,7 +631,7 @@ def verify_export(
         typer.echo(
             f"OK — {span}; hashes recomputed; internally consistent; spine unverified (unsigned)"
         )
-    typer.echo(f"head_index {result.head_index} head_hash {result.head_hash}")
+    typer.echo(f"head_index {result.head_index} head_hash {_one_line(result.head_hash)}")
     if result.unfiltered:
         if result.head_index is None:
             covered = "the chain was empty"
@@ -595,7 +648,7 @@ def verify_export(
         recorded = ", ".join(
             f"{name}={value!r}" for name, value in (result.filters or {}).items() if value is not None
         )
-        typer.echo(f"filters: {recorded} — completeness of a filtered export is not provable")
+        typer.echo(f"filters: {_one_line(recorded)} — completeness of a filtered export is not provable")
     if result.contiguous:
         typer.echo(
             f"contiguous: every link from index {result.first_index} to head was recomputed "
@@ -620,7 +673,25 @@ def _served_base_url(offline: bool) -> str | None:
             "error: set FIELD_LEDGER_URL, or pass --offline with the service stopped", err=True
         )
         raise typer.Exit(code=2)
+    if _url_has_userinfo(url):
+        # fixed text, the URL is never echoed (as for --events-url, S3-16): the perimeter secret rides a header
+        typer.echo("error: FIELD_LEDGER_URL must not carry credentials (user:pass@); nothing was sent", err=True)
+        raise typer.Exit(code=2)
     return url
+
+
+def _origin(url: str) -> str:
+    """scheme://host[:port] of a URL: never its userinfo, path, query or fragment."""
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname or ""
+        host = f"[{host}]" if ":" in host else host     # an IPv6 literal keeps its brackets
+        port = f":{parts.port}" if parts.port else ""
+        return f"{parts.scheme}://{host}{port}"
+    except ValueError:
+        return "<unparseable URL>"
 
 
 def _call_served(base_url: str, method: str, route: str, body: dict | None = None,
@@ -629,22 +700,39 @@ def _call_served(base_url: str, method: str, route: str, body: dict | None = Non
     path prefix such as ``/ledger`` (``urllib.parse.urljoin`` would drop it)."""
     import httpx
 
-    from field_core.authn import auth_headers
+    from field_core.guarded_operator import LEDGER_GUARDED, request_headers
 
+    # Headers per request (C-1181): the perimeter secret always, the operator pair only on a guarded route
+    # of the ledger (POST /rotate, /hold, /hold/release, /retention/apply); GET /retention/check carries no pair.
     try:
-        with httpx.Client(base_url=base_url, headers=auth_headers(), timeout=timeout) as client:
-            return client.request(method, route.lstrip("/"), json=body)
+        with httpx.Client(base_url=base_url, timeout=timeout) as client:
+            return client.request(method, route.lstrip("/"), json=body,
+                                  headers=request_headers(method, route, LEDGER_GUARDED))
     except httpx.HTTPError as exc:
-        typer.echo(f"error: ledger at {base_url} unreachable: {type(exc).__name__}: {exc}", err=True)
+        # the class and the origin only: httpx's text can carry the whole URL
+        typer.echo(f"error: ledger at {_origin(base_url)} unreachable: {type(exc).__name__}", err=True)
+        raise typer.Exit(code=2)
+    except (httpx.InvalidURL, ValueError):  # e.g. FIELD_LEDGER_URL=http://[::1 ; never echoed
+        typer.echo("error: FIELD_LEDGER_URL is not a usable URL", err=True)
         raise typer.Exit(code=2)
 
 
 def _served_detail(resp) -> str:
     try:
-        detail = resp.json().get("detail")
+        body = resp.json()
     except ValueError:
-        detail = None
+        body = None
+    detail = body.get("detail") if isinstance(body, dict) else None   # a list or a string body has no detail
     return str(detail) if detail is not None else resp.text
+
+
+def _served_json(resp, what: str):
+    """The JSON body of a served 2xx, or one stderr line and exit 2 (never a traceback, never the body)."""
+    try:
+        return resp.json()
+    except ValueError:
+        typer.echo(f"error: ledger answered {resp.status_code} to {what} but the body is not JSON", err=True)
+        raise typer.Exit(code=2)
 
 
 @app.command()
@@ -665,6 +753,8 @@ def rotate(
     FIELD_LEDGER_URL is set, else only with --offline. Never unsigned: no
     usable key => exit 2 and nothing is written. Exit 4 if the ledger is busy
     (on Windows: another process holds the file open)."""
+    from pydantic import ValidationError
+
     from sealed_ledger.anchors import AnchorRecord, append_anchor_line
     from sealed_ledger.api import load_anchor_key
     from sealed_ledger.store import (
@@ -697,7 +787,12 @@ def rotate(
         if resp.status_code != 200:
             typer.echo(f"error: rotate refused ({resp.status_code}): {detail}", err=True)
             raise typer.Exit(code=2)
-        result = RotationResult.model_validate(resp.json())
+        try:
+            result = RotationResult.model_validate(_served_json(resp, "rotate"))
+        except ValidationError:
+            typer.echo("error: ledger answered 200 to rotate but the body is not a rotation result",
+                       err=True)
+            raise typer.Exit(code=2)
     else:
         try:
             pem = load_anchor_key(key)
@@ -710,23 +805,28 @@ def rotate(
         except LedgerCorrupt as exc:
             typer.echo(f"error: ledger corrupt: {exc}", err=True)
             raise typer.Exit(code=1)
+    # The rotation has HAPPENED: print its result first, so a failed anchor write cannot lose it.
+    typer.echo(result.model_dump_json(indent=2))
     if anchors is not None:
         try:
-            append_anchor_line(Path(anchors), AnchorRecord.model_validate(result.anchor))
-        except OSError as exc:
-            # the rotation is committed already: say so, after the result the operator needs
-            typer.echo(result.model_dump_json(indent=2))
-            typer.echo(f"error: the rotation SUCCEEDED but the anchor line was NOT written to {anchors} "
-                       f"({type(exc).__name__}); append the anchor above to the off-box file by hand", err=True)
+            record = AnchorRecord.model_validate(result.anchor)
+            append_anchor_line(Path(anchors), record)
+        # ValidationError is a ValueError; a NUL path was refused above; LedgerCorrupt: the anchors file ends in a torn
+        # record (a RuntimeError), and the operator must still get the "do not re-run" text (don.reviewer C1 on #916)
+        except (OSError, ValueError, LedgerCorrupt) as exc:
+            typer.echo(
+                f"error: the rotation SUCCEEDED (segment {result.segment}) but the anchor line was NOT "
+                f"written to {anchors} ({type(exc).__name__}). Do NOT re-run rotate. Store the "
+                f"anchor below off-box:", err=True)
+            typer.echo(json.dumps(result.anchor, default=str, indent=2), err=True)
             raise typer.Exit(code=1)
-    typer.echo(result.model_dump_json(indent=2))
 
 
 def _served_or_exit(resp, verb: str) -> dict:
     """Map a served mutating verb's status to the CLI's exit codes."""
     detail = _served_detail(resp)
     if resp.status_code in (200, 201):
-        return resp.json()
+        return _served_json(resp, verb)
     if resp.status_code == 423:
         typer.echo(f"LEGAL HOLD — {detail}", err=True)
         raise typer.Exit(code=4)
@@ -841,6 +941,7 @@ def retention_apply(
     segment does not verify / corrupt; 2 refused or usage; 4 legal hold or busy."""
     from sealed_ledger.api import data_root, default_archive_dir
     from sealed_ledger.store import (
+        MAX_RETENTION_DAYS,
         ArchiveRefused,
         LedgerBusy,
         LedgerCorrupt,
@@ -850,6 +951,9 @@ def retention_apply(
 
     if not operator.strip():
         typer.echo("error: --operator must not be blank", err=True)
+        raise typer.Exit(code=2)
+    if days > MAX_RETENTION_DAYS:
+        typer.echo(f"error: --days must be at most {MAX_RETENTION_DAYS}", err=True)
         raise typer.Exit(code=2)
     base_url = _served_base_url(offline)
     _offline_path_only(base_url, path)
@@ -896,7 +1000,10 @@ def retention_check_cmd(
             typer.echo(f"error: retention check failed ({resp.status_code}): {_served_detail(resp)}",
                        err=True)
             raise typer.Exit(code=2)
-        result = resp.json()
+        result = _served_json(resp, "retention check")
+        if not isinstance(result, dict):
+            typer.echo("error: ledger answered 200 to retention check but the body is not a JSON object", err=True)
+            raise typer.Exit(code=2)
     else:
         from field_core.clients import RegistryClient
         from sealed_ledger.retention import retention_check
@@ -943,12 +1050,19 @@ def witness_run(
     from sealed_ledger import witness as w
 
     started_at = datetime.now(timezone.utc).isoformat()
-    if not estate.strip():
-        typer.echo("error: --estate must not be blank", err=True)
+    try:
+        w.checked_estate(estate)
+    except ValueError:   # fixed text: the name is never echoed
+        typer.echo(f"error: {w.ESTATE_NAME_REFUSAL}", err=True)
         raise typer.Exit(code=2)
     ledger_url = os.environ.get("FIELD_LEDGER_URL")
     if not ledger_url:
         typer.echo("error: set FIELD_LEDGER_URL (the witness appends through the served route)", err=True)
+        raise typer.Exit(code=2)
+    if _url_has_userinfo(ledger_url):
+        # Backlog B6: the same refusal as _served_base_url and --events-url. Fixed text, the URL is never echoed;
+        # httpx would send user:pass@ as an Authorization header to the ledger. Nothing is built, nothing is sent.
+        typer.echo("error: FIELD_LEDGER_URL must not carry credentials (user:pass@); nothing was sent", err=True)
         raise typer.Exit(code=2)
     try:
         w.require_https(fly_url)
@@ -1007,6 +1121,11 @@ def verify_witness_cmd(
     from sealed_ledger import witness as w
     from sealed_ledger.store import LedgerBusy
 
+    try:
+        w.checked_estate(estate)   # a typo is a usage error here, not "nothing witnessed"
+    except ValueError:   # fixed text: the name is never echoed
+        typer.echo(f"error: {w.ESTATE_NAME_REFUSAL}", err=True)
+        raise typer.Exit(code=2)
     if (events_url is None) == (events_file is None):
         typer.echo("error: give exactly one of --events-url or --events-file", err=True)
         raise typer.Exit(code=2)
@@ -1027,16 +1146,28 @@ def verify_witness_cmd(
         except (OSError, UnicodeError, ValueError, TypeError, UnsupportedAlgorithm) as exc:
             typer.echo(f"error: --pubkey is not a readable Ed25519 public key ({type(exc).__name__})", err=True)
             raise typer.Exit(code=2)
+    secret = None
+    if secret_file is not None:
+        try:
+            secret = secret_file.read_text(encoding="utf-8-sig").strip()
+        except (OSError, UnicodeError) as exc:
+            # the exception text is NEVER echoed: a UnicodeDecodeError says "byte 0xff in position 25" (a byte and the
+            # length of the secret before it)
+            typer.echo(f"error: --secret-file is not readable text ({type(exc).__name__})", err=True)
+            raise typer.Exit(code=2)
     try:
         if events_file is not None:
             events = w.load_events(events_file.read_bytes())
         else:
-            secret = secret_file.read_text(encoding="utf-8").strip() if secret_file is not None else None
             events = w.fetch_events(events_url, secret or None)
     except w.DuplicateKey as exc:
-        typer.echo(f"WITNESS FAILED — events source refused: {exc}")
+        typer.echo(f"WITNESS FAILED — events source refused: {_one_line(exc)}")
         raise typer.Exit(code=1)
-    except (OSError, UnicodeError, ValueError) as exc:
+    except UnicodeError as exc:
+        # type only: the message of a decode error carries a byte value and an offset
+        typer.echo(f"error: events source unreadable: {type(exc).__name__}", err=True)
+        raise typer.Exit(code=2)
+    except (OSError, ValueError) as exc:
         typer.echo(f"error: events source unreadable: {type(exc).__name__}: {exc}", err=True)
         raise typer.Exit(code=2)
     except Exception as exc:  # noqa: BLE001 - transport errors
@@ -1049,7 +1180,7 @@ def verify_witness_cmd(
         if not chain.ok and (chain.reason or "").startswith("ledger busy"):
             _busy(chain.reason)
         if not chain.ok:
-            typer.echo(f"WITNESS FAILED — the local chain does not verify: {chain.reason}")
+            typer.echo(f"WITNESS FAILED — the local chain does not verify: {_one_line(chain.reason)}")
             raise typer.Exit(code=1)
         snap = store.snapshot()
     except LedgerBusy as exc:
@@ -1057,7 +1188,7 @@ def verify_witness_cmd(
     result = w.verify_witness(snap, anchors, estate, public_key_pem=public_key_pem,
                               verified_length=chain.length)
     for line in result.lines:
-        typer.echo(line)
+        typer.echo(_one_line(line))
     if not result.ok:
         raise typer.Exit(code=1)
 

@@ -26,7 +26,7 @@
   key-shaped id). Exit 0 = valid, 1 = invalid, 2 = usage error.
   It makes no key. On a format 2 file (key rotation) it also prints the
   format, generation, each row's rotation and, per key slot (CURRENT, NEXT),
-  the 8-hex fingerprint and the validity window: still never a full hash.
+  the 16-hex fingerprint and the validity window: still never a full hash.
   --add-to refuses a format 2 file (the rotator writes those).
 * --add-to serialises the whole read-modify-write (C-393): an exclusive lock on <operators file>.lock (created
   beside it, mode 0600, never deleted) is held from the read to the rename, and the file is read AGAIN under the
@@ -338,7 +338,7 @@ def check_file(path: Path) -> int:
     ids = [r["operator_id"] if printable_id(r["operator_id"]) else NOT_SHOWN for r in rows]
     width = max(len(i) for i in ids)
     for oid, r in zip(ids, rows):
-        print(f"  {oid:<{width}}  {r['status']:<7}  fingerprint {r['key_sha256'][:8]}")
+        print(f"  {oid:<{width}}  {r['status']:<7}  fingerprint {r['key_sha256'][:16]}")
     dropped = len(given) - len(rows)
     if dropped:
         print(f"warning: {dropped} row(s) with an unencodable operator_id are ignored by the services")
@@ -356,7 +356,7 @@ def _window_state(now: float, not_before: int | None, not_after: int | None) -> 
 
 def _print_format2(path: Path, data: bytes, parsed) -> int:
     """--check on a format 2 file: ids, slots, windows and fingerprints only
-    (8 hex, as for format 1; never a full hash, never a passkey value)."""
+    (16 hex, as for format 1; never a full hash, never a passkey value)."""
     from field_core import operator_auth as oa
 
     now = oa.clock()
@@ -376,14 +376,14 @@ def _print_format2(path: Path, data: bytes, parsed) -> int:
         print(f"  {oid:<{width}}  {r['status']:<7}  rotation {r['rotation']}"
               f"  auth {','.join(r['auth'])}  passkeys {len(r['passkeys'])}")
         if r["key_not_after"] is None:
-            print(f"    current  fingerprint {r['key_sha256'][:8]}  no expiry (sealed)")
+            print(f"    current  fingerprint {r['key_sha256'][:16]}  no expiry (sealed)")
         else:
-            print(f"    current  fingerprint {r['key_sha256'][:8]}  until "
+            print(f"    current  fingerprint {r['key_sha256'][:16]}  until "
                   f"{format_time(r['key_not_after'])}  "
                   f"{_window_state(now, None, r['key_not_after'])}")
         nk = r["next_key"]
         if nk is not None:
-            print(f"    next     fingerprint {nk['key_sha256'][:8]}  from "
+            print(f"    next     fingerprint {nk['key_sha256'][:16]}  from "
                   f"{format_time(nk['not_before'])} until {format_time(nk['not_after'])}  "
                   f"{_window_state(now, nk['not_before'], nk['not_after'])}")
     print("OK: passes the registry validation the services apply under REQUIRE (format 2)")

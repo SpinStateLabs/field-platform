@@ -37,7 +37,7 @@ def parse_bound(name: str, value: str | None) -> datetime | None:
         return parse_instant(value)
     except (TypeError, ValueError) as exc:
         raise InvalidTimeBound(
-            f"{name} is not an ISO 8601 timestamp: {value!r}"
+            f"{name} is not an ISO 8601 timestamp"
         ) from exc
 
 
