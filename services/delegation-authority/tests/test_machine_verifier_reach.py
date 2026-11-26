@@ -18,11 +18,14 @@ LOG-ONLY, is unchanged, which the controls below pin.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
+from delegation_authority.store import TokenStore
 from field_core import operator_auth as oa
+from field_core.delegation import DelegationToken
 from test_doa_roster import Spine, write_manifest
 
 REPO = Path(__file__).resolve().parents[3]
@@ -293,3 +296,18 @@ def test_log_only_the_verifier_revoke_is_unchanged(spine):
     tid = mint(spine, SSL, "Don Hagell, Spin State Labs", "don", KEY_DON).json()["token_id"]
     spine.arm("log-only")
     assert revoke(spine, tid, VERIFIER, KEY_VER).status_code == 200
+
+
+@pytest.mark.parametrize("stored,keyed", [(SSL, SSL), ("Not Valid", None)], ids=["inside", "outside"])
+def test_the_list_bound_revoke_refusal_row_is_keyed_only_by_an_id_inside_the_rule(spine, tmp_path, stored, keyed):
+    """The refusal row of a list-bound revoke is keyed like the revoke row itself."""
+    now = datetime.now(timezone.utc)
+    token = TokenStore(tmp_path / "tokens.sqlite3").save(DelegationToken(
+        agent_id=stored, granted_by="Don Hagell, Spin State Labs", scope=["x"], issued_at=now,
+        expires_at=now + timedelta(hours=1)))
+    spine.arm("enforce")
+    r = revoke(spine, token.token_id, VERIFIER, KEY_VER)
+    assert r.status_code == 403 and r.json() == FORBIDDEN, r.text
+    rows = _refused_events(spine)
+    assert len(rows) == 1 and rows[0].get("agent_id") == keyed
+    assert active(spine, token.token_id)

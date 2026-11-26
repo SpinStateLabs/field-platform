@@ -246,6 +246,11 @@ def _verify_unanswered(http_status: int | None) -> str:
     return f"ledger answered HTTP {http_status} to /verify — chain NOT verified; investigate"
 
 
+
+def _count_value(v) -> bool:
+    """B97: a count or a number of days the signed note may print: a non-negative int, never a bool."""
+    return isinstance(v, int) and not isinstance(v, bool) and v >= 0
+
 def _without_canaries(data: Any) -> tuple[Any, int]:
     """Drop gate-verification records (any dict whose ``agent_id`` is a canary)."""
     if not isinstance(data, list):
@@ -412,18 +417,40 @@ class PackEngine:
             # distinct-agents rows treat it.
             return rec["agent_id"] if isinstance(rec.get("agent_id"), str) else "(no agent_id)"
 
+        # B97: the same rule for every other field the signed note prints. A value of the wrong type
+        # is never interpolated; it prints as a fixed placeholder, the record stays counted, and the
+        # note says how many records carried a malformed field.
+        def days(rec: dict) -> str:
+            d = rec.get("retention_days")
+            return f"{d} d" if _count_value(d) else "no retention_days"
+
+        def reason(rec: dict) -> str:
+            r = rec.get("reason")
+            return r if isinstance(r, str) else "(no reason)"
+
+        malformed = sum(1 for o in offending
+                        if not isinstance(o.get("agent_id"), str) or not _count_value(o.get("retention_days")))
+        malformed += sum(1 for u in unresolvable
+                         if not isinstance(u.get("agent_id"), str) or not isinstance(u.get("reason"), str))
+
         parts = []
         if offending:
-            parts.append("offending: " + ", ".join(
-                f"{ident(o)} ({o.get('retention_days')} d)" for o in offending))
+            parts.append("offending: " + ", ".join(f"{ident(o)} ({days(o)})" for o in offending))
         if unresolvable:
-            parts.append("unresolvable: " + ", ".join(
-                f"{ident(u)} ({u.get('reason')})" for u in unresolvable))
+            parts.append("unresolvable: " + ", ".join(f"{ident(u)} ({reason(u)})" for u in unresolvable))
             parts.append(f"a lower bound: {len(unresolvable)} manifest ref(s) could not be read")
         if not parts:
-            parts.append(f"none among {data.get('manifests_checked', 0)} resolvable manifest(s)")
-        if data.get("agents_without_manifest"):
-            parts.append(f"{data['agents_without_manifest']} agent(s) without a manifest_ref not checked")
+            checked = data.get("manifests_checked", 0)
+            parts.append(f"none among {checked} resolvable manifest(s)" if _count_value(checked)
+                         else "none among the resolvable manifests (the ledger's count is malformed)")
+        without = data.get("agents_without_manifest")
+        if _count_value(without):
+            if without:
+                parts.append(f"{without} agent(s) without a manifest_ref not checked")
+        elif without is not None:
+            parts.append("agents without a manifest_ref not checked (the ledger's count is malformed)")
+        if malformed:
+            parts.append(f"{malformed} record(s) with a malformed field, printed as a placeholder")
         if n_off or n_unres:
             parts.append(f"excludes {n_off + n_unres} gate-verification (canary) finding(s)")
         count = Metric(name=count_name, value=len(offending), unit="manifests",

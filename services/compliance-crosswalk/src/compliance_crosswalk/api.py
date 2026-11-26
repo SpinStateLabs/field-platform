@@ -6,6 +6,7 @@ import logging
 import threading
 from contextlib import asynccontextmanager
 
+from field_core.ids import REGISTRY_ID_PATTERN
 from field_core.startup import warn_open
 from field_core.guarded_operator import perimeter_headers
 
@@ -32,7 +33,7 @@ from compliance_crosswalk.mapping import CONTROLS, FRAMEWORKS
 #: The registry's own id grammar (agent_registry.models), or empty (no agent: unchanged). An id outside it can be no
 #: registry record, and ``collect_evidence`` puts the id into URL paths and queries (S5-17).
 AGENT_ID_MAX = 200
-AGENT_ID_PATTERN = r"^([a-z0-9][a-z0-9._-]*)?$"
+AGENT_ID_PATTERN = "^(" + REGISTRY_ID_PATTERN[1:-1] + ")?$"     # the registry's rule, or empty
 
 
 class CrosswalkRequest(BaseModel):

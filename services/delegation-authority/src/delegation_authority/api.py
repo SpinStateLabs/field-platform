@@ -52,6 +52,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, HTTPException, Request
 
 from field_core import operator_auth, operator_health
+from field_core.ids import REGISTRY_ID_MAX_LENGTH, REGISTRY_ID_PATTERN, registry_id_ok
 from field_core.startup import warn_open
 from starlette.concurrency import run_in_threadpool
 
@@ -90,7 +91,7 @@ OAUTH_INTROSPECT_MAX_BODY = 16 * 1024
 class MintRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    agent_id: str = Field(min_length=1)
+    agent_id: str = Field(min_length=1, max_length=REGISTRY_ID_MAX_LENGTH, pattern=REGISTRY_ID_PATTERN)
     granted_by: str = Field(min_length=1, description="Human grantor — never an agent")
     scope: list[Annotated[str, StringConstraints(max_length=MAX_SCOPE_ENTRY_CHARS)]] = Field(
         min_length=1, max_length=MAX_SCOPE_ENTRIES)
@@ -398,7 +399,8 @@ def create_app(
                     "doa_checked": doa_checked,
                     "doa_row": doa_row,
                 },
-                agent_id=token.agent_id,
+                # keyed by the registry record's own id (the request's, already inside the rule, if it names none)
+                agent_id=record["agent_id"] if registry_id_ok(record.get("agent_id")) else token.agent_id,
             )
         except LedgerUnreachableError as exc:
             # Fail closed: unauditable authority must not exist.
@@ -454,7 +456,8 @@ def create_app(
             except operator_auth.OperatorRefused as exc:
                 raise op_health.http_refusal(exc, action="revoke", path=f"/tokens/{token_id}/revoke",
                                              headers={}, claimed=auth.claimed,
-                                             agent_id=token.agent_id) from None
+                                             agent_id=(token.agent_id if registry_id_ok(token.agent_id)
+                                                       else None)) from None
         # C-625 (reviewer C-527 F-C527-4) and C-725 (reviewer C-701): the check, the ledger event and the write are one
         # step per token in this process (a per-token lock, re-read under it; the write is conditional on the row still
         # being unrevoked, `save_revoked`). GUARANTEE, stated as it holds: at most one revocation id per token, and it
@@ -478,7 +481,8 @@ def create_app(
                         "token_id": token.token_id,
                         "revocation_id": revoked.revocation_id,
                     },
-                    agent_id=token.agent_id,
+                    # a token stored before the id rule may name no registry id: the revoke must still be recorded
+                    agent_id=token.agent_id if registry_id_ok(token.agent_id) else None,
                 )
             except LedgerUnreachableError as exc:
                 # C-821 (reviewer C-692 F-C692-3): an answer from the ledger (401, 403, 422, 500 ...) is a refusal, not
