@@ -399,6 +399,8 @@ def _exc_name(exc: BaseException) -> str:
 
 #: the ``reason`` of the fixed-shape row written when the ledger refused a kill-path row (4xx)
 LEDGER_FALLBACK_REASON = "the ledger refused this row; fixed-shape record"
+#: the only payload keys that row may carry; the last two are the authenticated context, present when a mode is on
+LEDGER_FALLBACK_KEYS = ("operator", "reason", "refused_status", "operator_id_authenticated", "operator_key_fp")
 
 #: status code -> fixed failure class for the kill.agent.failed ledger row
 _FAIL_CLASS = {404: "not_registered", 409: "retired", 403: "not_authorized", 502: "registry_failure"}
@@ -642,8 +644,9 @@ def create_app(
         payload = operator_auth.merge_payload({
             "operator": auth.operator_id if auth.authenticated else "(not recorded)",
             "reason": LEDGER_FALLBACK_REASON, "refused_status": status})
-        # the authenticated context adds what a request SAID it was (header and body text): not part of the fixed shape
-        payload = {k: v for k, v in payload.items() if k not in ("operator_claimed", "operator_body_claimed")}
+        # an allowlist: the merge also adds what a request SAID (claimed, body and on-behalf-of names), which is not
+        # part of the fixed shape, and any field it gains later stays out until it is named above
+        payload = {k: v for k, v in payload.items() if k in LEDGER_FALLBACK_KEYS}
         try:
             app.state.ledger.append(event_type, payload=payload,
                                     agent_id=agent_id if registry_id_ok(agent_id) else None)

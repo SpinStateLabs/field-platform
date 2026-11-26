@@ -262,6 +262,8 @@ def test_a_halt_whose_rows_are_refused_is_recorded_in_the_fixed_shape(stack, sta
     for _, payload, _ in ledger.rows:
         shape = (payload["operator"], payload["reason"], payload["refused_status"])
         assert shape == ("don", FALLBACK_REASON, status)
+        named = ["operator", "operator_id_authenticated", "operator_key_fp", "reason", "refused_status"]
+        assert sorted(payload) == named
         assert payload["operator_id_authenticated"] == "don"
         assert "operator_claimed" not in payload and "operator_body_claimed" not in payload
         assert BODY["reason"] not in json.dumps(payload) and BODY["operator"] not in json.dumps(payload)
@@ -290,6 +292,21 @@ def test_a_healthy_ledger_counts_nothing(stack):
     assert (health["ledger_note_failures"], health["ledger_rows_lost"]) == (0, 0)
 
 
+def test_the_fixed_shape_drops_every_field_the_merge_adds_beyond_the_named_ones(stack, monkeypatch):
+    """no kill-switch route binds an on-behalf-of name today, so the merge is made to add one (and an unknown field)"""
+    real = kill_api.operator_auth.merge_payload
+
+    def richer(payload):
+        return {**real(payload), "operator_on_behalf_of": "someone-else", "operator_future_field": "text"}
+
+    monkeypatch.setattr(kill_api.operator_auth, "merge_payload", richer)
+    ledger = PickyLedger(422)
+    r, _, _ = _kill_with(stack, ledger)
+    assert r.status_code == 200 and len(ledger.rows) == 2
+    for _, payload, _ in ledger.rows:
+        assert "operator_on_behalf_of" not in payload and "operator_future_field" not in payload
+
+
 @pytest.mark.parametrize("mode", ["off", "log-only"])
 def test_the_fixed_shape_names_no_operator_for_an_unauthenticated_caller(stack, monkeypatch, mode):
     monkeypatch.delenv(oa.ENV_REQUIRE)
@@ -303,6 +320,9 @@ def test_the_fixed_shape_names_no_operator_for_an_unauthenticated_caller(stack, 
     assert len(rows) == 2
     for payload in rows:
         assert payload["operator"] == "(not recorded)" and payload.get("operator_id_authenticated") is None
+        named = ["operator", "reason", "refused_status"]
+        assert sorted(payload) == sorted(named if mode == "off" else named + ["operator_id_authenticated",
+                                                                                "operator_key_fp"])
         text = json.dumps(payload)
         assert "someone-claimed" not in text and BODY["operator"] not in text and "operator_claimed" not in payload
 
