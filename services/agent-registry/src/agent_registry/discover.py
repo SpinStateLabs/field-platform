@@ -31,15 +31,18 @@ import csv
 import io
 import json
 import re
+import unicodedata
+from pathlib import Path
 from typing import Any, Iterable
 
 from agent_registry.models import (
     AgentRecord,
+    AgentStatus,
     DiscoveryReport,
     SecretHit,
     ShadowCandidate,
 )
-from agent_registry.redaction import ScanInputError, check_size, find_secrets
+from agent_registry.redaction import MAX_SCAN_BYTES, ScanInputError, check_size, find_secrets
 
 # n8n node-type substrings that indicate an AI/agent workload.
 AI_NODE_MARKERS = (
@@ -56,8 +59,36 @@ AI_NODE_MARKERS = (
 )
 
 # Service-account naming patterns that indicate automation identity.
+# ``ACCOUNT_PATTERNS`` is MAIN's rule, unchanged. ``looks_like_automation`` is that rule applied to the NFKC-normalised name
+# with its format characters removed, plus AI vendor names as WHOLE tokens (``huggingface_token``, ``Anthropic_Admin``), and
+# nothing else: no exclusion. So every name main flags is still flagged, including person names ending in -ai (kai_nakamura,
+# rai-chu, jsmith@thai.example): a review queue prefers a false positive (PR 1024: two narrowing designs were each BLOCKED
+# because they let real service accounts through; the narrowing is a backlog row).
 ACCOUNT_PATTERNS = re.compile(r"(^svc[-_.]|^bot[-_.]|[-_.]bot$|agent|automation|ai[-_.])", re.I)
 ACCOUNT_TYPE_MARKERS = ("service", "bot", "application", "automation")
+
+#: AI vendor and product tokens, matched as WHOLE tokens only. Words that are also personal names (claude, gemini, mistral)
+#: are deliberately not listed: claude.martin is a person.
+_AI_VENDOR_TOKENS = frozenset((
+    "openai", "anthropic", "huggingface", "geminiai", "mistralai", "cohereai", "vertexai", "azureai", "stabilityai",
+    "perplexityai", "togetherai", "fireworksai", "deepai", "jasperai", "scaleai", "llamaai", "copilotai", "xai", "genai",
+    "mlai", "metaai"))
+
+
+def _fold(account: str) -> str:
+    """NFKC, then the format characters (Unicode category Cf: zero-width space and joiner, bidi marks, soft hyphen) removed:
+    ``open<ZWSP>ai-key``, a Kelvin sign and full-width letters match like their plain forms."""
+    return "".join(ch for ch in unicodedata.normalize("NFKC", account) if unicodedata.category(ch) != "Cf")
+
+
+def looks_like_automation(account: str) -> bool:
+    """Main's rule on the RAW name or on the folded name, plus whole-token AI vendor names. The raw-name test is what makes
+    "everything main flags is flagged" true by construction: NFKC can compose a trailing combining mark into the last letter of
+    a keyword (``agent`` + U+0308 becomes ``agen`` + U+1E97) and so remove a match main has. The candidate keeps the raw name."""
+    text = _fold(account)
+    if ACCOUNT_PATTERNS.search(account) or ACCOUNT_PATTERNS.search(text):
+        return True
+    return any(tok in _AI_VENDOR_TOKENS for tok in re.split(r"[\W_]+", text.lower()) if tok)
 
 
 def _normalize(text: str) -> str:
@@ -110,11 +141,19 @@ def scan_n8n_export(
     """n8n exports are either a single workflow object or a list of them."""
     workflows = export if isinstance(export, list) else [export]
     candidates = []
-    for wf in workflows:
+    # A malformed export is refused BY NAME (a position, never a value): 422 over HTTP, exit 2 from the CLI (scout P-2).
+    for w, wf in enumerate(workflows):
+        if not isinstance(wf, dict):
+            raise ScanInputError(f"n8n export: workflow {w} is not an object")
         name = str(wf.get("name", "<unnamed workflow>"))
         wf_id = str(wf.get("id", name))
         ai_nodes = []
-        for node in wf.get("nodes", []):
+        nodes = wf.get("nodes", [])
+        if not isinstance(nodes, list):
+            raise ScanInputError(f"n8n export: workflow {w} 'nodes' is not a list")
+        for n, node in enumerate(nodes):
+            if not isinstance(node, dict):
+                raise ScanInputError(f"n8n export: workflow {w} node {n} is not an object")
             node_type = str(node.get("type", "")).lower()
             if any(marker in node_type for marker in AI_NODE_MARKERS):
                 ai_nodes.append(f"{node.get('name', '?')} ({node.get('type')})")
@@ -141,22 +180,35 @@ def scan_service_accounts(
 ) -> tuple[list[ShadowCandidate], int]:
     """CSV columns (header required): account,type[,owner][,notes] — extras ignored.
 
-    Raises ScanInputError (by line) on a CSV the csv module cannot read."""
-    lines = _CountedLines(csv_text)
+    Raises ScanInputError on a CSV over 1 MiB, one the csv module cannot read (by
+    line), a header with neither ``account`` nor ``name`` (never a silent 0), or a
+    row with more fields than the header (an unquoted comma; by line, never the row)."""
+    check_size(csv_text, "accounts_csv")
+    lines = _CountedLines(csv_text.lstrip("\ufeff"))  # an Excel export's BOM is not a header
     reader = csv.DictReader(lines)
     try:
-        parsed = [row for row in reader]
+        header = {(h or "").strip().lower() for h in (reader.fieldnames or [])}
+        if reader.fieldnames and not header & {"account", "name"}:
+            raise ScanInputError(
+                "accounts_csv: the header has neither an 'account' nor a 'name' column"
+            )
+        parsed = [(reader.line_num, row) for row in reader]
     except csv.Error as exc:
         raise _unreadable_csv("accounts_csv", lines.count, exc) from None
     candidates, scanned = [], 0
-    for row in parsed:
+    for line_num, row in parsed:
+        if None in row:   # DictReader keeps the surplus fields of a long row under the key None, as a list
+            raise ScanInputError(
+                f"accounts_csv line {line_num}: more fields than the header "
+                "(quote any value that contains a comma)"
+            )
         row = {(k or "").strip().lower(): (v or "").strip() for k, v in row.items()}
         account = row.get("account") or row.get("name") or ""
         if not account:
             continue
         scanned += 1
         acc_type = row.get("type", "")
-        looks_automated = bool(ACCOUNT_PATTERNS.search(account)) or any(
+        looks_automated = looks_like_automation(account) or any(
             marker in acc_type.lower() for marker in ACCOUNT_TYPE_MARKERS
         )
         if not looks_automated:
@@ -363,11 +415,26 @@ def scan_secrets_text(text: str, include_very_broad: bool = False) -> list[Secre
     each REDACTED by the model that carries it. The very-broad
     ``api_key|secret|token = value`` pattern is OFF unless asked for."""
     check_size(text, "secrets_text")
-    return [
-        SecretHit(pattern=hit.pattern, breadth=hit.breadth, value=hit.value,
-                  line=text.count("\n", 0, hit.start) + 1)
-        for hit in find_secrets(text, include_very_broad=include_very_broad)
-    ]
+    out: list[SecretHit] = []
+    line, at = 1, 0    # hits are in text order: count the newlines BETWEEN hits, not from 0 for every hit
+    for hit in find_secrets(text, include_very_broad=include_very_broad):
+        line += text.count("\n", at, hit.start)
+        at = hit.start
+        out.append(SecretHit(pattern=hit.pattern, breadth=hit.breadth, value=hit.value, line=line))
+    return out
+
+
+def _note_retired(candidate: ShadowCandidate, retired: list[AgentRecord]) -> ShadowCandidate:
+    """Name the first retired agent this candidate matches (by id/name, or by owner for an API key), in the reason."""
+    for record in retired:
+        if _is_registered(candidate.identifier, candidate.display_name, [record]) or (
+            candidate.source == "api-keys"
+            and candidate.evidence.get("owner", "").strip().lower() == record.owner.strip().lower()
+            and record.owner.strip()
+        ):
+            return candidate.model_copy(update={
+                "reason": f"{candidate.reason}; matches retired agent '{record.agent_id}'"})
+    return candidate
 
 
 def discover(
@@ -382,6 +449,11 @@ def discover(
     """Raises ScanInputError on a malformed or oversized D3 input (the API maps it
     to 422, the CLI to exit 2) — a scan that could not read its input must
     never look like a scan that found nothing."""
+    # A retired agent has nothing left running, so a workflow, account or key that matches one is NOT registered:
+    # it is surfaced, with the retired agent named (S12-11). ``registered_agents`` stays the full count.
+    all_records = registered
+    retired = [r for r in all_records if r.status == AgentStatus.RETIRED]
+    registered = [r for r in all_records if r.status != AgentStatus.RETIRED]
     known = parse_principals(principals_csv) if principals_csv is not None else None
     key_candidates: list[ShadowCandidate] = []
     keys_scanned = 0
@@ -405,17 +477,39 @@ def discover(
             accounts_csv, registered
         )
 
+    candidates = [_note_retired(c, retired) for c in n8n_candidates + account_candidates + key_candidates]
     return DiscoveryReport(
         scanned_workflows=workflows_scanned,
         scanned_accounts=accounts_scanned,
-        registered_agents=len(registered),
-        candidates=n8n_candidates + account_candidates + key_candidates,
+        registered_agents=len(all_records),
+        candidates=candidates,
         scanned_api_keys=keys_scanned,
         scanned_secret_hits=len(secret_hits),
         secret_hits=secret_hits,
     )
 
 
+def read_scan_file(path: str | Path) -> str:
+    """The text of one scanner input file, or ``ScanInputError``: unreadable, over 1 MiB or not UTF-8. Reads at most
+    1 MiB + 1 byte, so an oversized file is refused without being loaded. The message names the file (its base name),
+    never its bytes."""
+    name = Path(path).name
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read(MAX_SCAN_BYTES + 1)
+    except (OSError, ValueError):  # a missing file, a directory, a NUL in the path
+        raise ScanInputError(f"{name} cannot be read") from None
+    if len(data) > MAX_SCAN_BYTES:
+        raise ScanInputError(f"{name} is larger than the scanner accepts: at most {MAX_SCAN_BYTES} bytes (1 MiB)")
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        raise ScanInputError(f"{name} is not UTF-8 text") from None
+
+
 def load_n8n_file(path: str) -> dict[str, Any] | list[dict[str, Any]]:
-    with open(path, encoding="utf-8") as fh:
-        return json.load(fh)
+    text = read_scan_file(path)
+    try:
+        return json.loads(text)
+    except (ValueError, RecursionError):  # JSONDecodeError is a ValueError; deep nesting is a RecursionError
+        raise ScanInputError(f"{Path(path).name} is not valid JSON") from None

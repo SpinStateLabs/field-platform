@@ -141,6 +141,6 @@ def test_the_answer_mapping_is_unchanged_with_per_call_headers():
     with pytest.raises(RegistryUnreachableError, match="registry returned 403"):
         RegistryClient(client=Recorder(403), base_url="http://t").set_status(
             "a1", "killed", extra_headers={OBO: "don"})
-    with pytest.raises(RegistryUnreachableError, match="down"):
+    with pytest.raises(RegistryUnreachableError, match="^ConnectionError$"):
         RegistryClient(client=Recorder(raises=ConnectionError("down")), base_url="http://t").set_status(
             "a1", "killed", extra_headers={OBO: "don"})

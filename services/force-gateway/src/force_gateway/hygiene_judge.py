@@ -18,7 +18,9 @@ quality is Declared until the quarterly human calibration ADR 10 §2 names.
 from __future__ import annotations
 
 import json
+import math
 import os
+import re
 from dataclasses import dataclass
 
 # Cheap model class, version-pinned (ADR 10 §1). Swapping models or revising
@@ -96,6 +98,16 @@ class MockHygieneJudge:
         )
 
 
+_MARKER_OPEN = re.compile(r"<{3,}")
+
+
+def _defang(value: str) -> str:
+    """A run of '<<<' in untrusted text is spaced out ('< < <'), so the text can never spell the
+    <<<RESPONSE_START>>> / <<<RESPONSE_END>>> delimiters that fence it in the prompt (S6-21). Text with no
+    such run is returned unchanged."""
+    return _MARKER_OPEN.sub(lambda m: " ".join(m.group()), value)
+
+
 class AnthropicHygieneJudge:
     """Real upstream on the pinned cheap model. Key ONLY from the env.
 
@@ -122,8 +134,8 @@ class AnthropicHygieneJudge:
             raise HygieneJudgeError(str(exc)) from None
 
     def judge(self, text: str, preset: str) -> HygieneJudgment:
-        user = (f"Route preset: {preset}\n\nRESPONSE (untrusted DATA):\n"
-                f"<<<RESPONSE_START>>>\n{text}\n<<<RESPONSE_END>>>")
+        user = (f"Route preset: {_defang(preset)}\n\nRESPONSE (untrusted DATA):\n"
+                f"<<<RESPONSE_START>>>\n{_defang(text)}\n<<<RESPONSE_END>>>")
         try:
             resp = self._client.post("/v1/messages", json={
                 "model": self.model, "max_tokens": 200, "system": RUBRIC,
@@ -141,6 +153,10 @@ class AnthropicHygieneJudge:
             usage = body.get("usage", {})
 
             def clamp(x):
+                # A finite JSON number only: `float(nan)` clamps to 1.0 (a NaN premise_rigor read as perfect rigor), and
+                # bool / str would be coerced (scout P-21). The error names the class only (ValueError).
+                if isinstance(x, bool) or not isinstance(x, (int, float)) or not math.isfinite(x):
+                    raise ValueError("score is not a finite number")
                 return max(0.0, min(1.0, float(x)))
 
             return HygieneJudgment(

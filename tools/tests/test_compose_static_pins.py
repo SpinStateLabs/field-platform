@@ -16,6 +16,7 @@ Static, no docker: the Dockerfiles and the two compose files are read as text an
 """
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -27,8 +28,9 @@ ROOT = Path(__file__).resolve().parents[2]
 TOOLS = ROOT / "tools"
 sys.path.insert(0, str(TOOLS))
 from compose_bind_rules import (  # noqa: E402,F401  (the shared rules; the names stay importable from this module)
-    A_HOME, ALLOWED_ABSOLUTE_ROOTS, FORBIDDEN_BIND_EXACT, FORBIDDEN_BIND_TREES, FORBIDDEN_HOME_DIRS,
-    FORBIDDEN_HOME_PARENTS, RUNTIME_SOCKET)
+    A_HOME, ALLOWED_ABSOLUTE_ROOTS, ALLOWED_BUILD_KEYS, ALLOWED_SERVICE_KEYS, ALLOWED_TOP_LEVEL_KEYS, CALLER_KEYS_ROOT,
+    FORBIDDEN_BIND_EXACT, FORBIDDEN_BIND_TREES, FORBIDDEN_HOME_DIRS, FORBIDDEN_HOME_PARENTS, NAMESPACE_OPTIONS,
+    RUNTIME_SOCKET, name_problem, namespace_problem)
 
 DEMO = ROOT / "integration" / "demo"
 DOCKERFILES = ["integration/demo/Dockerfile", "integration/fly/Dockerfile", "services/claude-approver/Dockerfile"]
@@ -260,7 +262,7 @@ def _relative_source_escapes(source: str, allow_repo_root: bool = False) -> bool
     # `../../.env`) hold the whole tree or its secrets
     if ups == COMPOSE_DIR_DEPTH and not names:
         return not allow_repo_root
-    return ".git" in names or any(n == ".env" or n.startswith(".env.") for n in names[-1:])
+    return name_problem(names) is not None                     # C-715: one rule, shared with the resolved-model check
 
 
 def _denylist_forbids(source, allow_repo_root: bool = False) -> bool:
@@ -293,12 +295,20 @@ def _denylist_forbids(source, allow_repo_root: bool = False) -> bool:
 NAMED_VOLUME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 
+# C-506 (Lane 10 C-492 section 5): `${K:-}<root>/x` and `${K-}<root>/x` pass the allowlist on their DEFAULT (the empty
+# string leaves the allowed root), but a set K prepends an arbitrary string; `${K:+r}` and `${K+r}` yield r only when K
+# is set. None of the four names a path the static text can see, so each is refused anywhere in a source.
+UNSTABLE_EXPANSION = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*(:?\+|:?[-=](?=\}))")
+
+
 def _allowlist_violation(source, kind: str = "volume") -> bool:
     """True when `source` is not allowed. `kind`: "volume" (a bare name is a named volume), "file" (secrets, configs,
     env_file: a bare name is a path relative to the compose file), "build-context" (as a file, and the repository root
     itself is the one allowed relative root), "image-context" (as a file, plus `docker-image://`)."""
     if not isinstance(source, str):
         return False                                # a sourceless volume (tmpfs, anonymous) has no host path
+    if UNSTABLE_EXPANSION.search(source):
+        return True                                 # C-506: an empty default or a replacement form
     expanded = _expand_defaults(source.strip())
     if not expanded or "$" in expanded or "`" in expanded or "\n" in expanded:
         return True                                 # F1: not a literal path
@@ -315,6 +325,10 @@ def _allowlist_violation(source, kind: str = "volume") -> bool:
         return _relative_source_escapes(expanded, allow_repo_root=(kind == "build-context"))   # F4, F6
     if kind == "volume":
         return not NAMED_VOLUME.match(expanded)     # `etc/x` is not a valid volume name, and not a relative path
+    if kind in ("build-context", "image-context"):
+        # C-617 (reviewer C-589 F-C589-2): a build context must START with `.` or `/`. A bare `github.com/x/y` has the
+        # shape the docker CLI reads as a git remote, and whether compose does too was not run: one rule, no list
+        return True
     return _relative_source_escapes("./" + expanded, allow_repo_root=(kind == "build-context"))
 
 
@@ -373,7 +387,88 @@ def _top_level_section(base_text: str, gb10_text: str, section: str) -> dict:
     return merged
 
 
+# C-500 / C-617: the key sets (ALLOWED_SERVICE_KEYS, ALLOWED_BUILD_KEYS, ALLOWED_TOP_LEVEL_KEYS, NAMESPACE_OPTIONS) and
+# CALLER_KEYS_ROOT live in tools/compose_bind_rules.py with the other shared rules.
+
+
+def key_violations(base_text: str, gb10_text: str) -> list[str]:
+    out: list[str] = []
+    try:
+        top_levels = [yaml.load(text, _Loader) or {} for text in (base_text, gb10_text)]
+        services = _services(base_text, gb10_text)
+    except Exception as exc:  # noqa: BLE001 - C-715 (C-640 F-C640-5): an unknown shape is a violation, never a crash
+        return [f"the compose files have a shape this checker does not know ({type(exc).__name__})"]
+    for document in top_levels:
+        for key in document:
+            if key not in ALLOWED_TOP_LEVEL_KEYS and not str(key).startswith("x-"):
+                out.append(f"top-level key {key!r} is not allowed (include, for one, reads another file)")
+    for name, svc in sorted(services.items()):
+        if not isinstance(svc, dict):
+            out.append(f"{name}: the service is not a mapping")
+            continue
+        for key in svc:
+            if key not in ALLOWED_SERVICE_KEYS and not str(key).startswith("x-"):
+                out.append(f"{name}: service key {key!r} is not allowed")
+        build = svc.get("build")
+        if isinstance(build, str):
+            build = {"context": build}
+        if build is not None and not isinstance(build, dict):
+            out.append(f"{name}: build is neither a string nor a mapping")
+        elif isinstance(build, dict):
+            out += [f"{name}: build key {k!r} is not allowed" for k in build if k not in ALLOWED_BUILD_KEYS]
+            context, dockerfile = build.get("context"), build.get("dockerfile")
+            for label, value in (("context", context), ("dockerfile", dockerfile)):
+                if value is not None and not isinstance(value, str):
+                    out.append(f"{name}: build.{label} is not a string")
+            if isinstance(dockerfile, str):
+                # C-715 (C-640 F-C640-4): compose reads a relative dockerfile from the CONTEXT, not from the compose file's
+                # directory: `context: ../.., dockerfile: ../../secret` resolves above the repository
+                joined = (dockerfile if dockerfile.startswith(("/", "$", "~")) or not isinstance(context, str)
+                          else context.rstrip("/") + "/" + dockerfile)
+                if _binds_forbidden_host_path(joined, kind="file"):
+                    out.append(f"{name}: build.dockerfile names a host path it must not: {dockerfile}")
+            extra = build.get("additional_contexts")
+            values = ([v.partition("=")[2] if isinstance(v, str) else v for v in extra] if isinstance(extra, list)
+                      else list(extra.values()) if isinstance(extra, dict) else [])
+            if extra is not None and not isinstance(extra, (list, dict)):
+                out.append(f"{name}: build.additional_contexts is neither a list nor a mapping")
+            out += [f"{name}: build.additional_contexts value {v!r} is not a string" for v in values if not isinstance(v, str)]
+        env_file = svc.get("env_file")
+        for item in ([env_file] if isinstance(env_file, (str, dict)) else list(env_file) if isinstance(env_file, list) else []):
+            path = item.get("path") if isinstance(item, dict) else item
+            if not isinstance(path, str):
+                out.append(f"{name}: env_file entry {item!r} has no string path")
+        if env_file is not None and not isinstance(env_file, (str, dict, list)):
+            out.append(f"{name}: env_file is neither a string, a mapping nor a list")
+        for vol in svc.get("volumes") or []:
+            if isinstance(vol, dict) and vol.get("type") in (None, "bind") and "source" in vol and not isinstance(vol["source"], str):
+                out.append(f"{name}: a bind volume source {vol['source']!r} is not a string")
+        for option in NAMESPACE_OPTIONS:
+            value = svc.get(option)
+            if value is not None and not isinstance(value, str):
+                out.append(f"{name}: {option}: {value!r} is not a string")           # C-617 F-C589-3: not unhashable-crash
+            elif namespace_problem(option, value):
+                out.append(f"{name}: {namespace_problem(option, value)}")             # C-932: one honest message
+    # C-817 (reviewer C-765 F-C765-1): the TOP-LEVEL path carriers get the same text rule as the service keys above: a
+    # named volume's driver_opts device and a secret's or config's file that are a list, a mapping or a number are a
+    # violation here, not "allowed" (compose rejects them on load, but this layer is the second net and said nothing)
+    try:
+        for vname, vol in sorted(_top_level_volumes(base_text, gb10_text).items()):
+            device = (vol.get("driver_opts") or {}).get("device") if isinstance(vol, dict) else None
+            if device is not None and not isinstance(device, str):
+                out.append(f"volume {vname}: driver_opts.device {device!r} is not a string")
+        for section in ("secrets", "configs"):
+            for fname, definition in sorted(_top_level_section(base_text, gb10_text, section).items()):
+                path = definition.get("file") if isinstance(definition, dict) else None
+                if path is not None and not isinstance(path, str):
+                    out.append(f"{section[:-1]} {fname}: file {path!r} is not a string")
+    except (AttributeError, TypeError) as exc:
+        out.append(f"a top-level volumes, secrets or configs section has a shape this checker does not know ({type(exc).__name__})")
+    return out
+
+
 def check_compose(base_text: str, gb10_text: str) -> None:
+    assert key_violations(base_text, gb10_text) == [], key_violations(base_text, gb10_text)
     services = _services(base_text, gb10_text)
     # C-402: a named volume that binds a host directory through driver_opts (`type: none, o: bind, device: /`) is a
     # bind like any other, whichever service mounts it
@@ -404,6 +499,8 @@ def check_compose(base_text: str, gb10_text: str) -> None:
         assert not any("unconfined" in str(o) for o in svc.get("security_opt") or []), \
             f"{name}: an unconfined security_opt"
         for vol in svc.get("volumes") or []:
+            # C-817 (reviewer C-765, the redundant-mutant note): RUNTIME_SOCKET in the shared rules refuses the same
+            # paths; this line is kept on purpose, for the named message and as a second net if that pattern is edited
             assert "docker.sock" not in str(vol), f"{name}: mounts the docker socket: {vol}"
             source = vol.get("source") if isinstance(vol, dict) else _short_source(str(vol))
             assert not _binds_forbidden_host_path(source), f"{name}: binds a host path it must not: {vol}"
@@ -575,7 +672,7 @@ PAIR_MUTANTS = {
     **{f"a GB10 bind of {src}": (lambda s: lambda base, gb10: (base, re.sub(
         r"(\n  registry:\n(?:    (?:#|<<)[^\n]*\n)*    volumes:\n)", r"\1      - '" + s + ":/h'\n", gb10, count=1)))(src)
        for src in ("/run", "/run/podman/podman.sock", "/run/containerd/containerd.sock", "/var/lib", "/var/lib/containerd",
-                   "/var/lib/kubelet", "/home/example/.ssh", "/home/example/.aws", "/home/example/.docker",
+                   "/var/lib/kubelet", "/home/spinner/.ssh", "/home/spinner/.aws", "/home/spinner/.docker",
                    "${A:-${B:-/}}", "${X:+/}", "${X:=/}", "../../..", "./../../../etc", "~/.ssh", "/srv/x/crio.sock")},
     "a GB10 named volume bound to / through driver_opts": _top_volume("/"),
     "a GB10 named volume bound to /etc through driver_opts": _top_volume("/etc"),
@@ -624,7 +721,7 @@ def test_compose_merge_removes_a_reset_key_and_replaces_command_entrypoint_and_h
     ("/sys/fs/cgroup", True), ("/var/lib/docker/volumes", True), ("/var/run/docker.sock", True), ("/root", True),
     ("/root/.ssh", True), ("/dev", True), ("/dev/mem", True), ("/boot", True), ("/home", True), ("/var", True),
     ("/usr", True), ("${X:-/}", True), ("${X:-/etc}/ssh", True), ("${X-/}", True), ("/etc/../etc/shadow", True),
-    ("/home/example/.field-local/caller-keys/registry", False), ("${KEYS:-/home/example/.field-local/caller-keys}/w", False),
+    ("/home/spinner/.field-local/caller-keys/registry", False), ("${KEYS:-/home/spinner/.field-local/caller-keys}/w", False),
     ("/var/log/app", False), ("/usr/share/zoneinfo", False), ("/opt/field/data", False), ("./operators", False),
     ("field-data", False), ("${FIELD_OPERATORS_DIR:-./operators}", False), ("${NO_DEFAULT}", False),
 ])
@@ -636,8 +733,8 @@ def test_the_forbidden_bind_sources_are_trees_or_exact_paths_as_stated(source, f
 @pytest.mark.parametrize("source", [
     "/run", "/run/", "/run/user/1000", "/var/run", "/var/run/user/1000", "/var/run/anything", "/run/containerd/containerd.sock", "/run/podman/podman.sock",
     "/var/run/crio/crio.sock", "/var/lib", "/var/lib/", "/var/lib/containerd", "/var/lib/containerd/io.containerd",
-    "/var/lib/kubelet", "/var/lib/kubelet/pods", "/home/example/.ssh", "/home/example/.ssh/id_ed25519",
-    "/home/example/.aws", "/home/example/.aws/credentials", "/home/example/.docker", "/home/example/.docker/config.json",
+    "/var/lib/kubelet", "/var/lib/kubelet/pods", "/home/spinner/.ssh", "/home/spinner/.ssh/id_ed25519",
+    "/home/spinner/.aws", "/home/spinner/.aws/credentials", "/home/spinner/.docker", "/home/spinner/.docker/config.json",
     "/srv/x/containerd.sock", "/opt/y/podman.sock", "/tmp/crio.sock", "/tmp/docker.sock", "/tmp/cri-dockerd.sock",
 ])
 def test_the_host_runtime_and_credential_paths_the_first_lists_missed_are_forbidden(source):
@@ -667,8 +764,8 @@ def test_a_source_that_climbs_out_of_the_repository_or_names_a_home_is_forbidden
 
 @pytest.mark.parametrize("source", [
     "/etcetera", "/devices", "/runtime", "/run-keys", "/bootstrap", "/rootfs", "/procfs", "/system", "/var/lib/field",
-    "/var/lib/docker-field", "/home/example/ssh", "/home/example/.ssh-keys-local", "/home/example/.field-local/keys",
-    "/home/example/.docker.d", "/srv-data", "/tmp/dockersock", "/tmp/not-docker.sock.d", "/tmp/mydocker.sock",
+    "/var/lib/docker-field", "/home/spinner/ssh", "/home/spinner/.ssh-keys-local", "/home/spinner/.field-local/keys",
+    "/home/spinner/.docker.d", "/srv-data", "/tmp/dockersock", "/tmp/not-docker.sock.d", "/tmp/mydocker.sock",
     ".", "./", "./operators", "./a/../b", "./a/b/..", "..", "../../manifests", "./../../etc", "../../services/x", "./a/b/../../..", "operators", "field-data", "${NO_DEFAULT}", "$HOSTDIR", "${NO_DEFAULT}/x",
     None, 5,
 ])
@@ -693,7 +790,7 @@ def test_the_host_side_of_a_nested_or_replacement_default_stays_whole(volume, sh
     assert _short_source(volume) == short
 
 
-@pytest.mark.parametrize("device", ["/", "/etc", "/run/podman/podman.sock", "/var/lib", "/home/example/.ssh", "${D:-/}", "../../.."])
+@pytest.mark.parametrize("device", ["/", "/etc", "/run/podman/podman.sock", "/var/lib", "/home/spinner/.ssh", "${D:-/}", "../../.."])
 def test_a_named_volume_that_binds_a_forbidden_host_directory_through_driver_opts_is_red(device):
     _, base, gb10 = _texts()
     mb, mg = _top_volume(device)(base, gb10)
@@ -704,7 +801,7 @@ def test_a_named_volume_that_binds_a_forbidden_host_directory_through_driver_opt
 
 def test_a_named_volume_that_binds_a_fine_host_directory_through_driver_opts_is_green():
     _, base, gb10 = _texts()
-    mb, mg = _top_volume("/home/example/.field-local/caller-keys/ledger")(base, gb10)    # under an allowed root (C-453)
+    mb, mg = _top_volume("/home/spinner/.field-local/caller-keys/ledger")(base, gb10)    # under an allowed root (C-453)
     assert (mb, mg) != (base, gb10)
     check_compose(mb, mg)
 
@@ -761,7 +858,7 @@ def test_the_gb10_proxy_override_replaces_the_base_ports_and_volumes():
     """`!override` in the GB10 file really replaces (the real file, through the same merge)."""
     _, base, gb10 = _texts()
     proxy = _services(base, gb10)["proxy"]
-    assert proxy["ports"] == ["18080:8080", "18443:8443"]
+    assert proxy["ports"] == ["${FIELD_GB10_PLAIN_BIND:+${FIELD_GB10_PLAIN_BIND}:}18080:8080", "18443:8443"]
     assert not any("./Caddyfile:/etc/caddy/Caddyfile:ro" == v for v in proxy["volumes"])
 
 
@@ -813,10 +910,10 @@ def test_each_compose_mutant_turns_the_check_red(name: str):
 
 
 @pytest.mark.parametrize("source", [
-    "/home/example", "/home/example/", "/home//example", "/home/./example", "/home/example/x/..",
-    "/home/example/.gnupg", "/home/example/.kube/config", "/home/example/.config/gcloud", "/home/example/.config/gcloud/creds.db",
-    "/home/example/.git-credentials", "/home/example/.netrc", "/home/example/.npmrc", "/home/example/.azure",
-    "/home/example/.local/share/keyrings", "${HOME}", "$HOME", "${HOME}/.ssh", "$HOME/.ssh", "${HOME}/.aws/credentials",
+    "/home/spinner", "/home/spinner/", "/home//spinner", "/home/./spinner", "/home/spinner/x/..",
+    "/home/spinner/.gnupg", "/home/spinner/.kube/config", "/home/spinner/.config/gcloud", "/home/spinner/.config/gcloud/creds.db",
+    "/home/spinner/.git-credentials", "/home/spinner/.netrc", "/home/spinner/.npmrc", "/home/spinner/.azure",
+    "/home/spinner/.local/share/keyrings", "${HOME}", "$HOME", "${HOME}/.ssh", "$HOME/.ssh", "${HOME}/.aws/credentials",
     "${HOME:-/root}/.ssh", "../..", "../../.git", "../../.git/config", "../../.env", "./.env", "./sub/.env", "../../.env.local",
     "/tmp/buildkitd.sock", "/tmp/dockershim.sock", "/tmp/cri-o.sock", "/var/lib/lxd", "/var/lib/lxc/x", "/var/lib/rancher",
     "/var/lib/k0s", "/var/lib/etcd", "/var/lib/snapd",
@@ -826,9 +923,9 @@ def test_the_parents_and_the_other_credential_places_of_a_forbidden_path_are_for
 
 
 @pytest.mark.parametrize("source", [
-    # (C-442: `/home/example/.config` itself is no longer here: the parent of a credential tree is forbidden exactly)
-    "/home/example/x", "/home/example/x/.ssh", "/home/a/b/.ssh", "/home/example/.config/app",
-    "/home/example/.local/share/app", "/home/example/.gnupg-notes", "${HOME}/data", "$HOME/data", "$HOMEDIR", "${HOMEDIR}",
+    # (C-442: `/home/spinner/.config` itself is no longer here: the parent of a credential tree is forbidden exactly)
+    "/home/spinner/x", "/home/spinner/x/.ssh", "/home/a/b/.ssh", "/home/spinner/.config/app",
+    "/home/spinner/.local/share/app", "/home/spinner/.gnupg-notes", "${HOME}/data", "$HOME/data", "$HOMEDIR", "${HOMEDIR}",
     "/tmp/docker.sock.d", "/tmp/buildkitd.sock.d", "/var/lib/lxdata", "../../.github", "../../.envrc", "../../.envrc-docs/x", "./environment",
     "../../envs/.env.d/x/y", "./a/b/../../..", "${A:-${B:-${C:-${D:-./operators}}}}",
 ])
@@ -857,7 +954,7 @@ def test_a_gb10_override_of_a_base_volume_merges_with_it_key_by_key():
     assert label != gb10
     with pytest.raises(AssertionError, match="volume evil: binds a host path"):
         check_compose(mb, label)
-    fixed = gb10.replace("\nvolumes:\n", "\nvolumes:\n  evil:\n    driver_opts: {device: /home/example/.field-local/caller-keys/ledger}\n", 1)   # C-453: an allowed root
+    fixed = gb10.replace("\nvolumes:\n", "\nvolumes:\n  evil:\n    driver_opts: {device: /home/spinner/.field-local/caller-keys/ledger}\n", 1)   # C-453: an allowed root
     check_compose(mb, fixed)
 
 
@@ -870,7 +967,7 @@ def test_a_gb10_reset_of_a_base_volume_removes_it():
 
 
 @pytest.mark.parametrize("src", [
-    "/home/example", "/home/example/.gnupg", "/home/example/.kube", "${HOME}", "$HOME/.ssh", "../..", "../../.git", "./.env",
+    "/home/spinner", "/home/spinner/.gnupg", "/home/spinner/.kube", "${HOME}", "$HOME/.ssh", "../..", "../../.git", "./.env",
     "/tmp/buildkitd.sock", "/var/lib/rancher",
 ])
 def test_a_registry_bind_of_each_new_source_is_red(src):
@@ -896,10 +993,10 @@ def test_a_variable_with_a_settled_meaning_is_read_as_its_value_whatever_its_def
 
 
 @pytest.mark.parametrize("source", [
-    "/home/example/.config/gh", "/home/example/.config/rclone/rclone.conf", "/home/example/.pgpass", "/home/example/.my.cnf",
-    "/home/example/.vault-token", "/home/example/.s3cfg", "/home/example/.boto", "/home/example/.oci", "/home/example/.terraform.d",
-    "/home/example/.pypirc", "/home/example/.cargo", "/home/example/.cargo/registry", "/home/example/.m2", "/home/example/.gradle",
-    "/home/example/.password-store", "/home/example/.bash_history", "/home/example/.mozilla", "/home/example/.pki",
+    "/home/spinner/.config/gh", "/home/spinner/.config/rclone/rclone.conf", "/home/spinner/.pgpass", "/home/spinner/.my.cnf",
+    "/home/spinner/.vault-token", "/home/spinner/.s3cfg", "/home/spinner/.boto", "/home/spinner/.oci", "/home/spinner/.terraform.d",
+    "/home/spinner/.pypirc", "/home/spinner/.cargo", "/home/spinner/.cargo/registry", "/home/spinner/.m2", "/home/spinner/.gradle",
+    "/home/spinner/.password-store", "/home/spinner/.bash_history", "/home/spinner/.mozilla", "/home/spinner/.pki",
     "/tmp/dockerd.sock", "/tmp/nerdctl.sock", "/tmp/rootlesskit.sock", "/tmp/k3s.sock", "/tmp/kubelet.sock", "/tmp/containerd-shim.sock",
     "/var/lib/containers", "/var/lib/podman/x", "/var/lib/libvirt", "/var/lib/k3s", "/var/lib/microk8s", "/var/lib/kubernetes",
     "/var/lib/cni", "/var/lib/buildkit", "/var/lib/nerdctl",
@@ -910,7 +1007,7 @@ def test_the_credential_places_runtime_sockets_and_state_one_step_further_out_ar
 
 @pytest.mark.parametrize("source", [
     "$HOMEDIR", "${HOMEDIR}", "$HOME_DIR", "${HOME_DIR}", "${HOME_DIR:-./operators}", "${HOMEDIR:-/opt/field/data}", "$SSH_AUTH_SOCKET",
-    "${XDG_RUNTIME_DIR_X:-./a}", "${MYHOME:-./a}", "/home/example/.config/app", "/home/example/.cargo-notes", "/home/example/.m2x",
+    "${XDG_RUNTIME_DIR_X:-./a}", "${MYHOME:-./a}", "/home/spinner/.config/app", "/home/spinner/.cargo-notes", "/home/spinner/.m2x",
     "/tmp/kubelet.sock.d", "/var/lib/containersx", "/var/lib/cnis",
 ])
 def test_names_and_paths_that_only_resemble_the_settled_ones_are_not_forbidden(source):
@@ -956,22 +1053,22 @@ NEW_CREDENTIAL_PLACES = [
 
 @pytest.mark.parametrize("place", NEW_CREDENTIAL_PLACES)
 def test_the_further_credential_places_are_forbidden_by_path_and_through_home(place):
-    assert _denylist_forbids("/home/example/" + place) is True, place
+    assert _denylist_forbids("/home/spinner/" + place) is True, place
     assert _denylist_forbids("${HOME}/" + place) is True, place
 
 
 @pytest.mark.parametrize("parent", [
-    "${HOME}/.config", "$HOME/.config", "/home/example/.config", "/home/example/.config/", "/home/example/./.config",
-    "/home/example/.local", "/home/example/.local/share", "${HOME}/.local/share", "${HOME:-/tmp}/.local",
-    "${XDG_CONFIG_HOME}", "${XDG_CONFIG_HOME:-/x}", "/home/example/.config/git",
+    "${HOME}/.config", "$HOME/.config", "/home/spinner/.config", "/home/spinner/.config/", "/home/spinner/./.config",
+    "/home/spinner/.local", "/home/spinner/.local/share", "${HOME}/.local/share", "${HOME:-/tmp}/.local",
+    "${XDG_CONFIG_HOME}", "${XDG_CONFIG_HOME:-/x}", "/home/spinner/.config/git",
 ])
 def test_the_parent_of_a_credential_tree_is_forbidden_exactly(parent):
     assert _denylist_forbids(parent) is True, parent
 
 
 @pytest.mark.parametrize("fine", [
-    "/home/example/.config/myapp", "/home/example/.local/bin", "/home/example/.local/share/applications",
-    "/home/example/.configuration", "/home/example/.local-data", "/home/example/.histories", "/home/example/.agent",
+    "/home/spinner/.config/myapp", "/home/spinner/.local/bin", "/home/spinner/.local/share/applications",
+    "/home/spinner/.configuration", "/home/spinner/.local-data", "/home/spinner/.histories", "/home/spinner/.agent",
 ])
 def test_a_directory_beside_or_below_a_parent_that_is_not_listed_stays_legal(fine):
     assert _denylist_forbids(fine) is False, fine
@@ -1053,7 +1150,7 @@ def test_a_bare_home_variable_is_read_as_home_with_and_without_braces():
 
 
 REGISTRY_BIND_MUTANTS = [
-    "${HOME}/.config:/h:ro", "/home/example/.local/share:/h", "${HOME}/.config/git:/h", "/home/example/.terraformrc:/h",
+    "${HOME}/.config:/h:ro", "/home/spinner/.local/share:/h", "${HOME}/.config/git:/h", "/home/spinner/.terraformrc:/h",
     "${PWD}/..:/h", "${PWD}:/h", "${GNUPGHOME}:/h", "${A}/.ssh:/h", "/tmp/libpod.sock:/h", "/var/lib/crio:/h",
     "${HOME?}/.ssh:/h", "${HOME+/x}/.ssh:/h", "${HOME=/tmp}/.ssh:/h",
 ]
@@ -1108,7 +1205,7 @@ def test_every_lane_10_probe_document_is_refused(name, monkeypatch):
     # the probe documents have no `proxy` service: without this the stale-exemption assertion would refuse them all
     monkeypatch.setattr(sys.modules[__name__], "READ_ONLY_EXEMPT", {})
     svc, top = PROBE_DOCUMENTS[name]
-    with pytest.raises(AssertionError, match=r"binds a host path|names a host (file|path)|ipc joins"):
+    with pytest.raises(AssertionError, match=r"binds a host path|names a host (file|path)|ipc joins|joins another namespace|is not allowed"):
         check_compose("services:\n  s:\n" + _HARD + svc + "\n" + top, "services: {}\n")
 
 
@@ -1124,16 +1221,16 @@ def test_the_same_documents_with_a_harmless_value_are_accepted(monkeypatch):
 
 @pytest.mark.parametrize("source", [
     "./operators", "../../manifests", "field-data", "caddy_data", "${FIELD_OPERATORS_DIR:-./operators}", "./Caddyfile.gb10",
-    "/home/example/.field-local/caller-keys/witness", "${FIELD_CALLER_KEYS_DIR:-/home/example/.field-local/caller-keys}/registry",
-    "/home/example/.field-local/caller-keys/a/b", None,
+    "/home/spinner/.field-local/caller-keys/witness", "${FIELD_CALLER_KEYS_DIR:-/home/spinner/.field-local/caller-keys}/registry",
+    "/home/spinner/.field-local/caller-keys/a/b", None,
 ])
 def test_what_the_estate_binds_today_is_allowed(source):
     assert _binds_forbidden_host_path(source) is False, source
 
 
 @pytest.mark.parametrize("source", [
-    "/home/example/.field-local/caller-keys", "/home/example/.field-local/caller-keys/", "/home/example/.field-local/caller-keys/.",
-    "/home/example/.field-local", "/home/example", "/home/example/.field-local/caller-keys/../x", "/home/example/.field-local/caller-keysX/a",
+    "/home/spinner/.field-local/caller-keys", "/home/spinner/.field-local/caller-keys/", "/home/spinner/.field-local/caller-keys/.",
+    "/home/spinner/.field-local", "/home/spinner", "/home/spinner/.field-local/caller-keys/../x", "/home/spinner/.field-local/caller-keysX/a",
     "${FIELD_CALLER_KEYS_DIR}/registry", "~", "~/x", "etc/x", "docker-image://alpine", "file://x", "`id`", "", "   ",
 ])
 def test_the_root_itself_its_parents_siblings_and_unresolvable_forms_are_refused(source):
@@ -1194,3 +1291,172 @@ def test_every_absolute_host_path_the_real_compose_files_bind_is_under_an_allowe
     assert found, "the real files bind no absolute host path: the roots would be unused"
     for path in found:
         assert any(path.startswith(root + "/") for root in ALLOWED_ABSOLUTE_ROOTS), path
+
+
+# --- C-506 (Lane 10 C-492 section 5): empty defaults and replacement forms --------------------------------------------
+
+_R = CALLER_KEYS_ROOT
+
+
+@pytest.mark.parametrize("source", [
+    f"${{K:-}}{_R}/x", f"${{K-}}{_R}/x", f"${{K:+{_R}}}/x", f"${{K+{_R}}}/x", f"${{K:=}}{_R}/x", f"${{K=}}{_R}/x",
+    f"${{K:-}}./operators", "${K:-}", "${K-}",
+])
+def test_an_empty_default_or_a_replacement_form_is_refused_even_before_an_allowed_root(source):
+    assert _binds_forbidden_host_path(source), f"accepted: {source}"
+    assert _binds_forbidden_host_path(source, kind="file"), f"accepted as a file: {source}"
+
+
+@pytest.mark.parametrize("source", [
+    f"${{K:-{_R}}}/x", f"${{K-{_R}}}/x", f"{_R}/x", "${FIELD_OPERATORS_DIR:-./operators}", f"${{K:-./x}}/y",
+    f"${{FIELD_CALLER_KEYS_DIR:-{_R}}}/registry",
+])
+def test_a_non_empty_default_on_an_allowed_value_is_still_accepted(source):
+    assert not _binds_forbidden_host_path(source), f"refused: {source}"
+
+
+def test_the_unstable_expansion_rule_is_what_refuses_the_four_cases_of_the_note():
+    """Without the rule the allowlist alone accepts them (the Lane 10 finding): pinned by calling the allowlist."""
+    for src in (f"${{K:-}}{_R}/x", f"${{K-}}{_R}/x", f"${{K:+{_R}/x}}", f"${{K+{_R}/x}}"):
+        assert UNSTABLE_EXPANSION.search(src), src
+
+
+# --- C-500 F-C454-1: the key dimension ---------------------------------------------------------------------------------
+
+KEY_DOCUMENTS = {
+    "extends": ("    extends: {file: /etc/compose.yml, service: x}\n", ""),
+    "develop.watch.path": ("    develop:\n      watch:\n        - {path: /etc, action: sync, target: /x}\n", ""),
+    "build.dockerfile absolute": ("    build: {context: ., dockerfile: /etc/Dockerfile}\n", ""),
+    "build.ssh": ("    build: {context: ., ssh: ['default=/root/.ssh/id_rsa']}\n", ""),
+    "build.cache_to": ("    build: {context: ., cache_to: ['type=local,dest=/etc/cache']}\n", ""),
+    "build.cache_from": ("    build: {context: ., cache_from: ['type=local,src=/etc/cache']}\n", ""),
+    "build.secrets": ("    build: {context: ., secrets: [k]}\n", "secrets:\n  k:\n    file: ./k.txt\n"),
+    "network_mode service": ("    network_mode: 'service:other'\n", ""),
+    "network_mode container": ("    network_mode: 'container:other'\n", ""),
+    "pid container": ("    pid: 'container:other'\n", ""),
+    "pid service": ("    pid: 'service:other'\n", ""),
+    "uts host": ("    uts: host\n", ""),
+    "an unknown service key": ("    some_new_key: /etc\n", ""),
+    "top-level include": ("", "include:\n  - path: /etc/compose.yml\n"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(KEY_DOCUMENTS))
+def test_a_key_outside_the_allowed_sets_or_a_namespace_join_is_refused(name, monkeypatch):
+    monkeypatch.setattr(sys.modules[__name__], "READ_ONLY_EXEMPT", {})
+    svc, top = KEY_DOCUMENTS[name]
+    doc = "services:\n  s:\n" + _HARD + svc + "\n" + top
+    assert key_violations(doc, "services: {}\n"), f"accepted: {name}"
+    with pytest.raises(AssertionError):
+        check_compose(doc, "services: {}\n")
+
+
+def test_the_real_compose_files_have_no_key_violation():
+    _, base, gb10 = _texts()
+    assert key_violations(base, gb10) == []
+
+
+def test_the_allowed_key_sets_are_a_superset_of_every_key_the_real_files_use():
+    _, base, gb10 = _texts()
+    used = set()
+    for svc in _services(base, gb10).values():
+        used |= set(svc)
+    assert used <= ALLOWED_SERVICE_KEYS, sorted(used - ALLOWED_SERVICE_KEYS)
+
+
+def test_a_relative_build_dockerfile_and_the_network_none_option_are_accepted(monkeypatch):
+    monkeypatch.setattr(sys.modules[__name__], "READ_ONLY_EXEMPT", {})
+    svc = "    build: {context: ../.., dockerfile: integration/demo/Dockerfile, args: {A: b}}\n    network_mode: none\n"
+    check_compose("services:\n  s:\n" + _HARD + svc, "services: {}\n")
+
+
+def test_an_x_extension_key_is_not_a_violation(monkeypatch):
+    monkeypatch.setattr(sys.modules[__name__], "READ_ONLY_EXEMPT", {})
+    check_compose("x-anything: {a: 1}\nservices:\n  s:\n" + _HARD + "    x-note: hi\n", "services: {}\n")
+
+
+# --- C-500 F-C454-3: the root constant is what the compose files default to ----------------------------------------------
+
+
+def test_the_allowed_absolute_root_is_the_default_the_compose_files_give_the_caller_keys_directory():
+    _, base, gb10 = _texts()
+    defaults = set(re.findall(r"\$\{FIELD_CALLER_KEYS_DIR:-([^}]*)\}", base + gb10))
+    assert defaults == {CALLER_KEYS_ROOT}, defaults
+    assert ALLOWED_ABSOLUTE_ROOTS == (CALLER_KEYS_ROOT,)
+
+
+# --- C-500 F-C454-4: the literal-path refusals for every kind ---------------------------------------------------------
+
+
+@pytest.mark.parametrize("kind", ["volume", "file", "build-context", "image-context"])
+@pytest.mark.parametrize("source", ["", "   ", "`id`", "a`b", "x\ny", "./o\nk", "\n"])
+def test_an_empty_string_a_backtick_or_a_newline_is_refused_for_every_kind(kind, source):
+    assert _allowlist_violation(source, kind), (kind, repr(source))
+    assert _binds_forbidden_host_path(source, kind), (kind, repr(source))
+
+
+# --- C-617 (Lane 10 C-589 on PR 329): the shared module, remote build contexts, non-string options, case -------------------
+
+
+def test_the_key_sets_and_the_root_constant_are_the_shared_modules_objects_not_copies():
+    """F-C589-1: PRs 328 and 329 compose because there is ONE definition (tools/compose_bind_rules.py)."""
+    import compose_bind_rules as shared
+
+    assert ALLOWED_SERVICE_KEYS is shared.ALLOWED_SERVICE_KEYS and ALLOWED_BUILD_KEYS is shared.ALLOWED_BUILD_KEYS
+    assert ALLOWED_TOP_LEVEL_KEYS is shared.ALLOWED_TOP_LEVEL_KEYS and NAMESPACE_OPTIONS is shared.NAMESPACE_OPTIONS
+    assert CALLER_KEYS_ROOT is shared.CALLER_KEYS_ROOT and ALLOWED_ABSOLUTE_ROOTS is shared.ALLOWED_ABSOLUTE_ROOTS
+
+
+def test_the_test_file_does_not_define_the_shared_names_again():
+    text = Path(__file__).read_text(encoding="utf-8")
+    for name in ("ALLOWED_SERVICE_KEYS", "ALLOWED_BUILD_KEYS", "ALLOWED_TOP_LEVEL_KEYS", "NAMESPACE_OPTIONS", "CALLER_KEYS_ROOT"):
+        assert re.search(r"(?m)^" + name + r"\s*=", text) is None, f"{name} is defined in the test file again"
+
+
+def test_the_resolved_model_check_reads_the_same_allowed_roots():
+    import compose_bind_rules as shared
+    import compose_resolved_check as resolved
+
+    assert getattr(resolved, "ALLOWED_ABSOLUTE_ROOTS", shared.ALLOWED_ABSOLUTE_ROOTS) is shared.ALLOWED_ABSOLUTE_ROOTS
+
+
+@pytest.mark.parametrize("context", [
+    "github.com/x/y", "github.com/x/y.git#main", "gitlab.com/x/y", "example.org/a/b", "bitbucket.org/x", "src", "build/ctx",
+    "x.example/y", "docker.io/library/alpine",
+])
+def test_a_build_context_that_does_not_start_with_a_dot_or_a_slash_is_refused(context):
+    """F-C589-2: `<host>.<tld>/...` with no prefix is a remote the docker CLI fetches; one rule, no list."""
+    assert _binds_forbidden_host_path(context, kind="build-context"), context
+    assert _binds_forbidden_host_path(context, kind="image-context"), context
+    doc = "services:\n  s:\n" + _HARD + f"    build: {context}\n"
+    with pytest.raises(AssertionError):
+        check_compose(doc, "services: {}\n")
+    doc2 = "services:\n  s:\n" + _HARD + "    build: {context: '" + context + "'}\n"
+    with pytest.raises(AssertionError):
+        check_compose(doc2, "services: {}\n")
+
+
+@pytest.mark.parametrize("context", [".", "./", "./svc", "../..", "../../services/x", "./a/../b"])
+def test_a_build_context_that_starts_with_a_dot_stays_allowed_inside_the_repository(context):
+    assert not _binds_forbidden_host_path(context, kind="build-context"), context
+
+
+@pytest.mark.parametrize("value", [["none"], {"a": 1}, 5, True, 1.5, ["service:x"]])
+@pytest.mark.parametrize("option", ["network_mode", "pid", "ipc", "uts", "userns_mode", "cgroup"])
+def test_a_non_string_namespace_option_is_a_clean_violation_not_a_crash(option, value):
+    """F-C589-3: the old set test raised TypeError (unhashable) before a violation was recorded."""
+    doc = "services:\n  s:\n" + _HARD
+    violations = key_violations(doc + f"    {option}: {json.dumps(value)}\n", "services: {}\n")
+    assert any(option in v and "is not a string" in v for v in violations), violations
+
+
+@pytest.mark.parametrize("source", ["./.GIT", "./.Git/config", "./.ENV", "./.Env.local", "../../.GIT", "../../.ENV",
+                                    "./sub/.GIT", "./sub/.EnV.prod"])
+def test_the_git_and_env_tests_ignore_case(source):
+    """F-C589-4: Linux is case-sensitive, a bind mount's source on another file system may not be."""
+    assert _binds_forbidden_host_path(source, kind="file"), source
+
+
+@pytest.mark.parametrize("source", ["./.github", "./.envrc-docs/x", "./environment", "./gitconfig"])
+def test_names_that_only_resemble_git_and_env_stay_allowed(source):
+    assert not _binds_forbidden_host_path(source, kind="file"), source

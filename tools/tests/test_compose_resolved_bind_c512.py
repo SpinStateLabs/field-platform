@@ -29,7 +29,7 @@ import test_compose_static_pins as static  # noqa: E402
 
 REPO = "/srv-fixture/checkout"                      # a made-up checkout path (the repository root of the fixture)
 PROJECT = REPO + "/integration/demo"                # compose resolves relative paths against the compose file's directory
-KEYS = "/home/example/.field-local/caller-keys"
+KEYS = "/home/spinner/.field-local/caller-keys"
 
 
 def _resolve(text: str, env: dict[str, str]) -> str:
@@ -107,7 +107,7 @@ ESTATE_VARIABLES = ["FIELD_OPERATORS_DIR", "FIELD_OPERATOR_KEY_DIR_REGISTRY", "F
 
 
 @pytest.mark.parametrize("variable", ESTATE_VARIABLES)
-@pytest.mark.parametrize("value", ["/etc", "/home/example/.ssh", "/", "/home/example", "/var/run/some-runtime"])
+@pytest.mark.parametrize("value", ["/etc", "/home/spinner/.ssh", "/", "/home/spinner", "/var/run/some-runtime"])
 def test_a_forbidden_value_of_an_estate_variable_is_red_where_the_static_check_is_green(variable, value):
     base, gb10 = static._texts()[1:]
     static.check_compose(base, gb10)                               # the static check sees only the defaults: green
@@ -125,7 +125,7 @@ def test_an_allowed_value_of_an_estate_variable_stays_green(variable):
 def test_an_estate_variable_that_replaces_the_allowed_root_with_another_directory_is_red():
     # the class Lane 10 named: ${FIELD_CALLER_KEYS_DIR:-<allowed root>}/registry passes on its default
     assert crc.check_model(resolved_model({"FIELD_CALLER_KEYS_DIR": "/opt/elsewhere"}), REPO) != []
-    assert crc.check_model(resolved_model({"FIELD_CALLER_KEYS_DIR": "/home/example/.field-local/other"}), REPO) != []
+    assert crc.check_model(resolved_model({"FIELD_CALLER_KEYS_DIR": "/home/spinner/.field-local/other"}), REPO) != []
 
 
 # ---- the rule, source by source -----------------------------------------------------------------------------------
@@ -142,7 +142,7 @@ def test_these_sources_are_allowed(source):
     ("", "empty"), ("operators", "not absolute"), ("./operators", "not absolute"), ("~/x", "not absolute"),
     ("/srv-fixture/checkout/$X", "not a resolved literal path"), ("/a`b", "not a resolved literal path"),
     ("/etc", "denylist"), ("/etc/ssl", "denylist"), ("/", "denylist"), ("/home", "denylist"),
-    ("/home/example", "denylist"), ("/home/example/.ssh", "denylist"), ("/home/example/.config", "denylist"),
+    ("/home/spinner", "denylist"), ("/home/spinner/.ssh", "denylist"), ("/home/spinner/.config", "denylist"),
     ("/var/run/docker.sock", "denylist"), ("/run/containerd/containerd.sock", "denylist"),
     ("/opt/elsewhere", "outside"), ("/srv-fixture/other", "outside"), ("/srv-fixture/checkout-evil/x", "outside"),
     (KEYS, "outside"), (KEYS + "-evil/x", "outside"), (KEYS + "/../x", "outside"),
@@ -186,7 +186,7 @@ def test_driver_opts_device_secrets_configs_env_file_and_build_contexts_are_judg
         if "services" in extra:
             model["services"] = extra["services"]
         assert crc.check_model(model, REPO) != [], name
-    good = {"services": {"a": {"build": {"context": REPO, "additional_contexts": {"b": "docker-image://alpine", "c": "https://example.invalid/x.git"}}}}}
+    good = {"services": {"a": {"build": {"context": REPO, "additional_contexts": {"b": "docker-image://alpine"}}}}}
     assert crc.check_model(good, REPO) == []
 
 
@@ -195,9 +195,11 @@ def test_a_tmpfs_named_volume_and_a_volume_type_are_not_host_paths():
     assert crc.check_model(model, REPO) == []
 
 
-def test_text_that_is_not_a_compose_model_is_refused():
+def test_text_that_is_not_a_compose_model_is_a_shape_error():
+    # C-723: not a compose model is exit 3 ("a shape this tool does not know"), so check_model raises, main maps it
     for bad in (None, [], {}, {"services": []}, "services: x"):
-        assert crc.check_model(bad, REPO) != []
+        with pytest.raises(ValueError, match="no services"):
+            crc.check_model(bad, REPO)
 
 
 # ---- symlinks only with --realpath -------------------------------------------------------------------------------
@@ -235,7 +237,7 @@ def test_the_cli_says_when_the_model_cannot_be_read(tmp_path):
     assert _run(["--repo-root", REPO, str(tmp_path / "missing.json")]).returncode == 3
     assert _run(["--repo-root", REPO, "-"], "a: [unclosed").returncode == 3
     r = _run(["--repo-root", REPO, "-"], "{}")
-    assert r.returncode == 2 and "not the output" in r.stdout
+    assert r.returncode == 3 and "does not know" in r.stdout          # C-723: not a compose model is exit 3, not a refusal
 
 
 def _fake_docker(tmp_path, body: str, rc: int = 0):
@@ -255,7 +257,7 @@ def test_docker_runs_only_with_run_compose_and_only_for_config(tmp_path):
     r = _run(["--repo-root", REPO, "--run-compose", "a.yml", "b.yml"], env=env)
     assert r.returncode == 2
     calls = log.read_text().splitlines()
-    assert calls == ["compose -f a.yml -f b.yml config --format json"]
+    assert calls == ["compose -f a.yml -f b.yml --profile * config --format json"]      # C-715: profiled services too
 
 
 def test_a_failing_docker_is_exit_3_not_a_clean_pass(tmp_path):

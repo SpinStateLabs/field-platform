@@ -51,6 +51,7 @@ import json
 import logging
 import os
 import re
+import stat
 import threading
 import time
 from dataclasses import dataclass, field
@@ -64,8 +65,9 @@ from field_core.ledger import (
     GENESIS_HASH,
     ChainVerification,
     LedgerEvent,
+    ReadOnlyLedgerEvent,
     compute_event_hash,
-    make_event,
+    make_event, reject_non_finite, reject_too_deep,    # (one line: the env-var anchors in docs/ENVIRONMENT.md count lines)
     verify_chain,
 )
 
@@ -114,6 +116,8 @@ JOURNAL_FORMAT = "field-ledger-segments/1"
 SIDECAR_FORMAT = "field-ledger-segment-sidecar/1"
 ROTATION_EVENT_TYPE = "ledger.segment.rotated"
 RETENTION_EVENT_TYPE = "ledger.retention.applied"
+#: `retention apply --days` ceiling (100 years). Above timedelta's range `now - timedelta(days=N)` raises OverflowError.
+MAX_RETENTION_DAYS = 36500
 HOLD_FILE = "legal_hold.json"
 CRASH_ENV = "FIELD_LEDGER_CRASH_AT"
 READ_CONCURRENCY_ENV = "FIELD_LEDGER_READ_CONCURRENCY"
@@ -284,6 +288,18 @@ class CallerRefused(RuntimeError):
     is never refused for any of these: ``CallerPolicy.check``.)"""
 
 
+#: How much of a caller id a refusal text shows (the id is untrusted input; S12-19).
+_CALLER_ID_SHOWN = 64
+
+
+def _shown_caller_id(caller_id: Any) -> str:
+    """``repr`` of at most the first 64 characters of a caller id, with its length when cut, so a refusal text (a 403
+    detail, a log line) stays bounded however long the claimed id is."""
+    if isinstance(caller_id, str) and len(caller_id) > _CALLER_ID_SHOWN:
+        return f"{caller_id[:_CALLER_ID_SHOWN]!r} ({len(caller_id)} characters)"
+    return repr(caller_id)
+
+
 class CallerKeyring:
     """``<caller_id>.pub.pem`` files in one directory (GB10: ``/data/keys/callers``
     on the read-only field-keys volume). Files are read on lookup (a key
@@ -297,7 +313,7 @@ class CallerKeyring:
 
     def path_for(self, caller_id: str) -> Path | None:
         """The keyring file for an id, or None for an id outside the name rule."""
-        if not isinstance(caller_id, str) or not _CALLER_ID.match(caller_id):
+        if not isinstance(caller_id, str) or not _CALLER_ID.fullmatch(caller_id):
             return None
         return self.directory / f"{caller_id}.pub.pem"
 
@@ -307,12 +323,12 @@ class CallerKeyring:
         message names the id and the failure class, never file contents."""
         path = self.path_for(caller_id)
         if path is None:
-            raise CallerRefused(f"unknown caller {caller_id!r}: not a valid caller id")
+            raise CallerRefused(f"unknown caller {_shown_caller_id(caller_id)}: not a valid caller id")
         try:
             st = os.stat(path)
         except OSError as exc:
             raise CallerRefused(
-                f"unknown caller {caller_id!r}: no {path.name} in the keyring ({type(exc).__name__})"
+                f"unknown caller {_shown_caller_id(caller_id)}: no {path.name} in the keyring ({type(exc).__name__})"
             ) from None
         cached = self._cache.get(caller_id)
         if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
@@ -322,11 +338,11 @@ class CallerKeyring:
             load_ed25519_public_key(pem)
         except (OSError, UnicodeError) as exc:  # unreadable, or not ASCII text
             raise CallerRefused(
-                f"unknown caller {caller_id!r}: {path.name} unreadable ({type(exc).__name__})"
+                f"unknown caller {_shown_caller_id(caller_id)}: {path.name} unreadable ({type(exc).__name__})"
             ) from None
         except ValueError as exc:  # load_ed25519_public_key: names the failure class only
             raise CallerRefused(
-                f"unknown caller {caller_id!r}: {path.name} is not an Ed25519 public key ({exc})"
+                f"unknown caller {_shown_caller_id(caller_id)}: {path.name} is not an Ed25519 public key ({exc})"
             ) from None
         self._cache[caller_id] = (st.st_mtime_ns, st.st_size, pem)
         return pem
@@ -448,18 +464,18 @@ class CallerPolicy:
         if self.keyring is None:
             raise CallerRefused(
                 f"caller keyring not configured ({CALLER_KEYRING_ENV} unset): the claim of caller "
-                f"{caller_id!r} cannot be verified here, and an unverifiable claim is never stored"
+                f"{_shown_caller_id(caller_id)} cannot be verified here, and an unverifiable claim is never stored"
             )
         pem = self.keyring.public_pem(caller_id)  # raises: unknown caller
         problem = _caller_ts_problem(caller_ts, now or datetime.now(timezone.utc))
         if problem is not None:
-            raise CallerRefused(f"caller {caller_id!r} refused: {problem}")
+            raise CallerRefused(f"caller {_shown_caller_id(caller_id)} refused: {problem}")
         if not verify_caller_signature(
             {"event_type": event_type, "agent_id": agent_id, "payload": payload or {},
              "caller_id": caller_id, "caller_ts": caller_ts, "caller_signature": signature}, pem
         ):
             raise CallerRefused(
-                f"invalid caller signature: the claim of caller {caller_id!r} does not verify under "
+                f"invalid caller signature: the claim of caller {_shown_caller_id(caller_id)} does not verify under "
                 f"{caller_id}.pub.pem over event_type, agent_id, payload, caller_id and caller_ts"
             )
         return {"caller_id": caller_id, "caller_ts": caller_ts, "caller_signature": signature}
@@ -630,15 +646,38 @@ def exists_strict(path: str | Path) -> bool:
         return False
 
 
+class JsonTooDeep(ValueError):
+    """A line nested deeper than ``JSON_MAX_DEPTH``: refused by an explicit scan, so the verdict does not depend on the
+    interpreter's stack-derived recursion limit (CPython 3.14). The message is fixed, never segment content."""
+
+    def __init__(self) -> None:
+        super().__init__(f"nesting is deeper than {JSON_MAX_DEPTH} levels")
+
+
+def _load_event(line: str) -> LedgerEvent:
+    if json_depth_exceeds(line):
+        raise JsonTooDeep()
+    return LedgerEvent.model_validate(json.loads(line))
+
+
 def _parse_events(data: bytes) -> list[LedgerEvent]:
     """Exactly the pre-C2 reader: universal newlines, strip, skip blanks.
-    A malformed line raises (JSONDecodeError / ValidationError) as it always did."""
+    A malformed line raises (JSONDecodeError / ValidationError / JsonTooDeep) as it always did."""
     out: list[LedgerEvent] = []
     for line in io.TextIOWrapper(io.BytesIO(data), encoding="utf-8"):
         line = line.strip()
         if line:
-            out.append(LedgerEvent.model_validate(json.loads(line)))
+            out.append(_load_event(line))
     return out
+
+
+def _unparseable_text(exc: BaseException) -> str:
+    """B87: what a verification reason says about a line that does not parse. The exception CLASS and a fixed text, never
+    its message: a pydantic ValidationError prints each offending key and value (segment content, multi-line), and
+    that text would reach a ``TAMPERED`` line. ``RecursionError`` is a deeply nested line, the same kind of break."""
+    if isinstance(exc, JsonTooDeep):    # its text is fixed (the explicit nesting cap), not segment content
+        return str(exc)
+    return f"{type(exc).__name__} (the message is not echoed)"
 
 
 def _parse_events_located(data: bytes) -> tuple[list[LedgerEvent], tuple[int, str] | None]:
@@ -651,8 +690,8 @@ def _parse_events_located(data: bytes) -> tuple[list[LedgerEvent], tuple[int, st
         if not line:
             continue
         try:
-            out.append(LedgerEvent.model_validate(json.loads(line)))
-        except ValueError as exc:  # JSONDecodeError and pydantic ValidationError
+            out.append(_load_event(line))
+        except (ValueError, RecursionError) as exc:  # JSONDecodeError, pydantic ValidationError, JsonTooDeep
             lines = [x.strip() for x in str(exc).splitlines() if x.strip()][:3]
             return out, (len(out), f"{type(exc).__name__}: {'; '.join(lines)}"[:300])
     return out, None
@@ -995,8 +1034,8 @@ def _closed_bytes_problem(
     start, end = entry["start_index"], entry["end_index"]
     try:
         events = _parse_events(data)
-    except ValueError as exc:
-        return start, f"unparseable line: {exc}"
+    except (ValueError, RecursionError) as exc:
+        return start, f"unparseable line: {_unparseable_text(exc)}"
     res = _verify_segment(events, genesis, start)
     if not res.ok:
         return (start if res.first_break_index is None else res.first_break_index), res.reason or ""
@@ -1046,11 +1085,15 @@ class Snapshot:
     """One consistent read of every live segment (or only the open one)."""
 
     def __init__(self, layout: Layout, datas: list[bytes | None], attempts: int,
-                 parse: bool = True, tolerant: bool = False):
+                 parse: bool = True, tolerant: bool = False,
+                 parsed: Callable[[Path, bytes, bool], tuple[list[LedgerEvent],
+                                                              tuple[int, str] | None]] | None = None):
         """``tolerant``: a line that does not parse keeps the events before it
         and is recorded in ``bad`` (segment number -> local index, reason)
         instead of raising — for verification and recovery only; every other
-        reader still raises on it."""
+        reader still raises on it. ``parsed`` (T7): the store's cached parser,
+        ``(path, bytes, tolerant) -> (events, bad)``; it returns exactly what
+        ``_parse_events`` / ``_parse_events_located`` return for those bytes."""
         self.layout = layout
         self.attempts = attempts
         self.raw = datas
@@ -1060,6 +1103,11 @@ class Snapshot:
             for seg, data in zip(layout.segs, datas):
                 if data is None:
                     self.segments.append((seg, None))
+                elif parsed is not None:
+                    events, bad = parsed(seg.path, data, tolerant)
+                    if bad is not None:
+                        self.bad[seg.number] = bad
+                    self.segments.append((seg, events))
                 elif tolerant:
                     events, bad = _parse_events_located(data)
                     if bad is not None:
@@ -1334,7 +1382,13 @@ def verify_closed_segment(path: str | Path) -> tuple[dict[str, Any], ChainVerifi
         return None
     n, start, end = entry["n"], entry["start_index"], entry["end_index"]
     data = read_shared(path)
-    events = _parse_events(data) if data is not None else []
+    events: list[LedgerEvent] = []
+    parse_failure: BaseException | None = None
+    if data is not None:
+        try:
+            events = _parse_events(data)
+        except (ValueError, RecursionError) as exc:
+            parse_failure = exc
 
     def brk(index: int, reason: str) -> ChainVerification:
         return ChainVerification(ok=False, length=index + 1, first_break_index=index,
@@ -1342,6 +1396,8 @@ def verify_closed_segment(path: str | Path) -> tuple[dict[str, Any], ChainVerifi
                                  archived_segments=0, verified_events=len(events),
                                  break_segment=n)
 
+    if parse_failure is not None:
+        return entry, brk(start, f"unparseable line: {_unparseable_text(parse_failure)}")
     res = _verify_segment(events, entry["genesis_prev_hash"], start)
     if not res.ok:
         return entry, brk(res.first_break_index or start, res.reason or "")
@@ -1364,6 +1420,103 @@ _SIDECAR_KEYS = ("format", "logical", "n", "file", "start_index", "end_index",
                  "closing_rotation_event_hash", "sha256", "archived_by")
 
 
+def _sidecar_int(side: dict[str, Any], key: str) -> int:
+    """A sidecar number as a real integer. The sidecar is unsigned, so ``Infinity`` / ``1e999`` (floats, and
+    ``int()`` of an infinity is OverflowError), ``2.5``, ``true`` and ``"7"`` are refused, never coerced."""
+    value = side[key]
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{key} is not an integer")
+    if not 0 <= value < _SIDECAR_INT_LIMIT:    # a 4300-digit count would make the failure text itself raise (F1)
+        raise ValueError(f"{key} is out of range")
+    return value
+
+
+#: A sidecar number is a count or an index: 0 <= value < 2**63. Anything larger is refused before it is used or printed.
+_SIDECAR_INT_LIMIT = 1 << 63
+#: A sidecar text field is printed by the CLI: it must be printable (no newline, ESC, NUL, lone surrogate: a newline in
+#: ``logical`` could forge a verifier output line) and at most this long. The hash fields are also ASCII.
+_SIDECAR_TEXT_MAX = 256
+
+
+def _sidecar_text(side: dict[str, Any], key: str, *, ascii_only: bool = False) -> str:
+    value = side[key]
+    if not isinstance(value, str):
+        raise ValueError(f"{key} is not a string")
+    if len(value) > _SIDECAR_TEXT_MAX or not value.isprintable() or (ascii_only and not value.isascii()):
+        raise ValueError(f"{key} is not a short printable string")
+    return value
+
+
+#: B1 (independent review of 2483b96e): ``logical`` and ``file`` are DERIVED from the segment's own file name, so a renamed
+#: segment and sidecar could carry any printable text into the OK line. A real name is ``events.jsonl`` and
+#: ``events-<n>.jsonl`` (both estates, ``ledger/events.jsonl``; closed_path_for adds ``-<n>``): only these characters
+#: are accepted, with room for a longer ledger file name. A name outside the set is refused with a fixed reason.
+_SIDECAR_LOGICAL_RE = re.compile(r"[A-Za-z0-9._-]{1,128}")
+_SIDECAR_FILE_RE = re.compile(r"[A-Za-z0-9._-]{1,160}")
+
+#: A real sidecar is about a kilobyte. The sidecar is unsigned input, so it is read only when it is a regular file and
+#: no larger than this (a symlink to /dev/zero or a 64 MiB pad would otherwise be read whole).
+_SIDECAR_MAX_BYTES = 1 << 20
+
+
+#: Explicit JSON nesting cap for untrusted text parsed on the verify path. CPython 3.14 derives the decoder's recursion
+#: limit from the thread's C stack (a 100000-deep list raises at an 8 MiB stack and parses at 16 MiB), so relying on
+#: RecursionError makes the result depend on the host. A real sidecar or ledger line nests a handful of levels.
+JSON_MAX_DEPTH = 500
+
+
+def json_depth_exceeds(data: bytes | str, limit: int = JSON_MAX_DEPTH) -> bool:
+    """True when ``[``/``{`` nest deeper than ``limit`` outside string literals. A linear scan, no recursion, so the
+    answer is the same on every Python and stack size. It does not validate the JSON: the decoder still does that."""
+    text = data.decode("utf-8") if isinstance(data, bytes) else data     # strict: never a different text from the parser's
+    depth = 0
+    in_str = False
+    esc = False
+    for ch in text:
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+        elif ch == '"':
+            in_str = True
+        elif ch in "[{":
+            depth += 1
+            if depth > limit:
+                return True
+        elif ch in "]}":
+            depth -= 1
+    return False
+
+
+def _read_sidecar(path: Path) -> tuple[bytes | None, str | None]:
+    """``(bytes, None)``; ``(None, None)`` when it does not exist; ``(None, reason)`` when it cannot be a sidecar (not a
+    regular file, over the size cap, or unreadable). The reason never carries the content."""
+    try:
+        if os.name == "nt":
+            fh = open_shared(path)
+        else:
+            # O_NONBLOCK: opening a FIFO with no writer would block forever here, before the regular-file check below
+            # (F3); on a regular file the flag changes nothing.
+            fh = os.fdopen(os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)), "rb")
+    except FileNotFoundError:
+        return None, None
+    except OSError as exc:  # a directory, a permission error: a failed verification, never a traceback
+        return None, f"cannot be read ({type(exc).__name__})"
+    with fh:
+        try:
+            if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
+                return None, "is not a regular file"
+            raw = fh.read(_SIDECAR_MAX_BYTES + 1)
+        except OSError as exc:
+            return None, f"cannot be read ({type(exc).__name__})"
+    if len(raw) > _SIDECAR_MAX_BYTES:
+        return None, f"is larger than {_SIDECAR_MAX_BYTES} bytes"
+    return raw, None
+
+
 def verify_segment_file(path: str | Path, public_key_pem: str | None = None) -> dict[str, Any]:
     """Verify ONE archived segment standalone from ``<file>.segment.json`` beside it.
 
@@ -1384,18 +1537,51 @@ def verify_segment_file(path: str | Path, public_key_pem: str | None = None) -> 
         "ok": False, "segment": None, "logical": None, "events": 0, "global_first": None,
         "global_last": None, "reason": None, "signature_checked": False,
     }
-    side_raw = read_shared(sidecar_path_for(p))
+    side_raw, side_bad = _read_sidecar(sidecar_path_for(p))
+    if side_bad is not None:
+        out["reason"] = f"sidecar {sidecar_path_for(p).name!r} {side_bad}"
+        return out
     if side_raw is None:
-        out["reason"] = f"no sidecar {sidecar_path_for(p).name} beside {p}"
+        out["reason"] = f"no sidecar {sidecar_path_for(p).name!r} beside {str(p)!r}"
         return out
     try:
-        side = json.loads(side_raw)
+        # Decode strictly ONCE and give the same text to the scan and the parser. json.loads(bytes) picks its own
+        # encoding (UTF-16/32 by the NUL pattern), so a scan over a different decoding could be blind to a deep run the
+        # parser then reads. A UTF-8 BOM is refused here (json.loads refuses it on a str): the writer never emits one.
+        side_text = side_raw.decode("utf-8")        # UnicodeDecodeError is a ValueError: a failed verification
+        if json_depth_exceeds(side_text):
+            raise ValueError(f"nesting is deeper than {JSON_MAX_DEPTH} levels")
+        side = json.loads(side_text)
         missing = [k for k in _SIDECAR_KEYS if k not in side]
         if missing or side["format"] != SIDECAR_FORMAT:
-            raise ValueError(f"missing {missing}" if missing else f"format {side['format']!r}")
-        n, start, end = int(side["n"]), int(side["start_index"]), int(side["end_index"])
-    except (ValueError, TypeError, KeyError) as exc:
-        out["reason"] = f"sidecar {sidecar_path_for(p).name} invalid: {exc}"
+            raise ValueError(f"missing {missing}" if missing else "format is not supported")   # never print the value (R2)
+        n, start, end = (_sidecar_int(side, k) for k in ("n", "start_index", "end_index"))
+        if n < 1 or start < 0:
+            raise ValueError("n must be at least 1 and start_index at least 0")
+        if end < start:
+            raise ValueError(f"end_index {end} is before start_index {start}")
+        for k in ("logical", "file"):
+            _sidecar_text(side, k)
+        for k in ("genesis_prev_hash", "head_hash", "sha256"):
+            _sidecar_text(side, k, ascii_only=True)
+        # The anchor is read only when a key is supplied, so its type is checked here, before the unsigned OK path: the
+        # result must not depend on whether a key was given (nor on how deep a nested value the JSON decoder accepts).
+        # A real sidecar always holds the signed rotation anchor object. null is "no anchor": still accepted unsigned
+        # (a signed check then fails: nothing to verify), as before. Anything else that is not an object is refused.
+        if side["anchor"] is not None and not isinstance(side["anchor"], dict):
+            raise ValueError("anchor is not an object")
+        # R1: ``logical`` is printed in the OK line, so it must be exactly what the writer put there: the ledger file's
+        # own name, from which ``file`` was derived (closed_path_for(logical, n)). A free-text value with spaces could
+        # otherwise read as part of the sentence ("... segment 1 of x (signed rotation anchor verified ...)") on an
+        # unsigned file.
+        logical = side["logical"]
+        if not logical or Path(logical).name != logical or closed_path_for(logical, n).name != side["file"]:
+            raise ValueError("logical is not the ledger file name that file was derived from")
+        # B1: even a consistent rename (file, sidecar and both fields) must not carry free text into the OK line
+        if _SIDECAR_LOGICAL_RE.fullmatch(logical) is None or _SIDECAR_FILE_RE.fullmatch(side["file"]) is None:
+            raise ValueError("logical and file must be plain file names (letters, digits, dot, dash, underscore)")
+    except (ValueError, TypeError, KeyError, RecursionError) as exc:
+        out["reason"] = f"sidecar {sidecar_path_for(p).name!r} invalid: {exc}"
         return out
     out.update(segment=n, logical=side["logical"], global_first=start, global_last=end)
 
@@ -1407,11 +1593,11 @@ def verify_segment_file(path: str | Path, public_key_pem: str | None = None) -> 
         return fail(f"sidecar describes {side['file']!r}, not {p.name!r}")
     data = read_shared(p)
     if data is None:
-        return fail(f"file {p} is missing (expected {end - start + 1} events)")
+        return fail(f"file {str(p)!r} is missing (expected {end - start + 1} events)")
     try:
         events = _parse_events(data)
-    except ValueError as exc:
-        return fail(f"unparseable line: {exc}")
+    except (ValueError, RecursionError) as exc:
+        return fail(f"unparseable line: {_unparseable_text(exc)}")
     out["events"] = len(events)
     if n == 1 and (start != 0 or side["genesis_prev_hash"] != GENESIS_HASH):
         return fail("segment 1 must start at global index 0 from the genesis hash")
@@ -1473,10 +1659,28 @@ def read_concurrency() -> int:
     store (default 1; 0 = unlimited). At 100k events one parse peaks at
     ~0.3-0.4 GB and 8 ungated readers at ~2 GB (measured on the GB10): the
     default keeps the ledger inside a 2 GB machine."""
+    return _read_concurrency_setting()[0]
+
+
+def _read_concurrency_setting() -> tuple[int, bool]:
+    """(width, invalid). A blank value is unset (1). A non-integer or negative
+    value falls back to 1 and is reported invalid (a negative once meant 0, i.e.
+    no gate); only an explicit 0 is unlimited."""
+    raw = os.environ.get(READ_CONCURRENCY_ENV, "").strip()
+    if not raw:
+        return 1, False
     try:
-        return max(0, int(os.environ.get(READ_CONCURRENCY_ENV, "1")))
+        n = int(raw)
     except ValueError:
-        return 1
+        return 1, True
+    return (1, True) if n < 0 else (n, False)
+
+
+#: T7: the most raw segment bytes one store keeps parsed between reads (the parsed events cost about 4x the
+#: raw bytes; measured 29 MB for 7.3 MB / 11.2k events). 32 MiB of raw is about 50k events at ~650 B and
+#: at most ~160 MB resident (raw + parsed). A ledger whose live segments exceed it parses on every read,
+#: exactly as before T7.
+PARSE_CACHE_MAX_BYTES = 32 * 1024 * 1024
 
 
 def _read_gate() -> threading.BoundedSemaphore | None:
@@ -1507,12 +1711,23 @@ class LedgerStore:
         # G: at most N full-chain parses per store at once. Never taken by an
         # append, a rotation or /health. FIELD_LEDGER_READ_CONCURRENCY=0 disables.
         self._gate_sem = _read_gate()
-        self.read_concurrency = read_concurrency()  # the served app queues heavy reads to match
+        self.read_concurrency, self.read_concurrency_invalid = _read_concurrency_setting()  # the served app queues heavy reads to match
+        if self.read_concurrency_invalid:
+            log.warning("%s is not a non-negative integer; using the default of 1", READ_CONCURRENCY_ENV)
         self._journal_cache: tuple[bytes | None, JournalState] | None = None
         self._health_oob: tuple | None = None
         # the disk key this store's own in-flight append will produce: /health
         # must not mistake it for another process's write (C2 J16)
         self._inflight_key: tuple | None = None
+        # T7: the last parse of each segment path, keyed by its exact bytes: path -> (raw, events). A read
+        # whose bytes are equal reuses the events; one whose bytes extend them at a line boundary (an
+        # append) parses only the new lines. Never keyed on stat: a same-size in-place edit is a miss.
+        # The third item is the read-only twin list handed to callers (``_parsed_ro``): built lazily, once
+        # per event, and only for events a caller actually asked for; ``events`` itself is never handed out.
+        self._parse_cache: dict[Path, tuple[bytes, tuple[LedgerEvent, ...], list[ReadOnlyLedgerEvent]]] = {}
+        # T7: the last verification and the exact read it came from: (layout, raw bytes, result).
+        self._verify_cache: tuple[Layout, list[bytes | None], ChainVerification] | None = None
+        self._cache_lock = threading.Lock()
         with self._lock:
             self._recover_locked()  # read-only: opening a store never writes
 
@@ -1589,7 +1804,8 @@ class LedgerStore:
         return js
 
     def _take_snapshot(self, parse: bool = True, open_only: bool = False,
-                       tolerant: bool = False) -> Snapshot:
+                       tolerant: bool = False, readonly: bool = False,
+                       tail_bytes: int | None = None) -> Snapshot:
         """The reader protocol (lock-free). Consistent because:
 
         1. the journal is append-only, so equal bytes before and after mean no
@@ -1602,6 +1818,11 @@ class LedgerStore:
            FILE_SHARE_DELETE on Windows);
         4. committed closed files never change; archival journals first;
         5. appends only extend ``P``; a half-copied last line is re-read.
+
+        ``tail_bytes`` (B-GL-events-limit-cheap; with ``open_only``): read only the last ``tail_bytes`` of the open
+        segment, starting at its first complete line; ``snapshot.tail_cut`` says whether anything before the window was
+        left unread. Everything else of the protocol, the torn-last-line check included, is unchanged: it looks only at
+        the END of the file, which the window always contains.
         """
         deadline = time.monotonic() + self.SNAPSHOT_TIMEOUT_S
         delay = 0.0005
@@ -1637,7 +1858,19 @@ class LedgerStore:
                 after = [exists_strict(p) for p in layout.watch]
                 if raw2 != raw1 or after != before:
                     raise _Retry("layout changed while opening")
-                data_open = handle.read() if handle is not None else None
+                tail_cut = False
+                if handle is not None and tail_bytes is not None:
+                    size = os.fstat(handle.fileno()).st_size
+                    if size > tail_bytes:
+                        handle.seek(size - tail_bytes)
+                        data_open = handle.read()
+                        first_newline = data_open.find(b"\n")
+                        data_open = data_open[first_newline + 1:] if first_newline >= 0 else b""
+                        tail_cut = True
+                    else:
+                        data_open = handle.read()
+                else:
+                    data_open = handle.read() if handle is not None else None
                 if data_open and not data_open.endswith(b"\n"):
                     # Linux extends i_size page by page: an append may be half
                     # copied. Believe a torn last line only after >= 3 identical
@@ -1645,7 +1878,12 @@ class LedgerStore:
                     tail = data_open[data_open.rfind(b"\n") + 1:]
                     if tail.strip():
                         try:
-                            json.loads(tail)
+                            # decode once, scan for depth, parse that text: a deep unterminated line is refused by the
+                            # cap here (treated like any torn tail) on every stack, and no bytes reach json.loads
+                            tail_text = tail.decode("utf-8")
+                            if json_depth_exceeds(tail_text):
+                                raise JsonTooDeep()
+                            json.loads(tail_text)
                         except ValueError:
                             now = time.monotonic()
                             if torn is None or torn[0] != (len(data_open), tail):
@@ -1662,7 +1900,10 @@ class LedgerStore:
                         if data is None and read_shared(journal) != raw1:
                             raise _Retry("closed segment moved and the journal changed")
                         datas[k] = data
-                return Snapshot(layout, datas, attempts, parse=parse, tolerant=tolerant)
+                snap = Snapshot(layout, datas, attempts, parse=parse, tolerant=tolerant,
+                                parsed=self._parsed_ro if readonly else self._parsed)
+                snap.tail_cut = tail_cut
+                return snap
             except (_Retry, PermissionError) as exc:
                 if isinstance(exc, PermissionError) and not _transient_refusal(exc):
                     denied = exc
@@ -1687,10 +1928,121 @@ class LedgerStore:
                 if handle is not None:
                     handle.close()
 
+    # ------------------------------------------------------- T7 parse cache
+
+    def _parsed(self, path: Path, data: bytes, tolerant: bool
+                ) -> tuple[list[LedgerEvent], tuple[int, str] | None]:
+        """``_parse_events`` (or ``_parse_events_located`` when ``tolerant``) of ``data``, reusing the last
+        clean parse of ``path`` when ``data`` equals its bytes or extends them past a newline. Parsing is a
+        pure function of each line and a line never spans that newline, so the result is the same events.
+        A new tail that does not parse cleanly falls back to the full parse, which raises (or locates the
+        bad line) exactly as before. Only clean parses are kept; every caller gets its own list.
+
+        PRIVATE EVENTS (B-GL-ledger-cache-immutable): the ``LedgerEvent`` objects this returns are the cached
+        ones, plain and mutable, and are for this module's own readers only (``verify()``, recovery,
+        retention, ``export()``, ``hash_at()``): none of them hands one to a caller. Everything a caller
+        receives (``events()``, ``iter_events()``, ``snapshot()``) comes from ``_parsed_ro``, which returns
+        read-only copies, so a caller cannot corrupt the cache and cannot make this process's ``verify()``
+        differ from a fresh store's. Validation is unchanged: a cache miss pays no freeze."""
+        events, _ro, bad = self._parsed_entry(path, data, tolerant)
+        return (list(events) if isinstance(events, tuple) else events), bad
+
+    def _parsed_ro(self, path: Path, data: bytes, tolerant: bool
+                   ) -> tuple[list[ReadOnlyLedgerEvent], tuple[int, str] | None]:
+        """``_parsed`` as READ-ONLY copies (what callers of ``events()`` / ``iter_events()`` / ``snapshot()``
+        receive). The copies are built lazily, once per cached event, and kept beside the cache entry: the
+        first hand-out of a segment pays one copy per event, a later one (and the new tail after an append)
+        pays only a list copy. The cached ``LedgerEvent`` objects themselves are never returned. A parse
+        that is not kept (a segment over ``PARSE_CACHE_MAX_BYTES``, a tolerant parse with a bad line) has no
+        twin list: it is copied on each call, like the parse it came from."""
+        events, ro, bad = self._parsed_entry(path, data, tolerant)
+        if ro is None:
+            return [ReadOnlyLedgerEvent.of(e) for e in events], bad
+        have = len(ro)
+        if have < len(events):
+            made = [ReadOnlyLedgerEvent.of(e) for e in events[have:]]      # outside the lock
+            with self._cache_lock:
+                cur = len(ro)              # another reader may have extended it first: keep its copies
+                if have <= cur < have + len(made):
+                    ro.extend(made[cur - have:])
+        with self._cache_lock:
+            return ro[:len(events)], bad
+
+    def _parsed_entry(self, path: Path, data: bytes, tolerant: bool):
+        """The parse behind ``_parsed`` / ``_parsed_ro``: ``(events, ro, bad)``. ``ro`` is the cache entry's
+        read-only twin list (a prefix of the copies of ``events``, shared by growth) or None when the parse
+        was not kept."""
+        with self._cache_lock:
+            hit = self._parse_cache.get(path)
+        if hit is not None:
+            raw, events, ro = hit
+            if raw == data:
+                return events, ro, None
+            if raw.endswith(b"\n") and data.startswith(raw):
+                try:
+                    tail = _parse_events(data[len(raw):])
+                except (ValueError, RecursionError):  # JSONDecodeError, ValidationError, UnicodeDecodeError, a nested line
+                    tail = None
+                if tail is not None:
+                    grown = events + tuple(tail)
+                    return grown, self._remember(path, data, grown, ro), None
+        if tolerant:
+            # Only a STRICT clean parse is kept: the tolerant decoder replaces invalid UTF-8 that a strict
+            # reader must still raise on. On clean bytes the two parses are the same events.
+            try:
+                out = _parse_events(data)
+            except (ValueError, RecursionError):
+                events, bad = _parse_events_located(data)
+                return events, None, bad
+        else:
+            out = _parse_events(data)
+        return out, self._remember(path, data, tuple(out)), None
+
+    def _remember(self, path: Path, data: bytes, events: tuple[LedgerEvent, ...],
+                  ro: list[ReadOnlyLedgerEvent] | None = None) -> list[ReadOnlyLedgerEvent] | None:
+        """Keep ``path``'s parse (most recent last); evict the oldest other paths while the kept raw bytes
+        exceed PARSE_CACHE_MAX_BYTES, and keep nothing for a segment that alone exceeds it. ``ro`` carries
+        the read-only twins of an unchanged prefix of ``events`` across an append; a new parse starts empty.
+        Returns the entry's twin list, or None when nothing was kept."""
+        with self._cache_lock:
+            self._parse_cache.pop(path, None)
+            if len(data) > PARSE_CACHE_MAX_BYTES:
+                return None
+            ro = [] if ro is None else ro
+            self._parse_cache[path] = (data, events, ro)
+            total = sum(len(entry[0]) for entry in self._parse_cache.values())
+            for other in list(self._parse_cache):
+                if total <= PARSE_CACHE_MAX_BYTES or other == path:
+                    break
+                total -= len(self._parse_cache.pop(other)[0])
+            return ro
+
+    def _verified(self, snap: Snapshot) -> ChainVerification:
+        """``snap.verify()``, reused while the layout and every segment's bytes are exactly those of the
+        last verification AND no segment is archived. For a ledger with only live segments the result is a
+        function of that layout and those bytes (and the parse of them). Once a segment is archived it is not:
+        ``Snapshot._verify_archived`` also reads files that are not in the key (the archived segment's file in
+        the ledger directory, and its archive copy at ``archived_to``), so a flipped byte in or the deletion
+        of an archive copy would be answered ok from the cache. An archived ledger is verified on every call
+        (T8); the parse cache still applies to it."""
+        if snap.layout.archived:
+            return snap.verify()
+        with self._cache_lock:
+            cached = self._verify_cache
+        if (cached is not None and cached[0] == snap.layout and len(cached[1]) == len(snap.raw)
+                and all(a == b for a, b in zip(cached[1], snap.raw))):
+            return cached[2].model_copy()
+        result = snap.verify()
+        if sum(len(d) for d in snap.raw if d is not None) <= PARSE_CACHE_MAX_BYTES:
+            with self._cache_lock:
+                self._verify_cache = (snap.layout, list(snap.raw), result.model_copy())
+        return result
+
     def snapshot(self) -> Snapshot:
-        """A consistent read of every live segment, behind the heavy-read gate."""
+        """A consistent read of every live segment, behind the heavy-read gate. Its events are read-only
+        copies (``_parsed_ro``): the caller gets the Snapshot object, so it must not reach a cached event."""
         with self._gate():
-            return self._take_snapshot()
+            return self._take_snapshot(readonly=True)
 
     # ------------------------------------------------------------- recovery
 
@@ -1933,7 +2285,7 @@ class LedgerStore:
         """Every live event, materialised first: no file handle is held while
         the caller is suspended in the loop."""
         with self._gate():
-            events = list(self._take_snapshot().all_events())
+            events = list(self._take_snapshot(readonly=True).all_events())
         yield from events
 
     # -------------------------------------------------- F2 signing policy
@@ -2001,6 +2353,12 @@ class LedgerStore:
         agent_id: str | None,
         stamp: dict[str, Any],
     ) -> LedgerEvent:
+        if not isinstance(event_type, str) or not event_type.strip():
+            raise ValueError("event_type must not be blank")  # S6-10: no writer seals an event with a blank type
+        # B101: a payload make_event would refuse never takes the writer lock or triggers the reconciliation in
+        # _ensure_fresh_locked (the checks are repeated inside make_event; this walk is O(payload), bounded)
+        reject_too_deep(payload)
+        reject_non_finite(payload)
         self._require_appendable(event_type)  # before the writer lock: nothing to undo
         with self._writer():
             self._ensure_fresh_locked()
@@ -2147,6 +2505,60 @@ class LedgerStore:
             return {"n": n, "start": start, "end": glen - 1, "head": head, "closed": closed,
                     "anchor": anchor, "rot": rot, "intent": intent}
 
+    #: B-GL-events-limit-cheap: the window (bytes from the end of the open segment) that ONE cold tail scan looks
+    #: at. A class attribute so a test can shrink it.
+    EVENTS_TAIL_WINDOW_BYTES = 256 * 1024
+
+    def _events_tail(self, event_filter: EventFilter, limit: int) -> list[ReadOnlyLedgerEvent] | None:
+        """The last ``limit`` matches, found without walking the whole chain; None when this path cannot answer and the
+        caller must read in full. Same events, same order as the full read for a chain whose records all parse.
+
+        WARM (the T7 parse cache holds the open segment, which it does for every ledger whose live bytes fit
+        ``PARSE_CACHE_MAX_BYTES``, from the moment the store is opened): the cached parse is extended by the bytes
+        appended since (``_parsed_ro``, exactly what the full read does, so no line is parsed twice) and scanned from the
+        newest event backwards, stopping at ``limit`` matches: no copy of the chain and no filter pass over the older
+        events. A rare filter scans no more than the full read's filter pass does.
+
+        COLD (a ledger larger than the cache, where the full read parses every line every time): ONE window from the
+        end of the open segment, parsed from its last line backwards. Not widened: if the window holds fewer than
+        ``limit`` matches the caller does the full read (which also fills the cache), so the wasted work is bounded by
+        the window.
+
+        When the open segment is the only live one, a scan that covered all of it is the answer even with fewer than
+        ``limit`` matches; with closed live segments behind it, fewer matches than ``limit`` means "read in full"."""
+        warm = self.path in self._parse_cache
+        with self._gate():
+            snap = self._take_snapshot(parse=False, open_only=True,
+                                       tail_bytes=None if warm else self.EVENTS_TAIL_WINDOW_BYTES)
+        data = snap.raw[-1]
+        if data is None:
+            return None
+        matched: list[ReadOnlyLedgerEvent] = []
+        if warm:
+            # the read-only twins (option C): what this returns reaches the caller, so never the private plain events
+            events, _ = self._parsed_ro(snap.layout.segs[-1].path, data, False)
+            for event in reversed(events):
+                if event_filter.matches(-1, event):
+                    matched.append(event)
+                    if len(matched) == limit:
+                        break
+            complete = True
+        else:
+            for line in reversed(data.split(b"\n")):
+                line = line.strip()
+                if not line:
+                    continue
+                event = LedgerEvent.model_validate(json.loads(line))
+                if event_filter.matches(-1, event):
+                    matched.append(ReadOnlyLedgerEvent.of(event))
+                    if len(matched) == limit:
+                        break
+            complete = not snap.tail_cut
+        if len(matched) == limit or (complete and len(snap.layout.segs) == 1):
+            matched.reverse()
+            return matched
+        return None
+
     def events(
         self,
         agent_id: str | None = None,
@@ -2154,16 +2566,24 @@ class LedgerStore:
         since: str | None = None,
         until: str | None = None,
         limit: int | None = None,
-    ) -> list[LedgerEvent]:
+    ) -> list[ReadOnlyLedgerEvent]:
         """Filtered read of the live segments in global order. ``since``/``until``
         are inclusive ISO 8601 instants (compared as datetimes, not strings); a
         bad bound raises ``InvalidTimeBound`` before anything is read. ``limit``
-        keeps the last N matches globally."""
+        keeps the last N matches globally: it must be at least 1 (``ValueError``
+        before anything is read; ``out[-0:]`` is the whole list and ``out[-1:]`` of a
+        negative drops the OLDEST events), or None for no cut."""
+        if limit is not None and limit < 1:
+            raise ValueError("limit must be at least 1")
         event_filter = EventFilter(
             agent_id=agent_id, event_type=event_type, since=since, until=until
         )
+        if limit is not None:
+            tail = self._events_tail(event_filter, limit)
+            if tail is not None:
+                return tail
         with self._gate():
-            snap = self._take_snapshot()
+            snap = self._take_snapshot(readonly=True)
         out = [event for index, event in snap.indexed_events() if event_filter.matches(index, event)]
         if limit is not None:
             out = out[-limit:]
@@ -2172,7 +2592,7 @@ class LedgerStore:
     def verify(self) -> ChainVerification:
         try:
             with self._gate():
-                return self._take_snapshot(tolerant=True).verify()
+                return self._verified(self._take_snapshot(tolerant=True))
         except LedgerBusy as exc:
             return ChainVerification(ok=False, length=0, reason=str(exc))
 
@@ -2356,9 +2776,15 @@ class LedgerStore:
             raise ValueError("retention apply needs a non-blank operator")
         if older_than_days < 0:
             raise ValueError("--days must be >= 0")
+        if older_than_days > MAX_RETENTION_DAYS:
+            raise ValueError(f"--days must be at most {MAX_RETENTION_DAYS}")
         self._require_appendable(RETENTION_EVENT_TYPE)  # F2: before anything moves
         now = now or datetime.now(timezone.utc)
-        adir = Path(archive_dir).resolve()
+        cutoff = now - timedelta(days=older_than_days)  # before anything is created below
+        try:
+            adir = Path(archive_dir).resolve()
+        except ValueError:  # a NUL byte in the path; fixed text, the path is never echoed
+            raise ArchiveRefused("archive dir is not a valid path") from None
         ldir = self.path.parent.resolve()
         if _within(adir, ldir):
             raise ArchiveRefused(f"archive dir {adir} is inside the live ledger dir {ldir}")
@@ -2376,7 +2802,6 @@ class LedgerStore:
                 f"archive dir {adir} is on a different filesystem than {ldir}; archival "
                 "renames, it never copies"
             )
-        cutoff = now - timedelta(days=older_than_days)
         completed: list[int] = []
         archived: list[int] = []
         # archive_evidence for this run's event: entries a live retention event
@@ -2525,8 +2950,8 @@ class LedgerStore:
 
             try:
                 events = _parse_events(data)
-            except ValueError as exc:
-                raise refuse(f"unparseable line: {exc}") from exc
+            except (ValueError, RecursionError) as exc:
+                raise refuse(f"unparseable line: {_unparseable_text(exc)}") from exc
             res = _verify_segment(events, seg.genesis, seg.start_index)
             if not res.ok:
                 raise refuse(res.reason or "chain break")

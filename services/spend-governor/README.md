@@ -106,14 +106,21 @@ provision` (validate -> register -> cap -> rate limits -> mint; also behind
 ## CLI
 
 ```
-governor set-cap <agent-id> [--from-manifest m.yaml | --limit-cents N] [--token-limit N] [--action-limit N] [--period daily|monthly|total]
-governor spend <agent-id> [--cents N] [--tokens N] [--actions N] [--action A]    # exit 1 on BLOCK
+governor version
+governor set-cap <agent-id> [--from-manifest m.yaml | --limit-cents N] [--token-limit N] [--action-limit N] [--period daily|monthly|total] [--escalate-at-pct 80]
+governor spend <agent-id> [--cents N] [--tokens N] [--actions N] [--note T] [--action A]    # exit 1 on BLOCK
 governor status <agent-id> [--action A]
 governor rate-limits <agent-id>
+governor usage <agent-id> [--model M --in N --out N --cache-read N]    # exit 3 on a rogue finding; no --model = GET usage/cost/rogue
+governor set-policy <agent-id> [--allowed-model M]... [--token-rate-limit N] [--rate-window-seconds 3600]
 governor escalations [--agent-id ID]
 governor resolve <escalation-id> --by "Human Name"
-governor serve [--port 8006]
+governor serve [--host 127.0.0.1] [--port 8006]
 ```
+
+Exit codes: `spend` exits 1 on a BLOCK status; `usage` exits 3 on a rogue finding and does **not** exit 1 when its
+status is BLOCK (open question for the architect: as written, `usage` can cross the cap and still exit 0; the code is
+unchanged here).
 
 ## Enforced vs. Declared
 
@@ -126,13 +133,15 @@ governor serve [--port 8006]
 | Negative spend cannot reduce totals | **Enforced in code** | `ge=0` validation |
 | Spend without a configured cap is refused | **Enforced in code** | 404 "ungoverned spend" |
 | Manifest `spend_cap` maps exactly (sub-cent limits refused) | **Enforced in code** | `from_manifest` |
-| Spend is platform-metered: actions at the sentinel's `/check` (A+B metering, every ALLOW in either mode) and LLM tokens at the gateway egress | **Enforced in code** (v1.2 D1 + F1/F3) | the sentinel posts one `/spend` row per ALLOW (`source: sentinel`; conformance-sentinel `tests/test_d1_metering.py`); force-gateway posts `/usage` for the header's agent from the upstream response (`services/force-gateway/tests/test_f1_enforce.py::test_allowed_call_is_forwarded_injected_and_metered_for_the_header_agent`, `test_f1_flags.py::test_f3_a_forwarded_request_meters_the_response_tokens_for_the_header_agent`); best-effort delivery on both sides (a metering gap is ledgered, never a block) |
+| Spend is platform-metered: actions at the sentinel's `/check` (A+B metering, every ALLOW in either mode) and LLM tokens at the gateway egress | **Enforced in code** (v1.2 D1 + F1/F3) | the sentinel posts one `/spend` row per ALLOW (`source: sentinel`; `services/conformance-sentinel/tests/test_throttle_metering.py::test_one_allow_meters_exactly_one_and_self_stays_zero` and `services/conformance-sentinel/tests/test_throttle_metering.py::test_log_only_meters_every_shadow_allow_including_steps_1_to_4`); force-gateway posts `/usage` for the header's agent from the upstream response (`services/force-gateway/tests/test_f1_enforce.py::test_allowed_call_is_forwarded_injected_and_metered_for_the_header_agent`, `test_f1_flags.py::test_f3_a_forwarded_request_meters_the_response_tokens_for_the_header_agent`); best-effort delivery on both sides (a metering gap is ledgered, never a block) |
 | Self-reported `/spend` is truthful | **Declared only** | the cooperative path for agents outside both the sentinel and the gateway. COMPUTE (CPU/GPU seconds) has NO observer here: the platform never executes agent code, so a `compute_seconds` field would be exactly the self-report the v1.2 slide removes — dropped, not enforced (F3 REWORD; reason carried into E1) |
 | BLOCK actually stops the agent | **Declared only** (here) | enforcement is the sentinel's `/check` — this service only reports state |
+| A cap's `on_breach` (`halt`, `escalate`, `ignore`, any text) changes what happens at the cap | **Declared only** | recorded in the store and served back by `GET /caps`, never read: BLOCK comes from the cap limit alone, the governor never calls the kill-switch, and the sentinel's `/check` is the gate (`tests/test_on_breach_is_declared_only.py`: identical BLOCK for all three values). The field-core template comment "breaching the cap fires the kill switch" describes the sentinel gate, not this field |
 | Status is THROTTLED after N counted actions in a rolling window, with `retry_after_seconds`, for periods the governor can parse; OK again once the oldest rows age out | **Enforced in code** | `_throttle` + `window_retry_after`, integer arithmetic; frozen-clock tests: N allowed, N+1 THROTTLED, `retry_after_seconds` = 1 at T+period−1 s, OK at T+period, token window likewise, cap BLOCK outranks THROTTLED, unlimited action not throttled, case/whitespace variants and `tool_call` never match (`tests/test_throttle.py`). The counts are fed by sentinel-metered ALLOWs, else self-reported per-action rows — the self-reported side carries the row above's caveat; THROTTLED stops nothing here (row above) |
 | One action checked AND self-reported is counted once toward the `action_limit` cap, and an action only one side saw is never lost from that count | **Enforced in code** | option A: per-action max(self, metered) for `action_limit`; unattributed rows count toward totals only (`tests/test_throttle.py` option A tests). Rate WINDOWS are different: they prefer metered rows and can under-count self-reports — an agent THROTTLED on 3/2 self-reports reads OK after one sentinel-metered row (`test_window_prefers_metered_rows_while_the_cap_takes_the_max`; LIMITS) |
 | `session` rate limits are enforced | **Declared only** (gate-only) | stored `declared_unenforced`, ledgered `spend.rate_limit_declared_unenforced`, loud CLI warning, never throttles (test); the Claude Code Enforcement Gate is what counts a session |
 | Unknown rate-limit periods and rate limits without a spend cap are refused | **Enforced in code** | `parse_rate_period` → 422 / CLI exit 1 with nothing configured; `PUT` and `GET /rate-limits` 404 for an uncapped agent; `spend_governor.provisioning` refuses before any PUT and reports a refused load as `failed`, never silently (tests) |
+| An agent id outside the registry's id rule is neither metered nor configured | **Enforced in code** | `/spend`, `/usage` and `PUT` on `/caps`, `/rate-limits` and `/policies` answer 422 before any store call or ledger row (`tests/test_agent_id_rule_routes.py`). A row already stored under such an id still reads; it cannot be replaced or metered under that id |
 | A manifest's `rate_limits` are loaded by both manifest-driven provisioning paths, `governor set-cap --from-manifest` and `lifecycle provision` | **Enforced in code** | both call `spend_governor.provisioning` (tests here; `services/lifecycle-manager/tests/test_provision_rate_limits.py`: a declared set is loaded after the cap and the window throttles after max, a re-provision without `rate_limits` clears the stale set, an unknown period or duplicate entry raises before any side effect, a governor that refuses the set or is unreachable fails the `rate_limits` step and mints nothing). A hand-written `PUT /caps` (SDK example operator, raw REST) loads none |
 | An unsupported `spend_cap.period` (`per-run`) is refused, never metered as `total` | **Enforced in code** | `UnsupportedCapPeriodError` from `SpendCapConfig.from_manifest`; `set-cap --from-manifest` exits 1 naming it and configures nothing (tests) |
 | A pre-D1 `spend.sqlite3` (7-column `spend`) opens and keeps its rows | **Enforced in code** | `_migrate_spend_attribution` at open: PRAGMA → ALTER; old rows read as `source='self'`, unattributed (`test_old_seven_column_spend_db_migrates_at_open`) |
@@ -146,6 +155,14 @@ governor serve [--port 8006]
   is visible in audit as missing `spend.*` events). Mint-style fail-closed
   semantics belong to authority changes, not meters.
 - Window boundaries are UTC calendar days/months.
+- Retired agents are metered, not refused (C-757, Don's ruling on C-467): with `FIELD_REGISTRY_URL` set at
+  `serve`, a `PUT /caps` or `POST /spend` for an agent the registry reports as `retired` still succeeds, is
+  counted as `retired_agent_metered` on `/health` (every call that is looked up; a call beyond the bound below is neither counted nor logged) and logged as a fixed line that names no agent,
+  at most once per agent per 5 minutes (the next line says how many calls were held back).
+  The registry is asked off the request path, on a small dedicated executor (2 workers, at most 16 agents
+  waiting; calls for an agent already being looked up join that lookup, and a call beyond the bound is not
+  looked up), so a slow registry costs a spend a cache read, not a wait. An answer is cached for a minute and a
+  failure to answer for 10 seconds; a registry that cannot answer means no line, never a refusal. A retired identity that still reports spend means something still holds its credential.
 - A persisted database that already holds duplicate open escalations
   (written before the check-and-insert was atomic) still opens: it logs a
   warning, skips the unique index, and leaves every duplicate in the queue

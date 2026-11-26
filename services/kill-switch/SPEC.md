@@ -51,11 +51,17 @@ give agents a heartbeat to poll, and prove readiness with timed drills.
   re-kill still sends the signal.
 - **Domain kill** runs the same per-agent path; `DomainKillReport.results[]`
   carries `DomainAgentResult{agent_id, outcome, previous_status, error,
-  endpoint_result}`. A per-agent registry fault is recorded, not raised, and
-  the route stays 200. Serial bound: N agents x 2 s against the CLI's 30 s.
-- **Drill** wraps the flip in `try/finally` so no exception can leave the
-  agent killed; the restore is itself guarded (`restored: false` + ledger
-  `kill.drill.restore_failed` rather than masking the original error).
+  endpoint_result}`. A per-agent registry fault is recorded, not raised: the
+  route answers 200 only when no attempted (non-retired) agent errored; when ANY attempted agent errored it answers **502** with the report as the `detail` (C-19; the agents that could be halted WERE halted, every agent is attempted, and `kill.domain` always records killed / already_killed / errored / attempted), and a domain with no registered agent is 404. Serial bound: N agents x 2 s against the CLI's 30 s.
+- **Drill** wraps the flip in `try/finally` so an exception after the flip does not skip the restore; the restore is
+  itself guarded (`restored: false` + ledger `kill.drill.restore_failed` rather than masking the original error), so
+  a failing restore leaves the agent killed. The drill is a compare-and-set on the registry row's `updated_at`: the flip is conditional on the version it read, the
+  restore on the version its flip returned (`PATCH /agents/{id}` `if_updated_at`, 412 on a stale one), and a real kill
+  always writes the row. When anything wrote the row in between (a kill from this or another process, a direct PATCH,
+  a retire) the restore is skipped and the agent left as that write set it (answer **409**, `restore_skipped: true`,
+  ledger `kill.drill.restore_skipped`); a stale flip is refused (`kill.drill.refused`, 409, nothing flipped). A drill is
+  also refused while a kill of the agent is in flight here or another drill of it runs, and a failed registry read
+  before the restore leaves the agent killed.
   `DrillReport` gains `endpoint_confirmed_ms: float | None` and
   `endpoint_result`.
 - **Heartbeat store.** `kill_switch/store.py` `HeartbeatStore` (SQLite,
@@ -72,6 +78,24 @@ give agents a heartbeat to poll, and prove readiness with timed drills.
   `killswitch liveness --stale-after`. Agent side: `LivenessClient.checkin`,
   `FieldAgent.checkin`, `fieldagent checkin`, plus `Send-FieldCheckin` in
   `tools/field-rest.ps1` and the check-in in the demo agent.
+
+- **Ledger rows are keyed by a registry agent id.** `/kill`, `/revive`, `/drill` and `GET /heartbeat` answer **422**
+  to a path id outside the registry's id rule (`[a-z0-9][a-z0-9._-]*`, at most **128** characters;
+  `field_core.ids.registry_id_ok`), after the key and scope check where there is one and before the registry is asked or
+  a halt signal is sent; no `kill.*` row is written, and the guard's `operator.refused` row carries no agent id for such
+  a request. Once a record is read, every row names the record's own `agent_id`. `RegistryClient` refuses the same ids
+  itself, before it builds a URL. A stored agent with an id over 128 characters can therefore not be halted here.
+- **The text of a stop request.** `reason` is one line, not blank, with no control, invisible-format, line-separator,
+  paragraph-separator or unpaired surrogate character; `operator` is refused for an unpaired surrogate only (plus its
+  blank and length bounds). Either is **422** on kill, domain kill, revive and drill, before anything happens. The rules
+  are `field_core.stop_text`; the console and `lifecycle decommission` apply them before they send anything.
+- **A refused row is attempted once more.** When the ledger answers a kill-switch row with a **4xx**, the same event
+  type is appended once with a fixed shape (the authenticated operator or `(not recorded)`, a fixed reason, the refusal's
+  status; no request text, no claimed name). Its payload keys are only `operator`, `reason`, `refused_status` and, while
+  an operator mode is on, `operator_id_authenticated` and `operator_key_fp`. An outage (5xx, unreachable) gets no second attempt, and in neither case is
+  the halt held back (the kill still succeeds during a ledger outage). `/health` counts both: `ledger_note_failures` is
+  every row whose first append failed; `ledger_rows_lost` is those not written at all (an outage, or the fixed shape
+  refused too).
 
 - **Retired agents are protected (B4).** `retired` is terminal on **all four**
   status-writing routes: `/kill`, `/revive` and `/drill` answer **409**, and
@@ -91,8 +115,13 @@ give agents a heartbeat to poll, and prove readiness with timed drills.
 - No process-level termination (no PIDs, no container stops) — propagation
   is via sentinel checks and heartbeat polls. The v1.2 endpoint call is a
   SIGNAL to a cooperating agent, not a stop.
-- No operator authentication/authorization (recorded, not verified).
-- No auto-kill policies (lifecycle-manager, Phase 4, may add an opt-in flag).
+- Operator authentication is off by default: with no operator mode armed the operator is recorded, not verified.
+  With `FIELD_OPERATOR_REQUIRE=1` the guarded routes (`/kill`, `/kill/domain`, `/revive`, `/drill`) check the
+  operator's key and scope and the agent manifest's `authorized_operators` (README, "Operator is authorized"); in
+  log-only mode (`FIELD_OPERATOR_REGISTRY` alone) they allow and try to record it. Whether an estate arms it is recorded outside
+  this repository and is Declared here.
+- No auto-kill policy in this service. lifecycle-manager's `sweep --auto-kill-orphans` (an opt-in flag, never a
+  default; the served scheduler never arms it) kills orphaned agents by calling this service's kill route.
 - Liveness does not probe agents. A stale row means no check-in in the
   window, never a finding that a process is dead.
 - No retries or queue behind the endpoint call: one attempt, 2 s, recorded.

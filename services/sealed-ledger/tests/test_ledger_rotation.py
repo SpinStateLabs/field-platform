@@ -528,6 +528,13 @@ def test_write_anchor_during_rotation_never_zero(tmp_path):
     t = threading.Thread(target=anchorer)
     t.start()
     try:
+        # The rotations must not start until the thread has anchored once: a thread starved on a loaded runner could
+        # otherwise reach its `while not stop.is_set()` check only after all 25 rotations, anchor nothing, and fail
+        # `assert anchored` with `[]` (seen on CI, 3.11) without testing any interleaving at all.
+        deadline = time.monotonic() + 30
+        while not anchored and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert anchored, "the anchorer thread did not write a single anchor within 30 s"
         for _ in range(25):
             s.append("w", {})
             floor[0] += 1
@@ -716,7 +723,9 @@ def test_deleting_journal_is_loud(tmp_path):
     assert not v.ok and v.first_break_index == 0 and v.reason.startswith("link break at index 0:")
 
 
-def test_torn_last_line_raises_as_today(tmp_path):
+def test_torn_last_line_raises_on_open_and_the_cli_prints_one_tampered_line(tmp_path):
+    """Opening the store still raises as before C2. The CLI no longer lets the exception escape as a traceback on stderr:
+    it prints one TAMPERED line with a fixed text on stdout (B87; the changed expectation is approved by the controller)."""
     p = tmp_path / "e.jsonl"
     fill(LedgerStore(p), 5)
     raw = p.read_bytes()
@@ -727,10 +736,12 @@ def test_torn_last_line_raises_as_today(tmp_path):
     r = subprocess.run([sys.executable, "-m", "sealed_ledger.cli", "verify", "--path", str(p)],
                        capture_output=True, text=True, encoding="utf-8", errors="replace",
                        timeout=120, env=dict(os.environ, PYTHONIOENCODING="utf-8"))
-    assert r.returncode == 1 and "JSONDecodeError" in r.stderr
+    assert r.returncode == 1 and "Traceback" not in r.stderr and "JSONDecodeError" not in r.stderr
+    assert r.stdout.splitlines() == ["TAMPERED — unparseable line: JSONDecodeError (the message is not echoed)"]
 
 
-def test_chain_verification_json_keys_single_file_and_segmented(tmp_path):
+def test_chain_verification_json_keys_single_file_and_segmented(tmp_path, monkeypatch):
+    monkeypatch.setenv("FIELD_EXPORT_ROOT", str(tmp_path))  # Backlog B10: out_dir is confined when unarmed too
     s = LedgerStore(tmp_path / "one" / "e.jsonl")
     fill(s, 2)
     client = TestClient(create_app(store=s))
@@ -797,6 +808,7 @@ def _never_consistent(monkeypatch, store_cls_timeout: float = 0.2):
 
 
 def test_busy_snapshot_is_never_reported_as_tampering(tmp_path, monkeypatch):
+    monkeypatch.setenv("FIELD_EXPORT_ROOT", str(tmp_path))  # Backlog B10: out_dir is confined when unarmed too
     s, p, hashes = three_segments(tmp_path)
     client = TestClient(create_app(store=s))
     _never_consistent(monkeypatch)

@@ -6,6 +6,7 @@ from fastapi import FastAPI
 
 from field_core.authn import install as install_authn
 from field_core.http_errors import install_validation_handler
+from field_core.startup import warn_open
 from field_core.buildinfo import build_sha
 
 from conformance_sentinel import __version__
@@ -85,7 +86,8 @@ def create_app(engine: SentinelEngine | None = None) -> FastAPI:
                 "version": __version__, "mode": engine_.mode.value,
                 "judge": (getattr(engine_.judge, "name", "custom")
                           if engine_.judge is not None else "off"),
-                "build_sha": build_sha()}
+                "build_sha": build_sha(),
+                "ledger_appends_dropped": engine_.ledger_appends_dropped}
 
     @app.get("/clauses")
     def clauses() -> dict[str, str]:
@@ -96,4 +98,5 @@ def create_app(engine: SentinelEngine | None = None) -> FastAPI:
     def check(req: CheckRequest) -> ConformanceVerdict:
         return app.state.engine.check(req)
 
+    warn_open("conformance-sentinel")
     return app

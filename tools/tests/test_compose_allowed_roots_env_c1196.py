@@ -1,10 +1,8 @@
-"""C-1196 (Lane 7 Q-87 F-Q87-1; coordinator ruling 2026-11-03): the allowed absolute bind roots are configurable.
+"""C-1196 (coordinator ruling 2026-11-03): further bind roots can be added for the resolved-model check.
 
-The home-path scrub (C-1132, C-1133) turned the one committed root into a placeholder, so the estate's real bind root
-would be refused by the resolved deploy-gate check. The roots can now be ADDED by an environment variable the estate
-sets at deploy (a colon-separated list, FIELD_COMPOSE_ALLOWED_ROOTS); the committed default stays the placeholder, the
-static pins keep checking only that default, and a malformed entry fails closed without printing the value.
-Every path here is made up."""
+The roots are ADDED through an environment variable (a colon-separated list, FIELD_COMPOSE_ALLOWED_ROOTS); the committed
+default stays as it is, the static pins keep checking only that default, and a malformed entry fails closed without
+printing the value. Every path added here is made up."""
 import json
 import sys
 from pathlib import Path
@@ -32,9 +30,8 @@ def test_the_variable_name_is_the_documented_one():
     assert rules.ENV_ALLOWED_ROOTS == VAR
 
 
-def test_the_default_is_the_committed_placeholder_root_and_nothing_else(roots):
-    assert roots({}) == rules.ALLOWED_ABSOLUTE_ROOTS
-    assert all(r.startswith("/home/example/") for r in rules.ALLOWED_ABSOLUTE_ROOTS)
+def test_the_default_is_the_committed_root_and_nothing_else(roots):
+    assert roots({}) == rules.ALLOWED_ABSOLUTE_ROOTS == (rules.CALLER_KEYS_ROOT,)
 
 
 @pytest.mark.parametrize("value", ["", " ", "\t", ":", ":::", " : "])
@@ -59,8 +56,8 @@ def test_a_repeated_root_is_listed_once(roots):
 
 @pytest.mark.parametrize("entry", [
     "relative/path", "./x", "/data/../etc", "/data/./x", "/data//x", "/data/$X", "/data/`x`", "~/x", "/data/x\ny",
-    "/", "/etc", "/etc/ssl", "/proc", "/var/run", "/var/run/docker.sock", "/home", "/home/someone",
-    "/home/someone/.ssh", "/home/someone/.config", "/root", "/opt",
+    "/", "/etc", "/etc/ssl", "/proc", "/var/run", "/var/run/docker.sock", "/home", "/home/user",
+    "/home/user/.ssh", "/home/user/.config", "/root", "/opt",
 ])
 def test_a_malformed_or_forbidden_entry_fails_closed_without_echoing_it(roots, entry):
     with pytest.raises(ValueError) as exc:
@@ -116,3 +113,12 @@ def test_the_command_line_fails_closed_on_a_bad_variable_and_does_not_print_it(m
     assert crc.main(["--repo-root", str(tmp_path), model]) == 2
     out = capsys.readouterr().out
     assert "made-up-entry-0123" not in out and VAR in out
+
+
+def test_a_runtime_socket_outside_the_forbidden_trees_is_refused(roots):
+    with pytest.raises(ValueError, match="runtime socket"):
+        roots({VAR: "/data/example-field/docker.sock"})
+
+
+def test_an_empty_entry_between_two_roots_does_not_end_the_list(roots):
+    assert roots({VAR: f"{ROOT_A}::{ROOT_B}"}) == (*rules.ALLOWED_ABSOLUTE_ROOTS, ROOT_A, ROOT_B)

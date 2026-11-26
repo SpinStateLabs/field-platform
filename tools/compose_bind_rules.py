@@ -3,8 +3,56 @@
 check on the resolved model (tools/compose_resolved_check.py). One definition, so the two cannot drift."""
 import re
 
-# C-453: the one allowed absolute root (a user's caller-key directories); a new estate bind needs a reviewed line here
-ALLOWED_ABSOLUTE_ROOTS = ("/home/example/.field-local/caller-keys",)
+def namespace_problem(option, value):
+    """The ONE message for a namespace option outside its allowed set (C-932, reviewer C-43 F-C387-2): both layers used
+    "joins another namespace" for everything, which is wrong for `network_mode: bridge` (the default mode spelled out). Only
+    absent (or `none` for the network) is allowed; `bridge` is refused on purpose and says how to fix it. None when the
+    value is allowed."""
+    if value in NAMESPACE_OPTIONS[option]:
+        return None
+    if option == "network_mode" and value == "bridge":
+        return "network_mode: bridge is refused: only absent or `none` is allowed (bridge is the default, leave the key out)"
+    return f"{option}: {value} joins another namespace"
+
+
+def name_problem(names):
+    """The ONE rule for the names below the repository root, used by the static pins and the resolved-model check
+    (C-715, reviewers C-640 F-C640-2 and C-648 F-C648-5: the two layers had drifted on case). `.git` anywhere on the
+    way, and an `.env` or `.env.*` FILE as the last name, refused; case-insensitive (Linux is case-sensitive, a mount's
+    file system may not be). Stated limits (C-648 F-C648-6): a directory NAMED `.env` below the last name
+    (`.env/x`) and `.envrc` are not refused; the rule is about the secrets file and the repository's history."""
+    lowered = [str(n).lower() for n in names]
+    if ".git" in lowered:
+        return "inside .git"
+    if lowered and (lowered[-1] == ".env" or lowered[-1].startswith(".env.")):
+        return "an .env file"
+    return None
+
+
+# C-453: the one allowed absolute root (a user's caller-key directories); a new estate bind needs a reviewed line here.
+# C-500 (reviewer C-454 F-C454-3): in ONE named constant. It is what the compose files themselves default
+# `FIELD_CALLER_KEYS_DIR` to (a test keeps the two in step), so a different user or directory is one reviewed edit here
+# and in the compose defaults, never a second spelling elsewhere. C-617: it lives here, with the other shared rules,
+# so the static pins and the resolved-model check cannot drift.
+CALLER_KEYS_ROOT = "/home/spinner/.field-local/caller-keys"
+ALLOWED_ABSOLUTE_ROOTS = (CALLER_KEYS_ROOT,)
+
+# C-500 (reviewer C-454 F-C454-1): the path rule is an allowlist, so the keys that can carry a path are one too. A service
+# key, a `build` sub-key or a top-level key outside these sets fails, so a new key needs a reviewed line here. The sets
+# are the keys the compose files use today plus the keys the checker reads and constrains (`env_file`, `secrets`,
+# `configs`, `build.additional_contexts`, the host-level options). Not allowed on purpose: `extends`, `include`,
+# `develop`, `build.ssh`, `build.cache_from`, `build.cache_to`, `build.secrets`, `build.network`.
+ALLOWED_SERVICE_KEYS = {
+    "build", "cap_add", "cap_drop", "command", "depends_on", "entrypoint", "environment", "healthcheck", "image",
+    "network_mode", "networks", "ports", "profiles", "read_only", "restart", "security_opt", "tmpfs", "volumes",
+    "env_file", "secrets", "configs", "privileged", "devices", "pid", "ipc", "uts", "userns_mode", "cgroup",
+}
+ALLOWED_BUILD_KEYS = {"context", "dockerfile", "args", "additional_contexts"}
+ALLOWED_TOP_LEVEL_KEYS = {"name", "services", "volumes", "networks", "secrets", "configs"}
+# the namespace-joining options: only absent (or `none` for the network) is allowed; `host`, `service:x` and
+# `container:x` all reach another namespace
+NAMESPACE_OPTIONS = {"network_mode": {None, "none"}, "pid": {None}, "ipc": {None}, "uts": {None}, "userns_mode": {None},
+                     "cgroup": {None}}
 
 # C-426 (reviewer C-424 F-C424-1): the parent of a forbidden path is the same bypass as /var/lib was, so a home directory
 # itself is exact-forbidden, the credential directories of a home are listed in full, ${HOME} reads as a home, the
@@ -34,10 +82,9 @@ RUNTIME_SOCKET = re.compile(
     r"|(^|/)S\.gpg-agent(\.[a-z]+)?$|(^|/)(snapd|lxd)\.socket$")
 
 
-# C-1196 (Lane 7 Q-87 F-Q87-1; coordinator ruling 2026-11-03): the home-path scrub made the one committed root a placeholder,
-# so the estate's real bind root would be refused by the resolved deploy-gate check. The roots can now be ADDED, at deploy
-# time, through this variable: a colon-separated list of absolute directories, no real path in the repository. The static
-# pins keep checking only the committed default (ALLOWED_ABSOLUTE_ROOTS); the deploy gate calls allowed_absolute_roots().
+# C-1196 (coordinator ruling 2026-11-03): further allowed roots can be ADDED, at deploy time, through this variable: a
+# colon-separated list of absolute directories. The static pins keep checking only the committed default
+# (ALLOWED_ABSOLUTE_ROOTS); the resolved-model check calls allowed_absolute_roots().
 ENV_ALLOWED_ROOTS = "FIELD_COMPOSE_ALLOWED_ROOTS"
 
 
@@ -59,15 +106,16 @@ def _root_problem(root: str) -> str | None:
     return None
 
 
-def allowed_absolute_roots(environ=None) -> tuple[str, ...]:
-    """The committed default roots, plus those the estate adds through FIELD_COMPOSE_ALLOWED_ROOTS (colon-separated).
+def allowed_absolute_roots(environ=None, defaults=None) -> tuple[str, ...]:
+    """The default roots (``defaults``; the committed ones when None), plus those the operator adds through
+    FIELD_COMPOSE_ALLOWED_ROOTS (colon-separated).
     An unset or empty variable is the default. An entry that is relative, not literal, has a dot segment, or is a system
     or credential place raises ValueError naming the variable and the entry's position, never its text: the gate then
     fails closed."""
     import os
 
     raw = (os.environ if environ is None else environ).get(ENV_ALLOWED_ROOTS, "")
-    out = list(ALLOWED_ABSOLUTE_ROOTS)
+    out = list(ALLOWED_ABSOLUTE_ROOTS if defaults is None else defaults)
     for n, entry in enumerate((e.strip() for e in raw.split(":")), start=1):
         if not entry:
             continue

@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class Decision(str, Enum):
@@ -41,6 +41,7 @@ CLAUSES: dict[str, str] = {
     "D.semantic": "delegation: semantic scope judgment requires human review",
     "D.grantor": "delegation: grantor is not on the delegation-of-authority roster, is inactive, or the grant exceeds that grantor's allowed scope or max TTL",
     "R.unregistered": "registry: agent not registered",
+    "R.registry_unreachable": "registry: unreachable or answered unusably; identity cannot be established (fail closed)",
 }
 
 
@@ -59,6 +60,19 @@ class ConformanceVerdict(BaseModel):
         default_factory=lambda: datetime.now(timezone.utc)
     )
     context: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _clause_matches_the_decision(self) -> "ConformanceVerdict":
+        """BLOCK / ESCALATE cite a clause id; ALLOW cites none. A verdict that breaks this cannot be replayed against
+        the manifest clause that fired, so it is refused when it is built (the caller then fails closed). An id that is
+        not in CLAUSES is NOT refused: it still constructs and clause_text() prints '<unknown clause>' (a producer
+        typo must not turn an intended BLOCK into an exception; tests/test_clause_ids_registered.py pins that)."""
+        if self.decision is Decision.ALLOW:
+            if self.clause_id is not None:
+                raise ValueError("an ALLOW verdict must not carry a clause_id")
+        elif self.clause_id is None:
+            raise ValueError(f"a {self.decision.value} verdict requires a clause_id")
+        return self
 
     @property
     def allowed(self) -> bool:

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import io
 import json
 import sys
 from pathlib import Path
 
 import typer
+import yaml
 
 # Windows consoles default to a legacy codepage (cp1252) that cannot encode
 # ✓/✗ or em-dashes and corrupts redirected template output. Force UTF-8.
@@ -51,7 +53,12 @@ def validate(
     if not manifest.exists():
         typer.echo(f"error: no manifest at {manifest}", err=True)
         raise typer.Exit(code=2)
-    result = validate_manifest_file(manifest)
+    try:
+        result = validate_manifest_file(manifest)
+    except (OSError, UnicodeDecodeError, yaml.YAMLError, ValueError) as exc:
+        # the class name only: never the file's content (a YAML error quotes it)
+        typer.echo(f"error: cannot read manifest {manifest}: {type(exc).__name__}", err=True)
+        raise typer.Exit(code=2)
     if as_json:
         typer.echo(result.model_dump_json(indent=2))
     else:
@@ -68,9 +75,20 @@ def templates(
 ) -> None:
     """List the four shipped templates, or print one with --show."""
     if show:
-        text = template_text(show)
+        try:
+            text = template_text(show)
+        except KeyError:
+            typer.echo(
+                f"error: unknown template {show!r}; choose from {', '.join(TEMPLATE_NAMES)}",
+                err=True,
+            )
+            raise typer.Exit(code=2)
         if out:
-            out.write_text(text, encoding="utf-8")
+            try:
+                out.write_text(text, encoding="utf-8")
+            except OSError as exc:
+                typer.echo(f"error: cannot write {out}: {type(exc).__name__}", err=True)
+                raise typer.Exit(code=2)
             typer.echo(f"wrote {show} template to {out}")
         else:
             typer.echo(text)
@@ -108,8 +126,7 @@ def verify_chain_cmd(
             err=True,
         )
     try:
-        with jsonl.open(encoding="utf-8") as fh:
-            lines = fh.readlines()  # same lines as iterating the file
+        raw = jsonl.read_bytes()  # bytes first: a decode error then carries the offset in the FILE
     except FileNotFoundError:
         hint = ""
         if jsonl.with_name(f"{jsonl.stem}.segments.journal").exists():
@@ -123,6 +140,12 @@ def verify_chain_cmd(
             err=True,
         )
         raise typer.Exit(code=2)
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:  # not valid UTF-8 is chain evidence, like an unparseable line (offset only, never the bytes)
+        typer.echo(f"TAMPERED — file is not valid UTF-8 at byte {exc.start}", err=True)
+        raise typer.Exit(code=1)
+    lines = io.StringIO(text, newline=None).readlines()  # same lines (universal newlines) as iterating the file
     events = []
     for line_no, line in enumerate(lines, start=1):
         line = line.strip()
@@ -174,7 +197,9 @@ def alert_test_cmd(
 
 @app.command("alert-topic-init")
 def alert_topic_init_cmd(
-    out: Path = typer.Option(..., "--out", help="File to write the new topic to."),
+    # a str, not a Path: click stats a Path option while parsing, and a NUL in it is a ValueError that escapes before
+    # this command runs; as text it reaches the handler below and is a named exit 2
+    out: str = typer.Option(..., "--out", help="File to write the new topic to."),
     force: bool = typer.Option(False, "--force", help="Replace an existing file."),
 ) -> None:
     """Write a new unguessable ntfy topic to --out. The topic is never printed:
@@ -182,12 +207,12 @@ def alert_topic_init_cmd(
     from field_core import alerts
 
     try:
-        alerts.write_topic_file(out, overwrite=force)
+        alerts.write_topic_file(Path(out), overwrite=force)
     except FileExistsError:
         typer.echo(f"alert-topic-init: {out} exists; nothing written (use --force to replace)",
                    err=True)
         raise typer.Exit(code=1)
-    except OSError as exc:
+    except (OSError, ValueError) as exc:  # ValueError: a NUL in the path
         typer.echo(f"alert-topic-init: cannot write {out} ({type(exc).__name__}); nothing written",
                    err=True)
         raise typer.Exit(code=2)
