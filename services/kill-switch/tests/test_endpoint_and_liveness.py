@@ -1250,5 +1250,5 @@ def test_the_domain_budget_never_skips_the_signal_of_an_agent_whose_registry_wri
     assert stack.events("kill.endpoint_skipped") == []
     failed = stack.events("kill.endpoint_failed")
     assert sorted(e["agent_id"] for e in failed) == ["alpha-agent", "beta-agent"]
-    assert {e["payload"]["reason"] for e in failed} <= {"anomalous behavior", "timeout"}
+    assert {e["payload"]["reason"] for e in failed} == {"timeout"}
     assert took >= 2 * kill_api.ENDPOINT_DEADLINE_S, took
