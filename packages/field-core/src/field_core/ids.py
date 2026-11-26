@@ -3,7 +3,12 @@
 The registry stores ids matching ``[a-z0-9][a-z0-9._-]*`` (``agent_registry.models``). A caller outside the registry
 that puts an id into a URL or a ledger row also bounds its length: 128 characters, below the sealed ledger's 200 for
 an ``agent_id`` (a longer one is refused there, so an action on it could not be recorded) and above the 64 the registry
-allows a NEW id."""
+allows a NEW id.
+
+Some uses of the same pattern carry another length bound or none, each on purpose: the sentinel's and incident replay's
+pattern checks (``RegistryClient`` applies the bound before any request), the console's bulk-action list (the pattern
+only: one over-long entry is refused for that agent by the kill switch and does not stop the others), the
+compliance crosswalk's query bound (longer) and ``tools/renew_token.py`` (the services apply the bound)."""
 
 from __future__ import annotations
 

@@ -54,3 +54,41 @@ def test_a_revoke_row_is_keyed_only_by_an_id_inside_the_rule(tmp_path, monkeypat
     assert r.status_code == 200, r.text
     assert r.json()["revoked"] is True
     assert ledger.rows == [("delegation.revoke", keyed)]
+
+
+class MintRegistry:
+    def __init__(self, record):
+        self.record, self.calls = record, []
+
+    def require_active_agent(self, agent_id):
+        self.calls.append(agent_id)
+        return dict(self.record)
+
+
+def _mint_app(tmp_path, monkeypatch, record):
+    for name in (oa.ENV_REGISTRY, oa.ENV_REQUIRE, "FIELD_DOA_ROSTER"):
+        monkeypatch.delenv(name, raising=False)
+    store, ledger, registry = TokenStore(tmp_path / "t.sqlite3"), Ledger(), MintRegistry(record)
+    return TestClient(create_app(store=store, ledger=ledger, registry=registry)), store, ledger, registry
+
+
+def _body(agent_id):
+    return {"agent_id": agent_id, "granted_by": "Grantor", "scope": ["act"], "ttl_seconds": 60}
+
+
+@pytest.mark.parametrize("agent_id", INVALID)
+def test_a_mint_for_an_id_outside_the_rule_reaches_no_registry_ledger_or_store(tmp_path, monkeypatch, agent_id):
+    client, store, ledger, registry = _mint_app(tmp_path, monkeypatch, {"agent_id": "record-agent"})
+    r = client.post("/tokens", json=_body(agent_id))
+    assert r.status_code == 422, r.text
+    assert registry.calls == [] and ledger.rows == [] and store.count() == 0
+
+
+@pytest.mark.parametrize("record,keyed", [({"agent_id": "record-agent"}, "record-agent"), ({}, "asked-agent"),
+                                          ({"agent_id": "Not Valid"}, "asked-agent")],
+                         ids=["record", "no-id-in-record", "record-id-outside"])
+def test_the_mint_row_is_keyed_by_the_registry_records_id(tmp_path, monkeypatch, record, keyed):
+    client, store, ledger, registry = _mint_app(tmp_path, monkeypatch, record)
+    r = client.post("/tokens", json=_body("asked-agent"))
+    assert r.status_code == 201, r.text
+    assert registry.calls == ["asked-agent"] and ledger.rows == [("delegation.mint", keyed)]

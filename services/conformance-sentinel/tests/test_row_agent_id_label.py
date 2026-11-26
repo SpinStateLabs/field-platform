@@ -10,7 +10,9 @@ from tests.conftest import AGENT_ID
 
 #: sent id -> the id its row is keyed by
 CASES = [("Org/agent", "Org/agent"), ("ABC", "ABC"), ("a?b=1", None), ("a b", None), ("a" + chr(10) + "b", None),
-         ("a" + chr(0x202E) + "b", None), ("A" * 65, None), ("a" * 129, None)]
+         ("a" + chr(0x202E) + "b", None), ("A" * 65, None), ("a" * 129, None),
+         # inside the rule and longer than a printable label may be: keyed by the id itself
+         ("a" * 65, "a" * 65), ("a" * 128, "a" * 128)]
 
 
 def _check(stack, agent_id):

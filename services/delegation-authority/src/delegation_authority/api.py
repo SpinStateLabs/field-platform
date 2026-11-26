@@ -456,7 +456,8 @@ def create_app(
             except operator_auth.OperatorRefused as exc:
                 raise op_health.http_refusal(exc, action="revoke", path=f"/tokens/{token_id}/revoke",
                                              headers={}, claimed=auth.claimed,
-                                             agent_id=token.agent_id) from None
+                                             agent_id=(token.agent_id if registry_id_ok(token.agent_id)
+                                                       else None)) from None
         # C-625 (reviewer C-527 F-C527-4) and C-725 (reviewer C-701): the check, the ledger event and the write are one
         # step per token in this process (a per-token lock, re-read under it; the write is conditional on the row still
         # being unrevoked, `save_revoked`). GUARANTEE, stated as it holds: at most one revocation id per token, and it

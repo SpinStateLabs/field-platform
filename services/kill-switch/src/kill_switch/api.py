@@ -60,7 +60,6 @@ import logging
 import re
 import threading
 import time
-import unicodedata
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -77,6 +76,7 @@ from field_core.buildinfo import build_sha
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from field_core.ids import REGISTRY_ID_MAX_LENGTH, REGISTRY_ID_RE, registry_id_ok
+from field_core.stop_text import require_operator, require_reason
 from field_core.clients import (
     AgentNotRegisteredError,
     AgentRowChangedError,
@@ -124,6 +124,12 @@ _URLISH = re.compile(r"\b[a-zA-Z][a-zA-Z0-9+.-]*://\S+")
 MAX_HEARTBEAT_ID_LEN = REGISTRY_ID_MAX_LENGTH
 
 
+def _reason_header(reason: str) -> str:
+    """The reason as the halt signal's header value: capped, then percent-encoded, so no line break or non-ASCII byte
+    reaches the header whatever the text holds."""
+    return quote(reason[:REASON_HEADER_MAX], safe="")
+
+
 class KillRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -138,14 +144,16 @@ class KillRequest(BaseModel):
             raise ValueError("must not be blank")
         return value
 
+    @field_validator("operator")
+    @classmethod
+    def _writable_operator(cls, value: str) -> str:
+        return require_operator(value)
+
     @field_validator("reason")
     @classmethod
     def _one_plain_line(cls, value: str) -> str:
-        """No control, invisible-format, line- or paragraph-separator character (the force-gateway's header rule): the
-        reason is written to ledger rows and shown to people."""
-        if any(unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp") for ch in value):
-            raise ValueError("must be one line without control or invisible format characters")
-        return value
+        """``field_core.stop_text``: the reason is written to ledger rows and shown to people."""
+        return require_reason(value)
 
 
 class EndpointResult(BaseModel):
@@ -714,7 +722,7 @@ def create_app(
 
         headers = {ORIGIN_HEADER: ORIGIN_VALUE}
         if reason:
-            headers[REASON_HEADER] = quote(reason[:REASON_HEADER_MAX], safe="")
+            headers[REASON_HEADER] = _reason_header(reason)
         t0 = time.perf_counter()
         try:
             resp = _endpoint_http().request(

@@ -41,6 +41,7 @@ from field_core.http import get_retrying_once, pooled_limits
 from field_core.http_errors import install_validation_handler
 from field_core.ids import REGISTRY_ID_MAX_LENGTH, REGISTRY_ID_PATTERN, registry_id_ok
 from field_core.buildinfo import build_sha
+from field_core.stop_text import require_operator, require_reason
 from field_core.clients import (
     CallerSigner,
     LedgerUnreachableError,
@@ -210,7 +211,22 @@ MAX_OPERATOR_CHARS = 200
 MAX_REASON_CHARS = 1000
 
 
-class OperatorAction(BaseModel):
+class _StopText(BaseModel):
+    """The two texts of a stop action, held at the console to the kill-switch's character rules
+    (``field_core.stop_text``): a value it would refuse is one 422 here and nothing is sent."""
+
+    @field_validator("operator", check_fields=False)
+    @classmethod
+    def _writable_operator(cls, value: str) -> str:
+        return require_operator(value)
+
+    @field_validator("reason", check_fields=False)
+    @classmethod
+    def _one_plain_line(cls, value: str) -> str:
+        return require_reason(value)
+
+
+class OperatorAction(_StopText):
     model_config = ConfigDict(extra="forbid")
 
     operator: str = Field(min_length=1, max_length=MAX_OPERATOR_CHARS, description="Human operator — recorded")
@@ -227,7 +243,7 @@ class ResolveAction(BaseModel):
 AGENT_ID_RE = re.compile(REGISTRY_ID_PATTERN)
 
 
-class BulkAction(BaseModel):
+class BulkAction(_StopText):
     model_config = ConfigDict(extra="forbid")
 
     action: Literal["kill", "drill", "revive"]
@@ -246,7 +262,7 @@ class BulkAction(BaseModel):
         return ids
 
 
-class FleetHalt(BaseModel):
+class FleetHalt(_StopText):
     model_config = ConfigDict(extra="forbid")
 
     operator: str = Field(min_length=1, max_length=MAX_OPERATOR_CHARS, description="Human operator — recorded")
