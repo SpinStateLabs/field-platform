@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from field_core.guarded_operator import perimeter_headers
 from field_core.http import get_retrying_once, pooled_limits
+from field_core.ids import REGISTRY_ID_RE
 
 import os
 import re
@@ -233,7 +234,7 @@ AGENT_ID_MAX = 200
 #: not ask the registry about it (S5-15; RegistryClient refuses such an id too, before it builds a URL, and also
 #: refuses one over its own length bound). It still replays the ledger trail (ledger-only ids such as the
 #: federation broker's 'Org/agent' have events but no registry record).
-_REGISTRY_ID = re.compile(r"[a-z0-9][a-z0-9._-]*")
+_REGISTRY_ID = REGISTRY_ID_RE
 
 
 class UpstreamUnavailable(Exception):

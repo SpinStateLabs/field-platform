@@ -75,7 +75,8 @@ from field_core.http_errors import install_validation_handler
 from field_core.buildinfo import build_sha
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from field_core.ids import registry_id_ok
+from field_core.ids import REGISTRY_ID_MAX_LENGTH, REGISTRY_ID_RE, registry_id_ok
+from field_core.stop_text import require_operator, require_reason
 from field_core.clients import (
     AgentNotRegisteredError,
     AgentRowChangedError,
@@ -120,7 +121,13 @@ _URLISH = re.compile(r"\b[a-zA-Z][a-zA-Z0-9+.-]*://\S+")
 
 
 #: longest agent id the POST /heartbeat route will record (a row per distinct id).
-MAX_HEARTBEAT_ID_LEN = 128
+MAX_HEARTBEAT_ID_LEN = REGISTRY_ID_MAX_LENGTH
+
+
+def _reason_header(reason: str) -> str:
+    """The reason as the halt signal's header value: capped, then percent-encoded, so no line break or non-ASCII byte
+    reaches the header whatever the text holds."""
+    return quote(reason[:REASON_HEADER_MAX], safe="")
 
 
 class KillRequest(BaseModel):
@@ -136,6 +143,17 @@ class KillRequest(BaseModel):
         if not value.strip():
             raise ValueError("must not be blank")
         return value
+
+    @field_validator("operator")
+    @classmethod
+    def _writable_operator(cls, value: str) -> str:
+        return require_operator(value)
+
+    @field_validator("reason")
+    @classmethod
+    def _one_plain_line(cls, value: str) -> str:
+        """``field_core.stop_text``: the reason is written to ledger rows and shown to people."""
+        return require_reason(value)
 
 
 class EndpointResult(BaseModel):
@@ -421,7 +439,7 @@ def _scrub(text: Any, limit: int = 200) -> str:
 
 #: B-RT4 F1: bounds on what POST /heartbeat/{agent_id} may store. The id rule is the registry's own.
 MAX_UNREGISTERED_HEARTBEATS = 500      # MAX_HEARTBEAT_ID_LEN (S4-4) is defined once, above
-_HEARTBEAT_ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]*")
+_HEARTBEAT_ID_RE = REGISTRY_ID_RE
 
 #: Path shapes served by THIS service. The recursion guard matches the shape,
 #: not the agent id: a manifest that points at ``/heartbeat/<other-agent>``
@@ -704,7 +722,7 @@ def create_app(
 
         headers = {ORIGIN_HEADER: ORIGIN_VALUE}
         if reason:
-            headers[REASON_HEADER] = quote(reason[:REASON_HEADER_MAX], safe="")
+            headers[REASON_HEADER] = _reason_header(reason)
         t0 = time.perf_counter()
         try:
             resp = _endpoint_http().request(

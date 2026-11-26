@@ -10,6 +10,8 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator, model_validator
 
+from field_core.ids import REGISTRY_ID_PATTERN
+
 from agent_registry.redaction import fingerprint, redact, redact_text
 
 
@@ -39,7 +41,7 @@ class AgentStatus(str, Enum):
 class AgentRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    agent_id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9._-]*$")
+    agent_id: str = Field(min_length=1, pattern=REGISTRY_ID_PATTERN)
     name: str = Field(min_length=1)
     owner: str = Field(min_length=1, description="Human owner — never an agent")
     domain: str = Field(
@@ -138,7 +140,7 @@ def _new_domain(v: str | None) -> str | None:
 class AgentCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    agent_id: str = Field(min_length=1, max_length=MAX_AGENT_ID_LENGTH, pattern=r"^[a-z0-9][a-z0-9._-]*$")
+    agent_id: str = Field(min_length=1, max_length=MAX_AGENT_ID_LENGTH, pattern=REGISTRY_ID_PATTERN)
     name: Name
     owner: Owner
     domain: Domain = "general"

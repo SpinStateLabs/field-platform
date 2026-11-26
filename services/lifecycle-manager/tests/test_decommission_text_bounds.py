@@ -48,6 +48,12 @@ def test_constants_match_kill_request_limits():
     ("Don", "", "reason"),
     ("Don", " \n", "reason"),
     ("Don", "r" * 977, "976"),
+    ("Don" + chr(0xD800), "ok", "--by"),
+    ("Don", "two" + chr(10) + "lines", "--reason"),
+    ("Don", "a" + chr(9) + "tab", "--reason"),
+    ("Don", "zero" + chr(0x200D) + "width", "--reason"),
+    ("Don", "line" + chr(0x2028) + "separator", "--reason"),
+    ("Don", "lone" + chr(0xD800), "--reason"),
 ])
 def test_refused_before_any_client_call(by, reason, needle):
     eng, spy = _engine()
