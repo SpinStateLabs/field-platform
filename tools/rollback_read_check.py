@@ -28,7 +28,6 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable
 
-DEFAULT_OLD = "6c1f9aa6"   # the release both estates run since 2026-11-26 (was cb7a94f8)
 LEDGER_REL = Path("ledger") / "events.jsonl"
 SINCE, UNTIL = "2000-01-01T00:00:00Z", "2100-01-01T00:00:00Z"
 AGENT = "rollback-check-agent"
@@ -368,7 +367,7 @@ def role_read(tree: str, work: Path, types: list[str]) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Can the old release read a ledger written by the new one?")
     parser.add_argument("--repo", default=".", help="field-platform git checkout (read only)")
-    parser.add_argument("--old", default=DEFAULT_OLD, help=f"release to roll back to (default {DEFAULT_OLD})")
+    parser.add_argument("--old", help="release a rollback would return to (required; there is no default)")
     parser.add_argument("--new", default="origin/main", help="release being deployed (default origin/main)")
     parser.add_argument("--python", default=sys.executable, help="interpreter with the services' dependencies")
     parser.add_argument("--json", help="also write the full result to this file")
@@ -385,6 +384,9 @@ def main() -> int:
         sys.path[:] = [p for p in sys.path if not p or Path(p).resolve() != here]
         role = role_write if args.role == "write" else role_read
         return role(args.tree, Path(args.work), json.loads(args.types))
+    if not args.old:
+        # A default release goes stale after every deploy and would answer the wrong question with PASS: name it.
+        parser.error("--old is required: the SHA of the release a rollback would return to")
     try:
         return run(args)
     except (subprocess.SubprocessError, OSError) as exc:
