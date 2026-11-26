@@ -90,7 +90,7 @@ def _records(tmp_path, *, g22=True, alerts=True):
         rec.append("alerts_proven", ok=True, sha8=SHA[:8])
     if g22:
         rec.append("gate", gate="G22", ok=True, sha8=SHA[:8])
-    rec.append("gate", gate="G18", ok=True, sha8=SHA[:8])    # G25 (rebuild of PR 838): Stage 2 also needs G18
+    rec.append("gate", gate="G18", ok=True, sha8=SHA[:8], window_hours=30.0, window_end=1_790_000_000, services=8)    # G25 (rebuild of PR 838): Stage 2 also needs G18
     return rec
 
 
@@ -305,3 +305,50 @@ def test_the_module_holds_no_address_command_or_secret():
     for needle in ("http://", "https://", "subprocess", "os.system", "FIELD_API_KEY", "getenv", "environ"):
         assert needle not in text, needle
     json.dumps(sorted(sys.modules["stage2_driver"].__dict__.keys()), default=str)
+
+
+# ------------------------------------------------------------------ B-1054-ARM-RACE: the armed check runs under the run lock
+
+
+def _lock_held(rec):
+    """True when another holder has the run lock (a second _RunLock on the same file is refused)."""
+    try:
+        with sc._RunLock(rec.path):
+            return False
+    except sc.Refused:
+        return True
+
+
+def test_the_already_armed_check_runs_while_the_run_lock_is_held(tmp_path):
+    rec = _records(tmp_path)
+    seen: list[bool] = []
+
+    class Probe(FakeEstate):
+        def override_present(self):
+            seen.append(_lock_held(rec))
+            return super().override_present()
+
+    _run(rec, Probe())
+    assert seen and seen[0] is True                     # the FIRST look at the override is already under the lock
+
+
+def test_a_stalled_run_cannot_rearm_and_its_rollback_cannot_disarm_another_runs_stage2(tmp_path):
+    """Run B reads "not armed"; run A (free to run only while B does not hold the lock) arms Stage 2 in that gap; B then
+    proceeds and its abort rolls back with delete_override, disarming A. Under the lock A cannot get into the gap."""
+    rec = _records(tmp_path)
+
+    class Racy(FakeEstate):
+        a_armed = False
+
+        def override_present(self):
+            if not self.a_armed and not _lock_held(rec):
+                self.a_armed, self.override, self.mode_now = True, True, "enforce"   # run A completes its arm here
+                return False                                                          # ...after B already read False
+            return super().override_present()
+
+    est = Racy(bad_mode_after_up=True)                  # B's own arm fails its mode check, so B rolls back
+    try:
+        _run(rec, est)
+    except sc.Refused:
+        pass
+    assert not (est.a_armed and "delete_override" in est.calls)     # B never deletes the override run A wrote

@@ -25,7 +25,7 @@ from field_core.http_errors import install_validation_handler
 from field_core.buildinfo import build_sha
 from pydantic import BaseModel, Field, StrictBool, TypeAdapter, field_validator, model_serializer
 
-from field_core.ledger import ChainVerification, LedgerEvent, reject_non_finite
+from field_core.ledger import ChainVerification, LedgerEvent, reject_non_finite, reject_too_deep
 from sealed_ledger import __version__, operator_observer
 from sealed_ledger.retention import RetentionCheck, retention_check
 from sealed_ledger.store import (
@@ -133,6 +133,7 @@ class AppendRequest(BaseModel):
     @field_validator("payload")
     @classmethod
     def _payload_is_finite(cls, value: dict[str, Any]) -> dict[str, Any]:
+        reject_too_deep(value)    # B101: deeper than the serializer's own limit was a bare 500 (nothing written); now a 422
         reject_non_finite(value)  # NaN/Infinity would seal an event that cannot re-verify
         return value
 
@@ -621,18 +622,20 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
             # S7-25 (rebuild of PR 873): Path()/mkdir raise ValueError (a bare 500) on these
             raise HTTPException(422, "out_dir must be a path of at most 4096 characters, "
                                 "without NUL bytes or unencodable characters")
-        target = Path(out_dir) if out_dir else s.path.parent / "exports"
-        if operator_auth.mode() != operator_auth.OFF:
-            # Armed: the bundle may only land under the export root
-            # (FIELD_EXPORT_ROOT, default <ledger dir>/exports). No absolute
-            # path outside it, no traversal.
-            root = Path(os.environ.get("FIELD_EXPORT_ROOT", "").strip()
-                        or (s.path.parent / "exports")).resolve()
-            resolved = (target if target.is_absolute() else root / target).resolve()
-            if resolved != root and root not in resolved.parents:
-                raise HTTPException(422, "out_dir must be inside the export root "
-                                    "(FIELD_EXPORT_ROOT)")
-            target = resolved
+        # In every operator mode, OFF included (Backlog B10), the bundle may only land under the export root
+        # (FIELD_EXPORT_ROOT, default <ledger dir>/exports): no absolute path outside it, no traversal. A relative
+        # out_dir is joined to the root; no out_dir is the root itself. Before B10 an unarmed ledger wrote to any
+        # path the process could write, reachable by any perimeter-secret holder.
+        root = Path(os.environ.get("FIELD_EXPORT_ROOT", "").strip()
+                    or (s.path.parent / "exports")).resolve()
+        if out_dir:
+            given = Path(out_dir)
+            target = (given if given.is_absolute() else root / given).resolve()
+        else:
+            target = root
+        if target != root and root not in target.parents:
+            raise HTTPException(422, "out_dir must be inside the export root "
+                                "(FIELD_EXPORT_ROOT)")
 
         def run() -> Response:
             return _json(export_json, s.export(

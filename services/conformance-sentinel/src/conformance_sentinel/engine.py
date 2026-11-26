@@ -35,7 +35,10 @@ from field_core.clients import (
     RegistryClient,
 )
 from field_core.conformance import ConformanceVerdict, Decision
+from field_core.http import get_retrying_once, pooled_limits
+from field_core.ids import REGISTRY_ID_RE, registry_id_ok
 from field_core.ledger_context import correlation_context
+from field_core.operator_health import NOT_SHOWN, shown_label
 
 from conformance_sentinel.judge import injection_screen
 from conformance_sentinel.mode import SentinelMode
@@ -50,9 +53,23 @@ CONTEXT_MAX_KEYS = 50
 CONTEXT_MAX_BYTES = 16 * 1024
 
 #: The registry's own id pattern (agent_registry.models). An id outside it cannot be registered, so it is answered as
-#: R.unregistered WITHOUT a registry call: RegistryClient builds f"{base}/agents/{agent_id}" unquoted, and an id like
-#: 'x/../health' or 'a?b=1' would otherwise address another route.
-_REGISTRY_ID = re.compile(r"[a-z0-9][a-z0-9._-]*")
+#: R.unregistered WITHOUT a registry call (RegistryClient refuses such an id too, before it builds a URL, and also
+#: refuses one over its own length bound).
+_REGISTRY_ID = REGISTRY_ID_RE
+
+
+def _row_agent_id(agent_id: str) -> str | None:
+    """The agent id a ledger row is keyed by: the request's own inside the registry's id rule; otherwise a short
+    printable label of it (``shown_label``), or none."""
+    if registry_id_ok(agent_id):
+        return agent_id
+    label = shown_label(agent_id)
+    return None if label == NOT_SHOWN else label
+
+
+def _shown_id(agent_id: str) -> str:
+    """The id as a verdict's reason quotes it: as sent inside the rule, else its label or the not-shown marker."""
+    return agent_id if registry_id_ok(agent_id) else str(shown_label(agent_id))
 
 
 class CheckRequest(BaseModel):
@@ -160,7 +177,8 @@ class SpendStatusClient:
         if self._client is None:
             import httpx
 
-            self._client = httpx.Client(timeout=5.0, headers=perimeter_headers())
+            # B16: idle connections expire before the governor's keep-alive closes them
+            self._client = httpx.Client(timeout=5.0, headers=perimeter_headers(), limits=pooled_limits())
 
     def status(self, agent_id: str, *, action: str | None = None) -> dict[str, Any] | None:
         """None means 'no cap configured' (404) — treated as ungoverned-spend,
@@ -168,10 +186,10 @@ class SpendStatusClient:
         ``action`` (keyword) asks the governor to include that action's rate
         windows (``?action=``); the judge gate calls without it."""
         if action is None:
-            resp = self._client.get(f"{self._base}/status/{_seg(agent_id)}")
+            resp = get_retrying_once(self._client, f"{self._base}/status/{_seg(agent_id)}")
         else:
-            resp = self._client.get(f"{self._base}/status/{_seg(agent_id)}",
-                                    params={"action": action})
+            resp = get_retrying_once(self._client, f"{self._base}/status/{_seg(agent_id)}",
+                                     params={"action": action})
         if resp.status_code == 404:
             return None
         if resp.status_code != 200:
@@ -194,8 +212,8 @@ class SpendStatusClient:
 
     def totals_since(self, agent_id: str, since: str) -> dict[str, Any] | None:
         """Spend since ``since`` (``GET /totals``); None when uncapped (404)."""
-        resp = self._client.get(f"{self._base}/totals/{_seg(agent_id)}",
-                                params={"since": since})
+        resp = get_retrying_once(self._client, f"{self._base}/totals/{_seg(agent_id)}",
+                                 params={"since": since})
         if resp.status_code == 404:
             return None
         if resp.status_code != 200:
@@ -226,7 +244,9 @@ class DelegationIntrospectClient:
         if self._client is None:
             import httpx
 
-            self._client = httpx.Client(timeout=5.0, headers=perimeter_headers())
+            # B16: idle connections expire before delegation's keep-alive closes them. POST /introspect is not
+            # retried: only idempotent GETs are (field_core.http.get_retrying_once)
+            self._client = httpx.Client(timeout=5.0, headers=perimeter_headers(), limits=pooled_limits())
 
     def introspect(self, token_id: str) -> dict[str, Any]:
         resp = self._client.post(
@@ -310,7 +330,7 @@ class SentinelEngine:
                         "mode": "log_only",
                         **caller,
                     },
-                    agent_id=req.agent_id,
+                    agent_id=_row_agent_id(req.agent_id),
                 )
             except Exception as drop:
                 self._note_drop(shadow_type, drop)
@@ -362,7 +382,7 @@ class SentinelEngine:
                     "reasons": reasons,
                     **caller,
                 },
-                agent_id=req.agent_id,
+                agent_id=_row_agent_id(req.agent_id),
             )
         except Exception as exc:
             if decision is Decision.ALLOW and self.mode is SentinelMode.ENFORCE:
@@ -453,7 +473,7 @@ class SentinelEngine:
                     "input_tokens": jv.input_tokens,
                     "output_tokens": jv.output_tokens,
                 },
-                agent_id=req.agent_id,
+                agent_id=_row_agent_id(req.agent_id),
             )
         except Exception as drop:
             self._note_drop("sentinel.judge", drop)
@@ -511,7 +531,7 @@ class SentinelEngine:
                     payload={"action": req.action, "shadowed": shadowed,
                              "error": " ".join(str(exc).split())[:300],
                              **_caller_payload(req)},
-                    agent_id=req.agent_id,
+                    agent_id=_row_agent_id(req.agent_id),
                 )
             except Exception as drop:
                 self._note_drop("sentinel.metering_gap", drop)
@@ -603,18 +623,20 @@ class SentinelEngine:
             # same verdict as the registry's 404, without sending this text into a URL path
             return self._verdict(
                 req, Decision.BLOCK, "R.unregistered",
-                [f"agent '{req.agent_id}' is not in the registry"],
+                [f"agent '{_shown_id(req.agent_id)}' is not in the registry"],
             )
         try:
             record = self.registry.get_agent(req.agent_id)
         except AgentNotRegisteredError:
             return self._verdict(
                 req, Decision.BLOCK, "R.unregistered",
-                [f"agent '{req.agent_id}' is not in the registry"],
+                [f"agent '{_shown_id(req.agent_id)}' is not in the registry"],
             )
         except RegistryUnreachableError as exc:
+            # B16: still a BLOCK (fail closed), but not "unregistered": the identity could not be established,
+            # which is a different fact from "the registry says no such agent" and is read differently by an operator.
             return self._verdict(
-                req, Decision.BLOCK, "R.unregistered",
+                req, Decision.BLOCK, "R.registry_unreachable",
                 [f"registry unreachable — cannot establish identity: {_why(exc)}"],
             )
         status = record.get("status")

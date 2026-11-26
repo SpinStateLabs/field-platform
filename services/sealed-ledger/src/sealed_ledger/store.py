@@ -51,6 +51,7 @@ import json
 import logging
 import os
 import re
+import stat
 import threading
 import time
 from dataclasses import dataclass, field
@@ -66,7 +67,7 @@ from field_core.ledger import (
     LedgerEvent,
     ReadOnlyLedgerEvent,
     compute_event_hash,
-    make_event,
+    make_event, reject_non_finite, reject_too_deep,    # (one line: the env-var anchors in docs/ENVIRONMENT.md count lines)
     verify_chain,
 )
 
@@ -645,15 +646,38 @@ def exists_strict(path: str | Path) -> bool:
         return False
 
 
+class JsonTooDeep(ValueError):
+    """A line nested deeper than ``JSON_MAX_DEPTH``: refused by an explicit scan, so the verdict does not depend on the
+    interpreter's stack-derived recursion limit (CPython 3.14). The message is fixed, never segment content."""
+
+    def __init__(self) -> None:
+        super().__init__(f"nesting is deeper than {JSON_MAX_DEPTH} levels")
+
+
+def _load_event(line: str) -> LedgerEvent:
+    if json_depth_exceeds(line):
+        raise JsonTooDeep()
+    return LedgerEvent.model_validate(json.loads(line))
+
+
 def _parse_events(data: bytes) -> list[LedgerEvent]:
     """Exactly the pre-C2 reader: universal newlines, strip, skip blanks.
-    A malformed line raises (JSONDecodeError / ValidationError) as it always did."""
+    A malformed line raises (JSONDecodeError / ValidationError / JsonTooDeep) as it always did."""
     out: list[LedgerEvent] = []
     for line in io.TextIOWrapper(io.BytesIO(data), encoding="utf-8"):
         line = line.strip()
         if line:
-            out.append(LedgerEvent.model_validate(json.loads(line)))
+            out.append(_load_event(line))
     return out
+
+
+def _unparseable_text(exc: BaseException) -> str:
+    """B87: what a verification reason says about a line that does not parse. The exception CLASS and a fixed text, never
+    its message: a pydantic ValidationError prints each offending key and value (segment content, multi-line), and
+    that text would reach a ``TAMPERED`` line. ``RecursionError`` is a deeply nested line, the same kind of break."""
+    if isinstance(exc, JsonTooDeep):    # its text is fixed (the explicit nesting cap), not segment content
+        return str(exc)
+    return f"{type(exc).__name__} (the message is not echoed)"
 
 
 def _parse_events_located(data: bytes) -> tuple[list[LedgerEvent], tuple[int, str] | None]:
@@ -666,8 +690,8 @@ def _parse_events_located(data: bytes) -> tuple[list[LedgerEvent], tuple[int, st
         if not line:
             continue
         try:
-            out.append(LedgerEvent.model_validate(json.loads(line)))
-        except ValueError as exc:  # JSONDecodeError and pydantic ValidationError
+            out.append(_load_event(line))
+        except (ValueError, RecursionError) as exc:  # JSONDecodeError, pydantic ValidationError, JsonTooDeep
             lines = [x.strip() for x in str(exc).splitlines() if x.strip()][:3]
             return out, (len(out), f"{type(exc).__name__}: {'; '.join(lines)}"[:300])
     return out, None
@@ -1010,8 +1034,8 @@ def _closed_bytes_problem(
     start, end = entry["start_index"], entry["end_index"]
     try:
         events = _parse_events(data)
-    except ValueError as exc:
-        return start, f"unparseable line: {exc}"
+    except (ValueError, RecursionError) as exc:
+        return start, f"unparseable line: {_unparseable_text(exc)}"
     res = _verify_segment(events, genesis, start)
     if not res.ok:
         return (start if res.first_break_index is None else res.first_break_index), res.reason or ""
@@ -1358,7 +1382,13 @@ def verify_closed_segment(path: str | Path) -> tuple[dict[str, Any], ChainVerifi
         return None
     n, start, end = entry["n"], entry["start_index"], entry["end_index"]
     data = read_shared(path)
-    events = _parse_events(data) if data is not None else []
+    events: list[LedgerEvent] = []
+    parse_failure: BaseException | None = None
+    if data is not None:
+        try:
+            events = _parse_events(data)
+        except (ValueError, RecursionError) as exc:
+            parse_failure = exc
 
     def brk(index: int, reason: str) -> ChainVerification:
         return ChainVerification(ok=False, length=index + 1, first_break_index=index,
@@ -1366,6 +1396,8 @@ def verify_closed_segment(path: str | Path) -> tuple[dict[str, Any], ChainVerifi
                                  archived_segments=0, verified_events=len(events),
                                  break_segment=n)
 
+    if parse_failure is not None:
+        return entry, brk(start, f"unparseable line: {_unparseable_text(parse_failure)}")
     res = _verify_segment(events, entry["genesis_prev_hash"], start)
     if not res.ok:
         return entry, brk(res.first_break_index or start, res.reason or "")
@@ -1388,6 +1420,103 @@ _SIDECAR_KEYS = ("format", "logical", "n", "file", "start_index", "end_index",
                  "closing_rotation_event_hash", "sha256", "archived_by")
 
 
+def _sidecar_int(side: dict[str, Any], key: str) -> int:
+    """A sidecar number as a real integer. The sidecar is unsigned, so ``Infinity`` / ``1e999`` (floats, and
+    ``int()`` of an infinity is OverflowError), ``2.5``, ``true`` and ``"7"`` are refused, never coerced."""
+    value = side[key]
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{key} is not an integer")
+    if not 0 <= value < _SIDECAR_INT_LIMIT:    # a 4300-digit count would make the failure text itself raise (F1)
+        raise ValueError(f"{key} is out of range")
+    return value
+
+
+#: A sidecar number is a count or an index: 0 <= value < 2**63. Anything larger is refused before it is used or printed.
+_SIDECAR_INT_LIMIT = 1 << 63
+#: A sidecar text field is printed by the CLI: it must be printable (no newline, ESC, NUL, lone surrogate: a newline in
+#: ``logical`` could forge a verifier output line) and at most this long. The hash fields are also ASCII.
+_SIDECAR_TEXT_MAX = 256
+
+
+def _sidecar_text(side: dict[str, Any], key: str, *, ascii_only: bool = False) -> str:
+    value = side[key]
+    if not isinstance(value, str):
+        raise ValueError(f"{key} is not a string")
+    if len(value) > _SIDECAR_TEXT_MAX or not value.isprintable() or (ascii_only and not value.isascii()):
+        raise ValueError(f"{key} is not a short printable string")
+    return value
+
+
+#: B1 (independent review of 2483b96e): ``logical`` and ``file`` are DERIVED from the segment's own file name, so a renamed
+#: segment and sidecar could carry any printable text into the OK line. A real name is ``events.jsonl`` and
+#: ``events-<n>.jsonl`` (both estates, ``ledger/events.jsonl``; closed_path_for adds ``-<n>``): only these characters
+#: are accepted, with room for a longer ledger file name. A name outside the set is refused with a fixed reason.
+_SIDECAR_LOGICAL_RE = re.compile(r"[A-Za-z0-9._-]{1,128}")
+_SIDECAR_FILE_RE = re.compile(r"[A-Za-z0-9._-]{1,160}")
+
+#: A real sidecar is about a kilobyte. The sidecar is unsigned input, so it is read only when it is a regular file and
+#: no larger than this (a symlink to /dev/zero or a 64 MiB pad would otherwise be read whole).
+_SIDECAR_MAX_BYTES = 1 << 20
+
+
+#: Explicit JSON nesting cap for untrusted text parsed on the verify path. CPython 3.14 derives the decoder's recursion
+#: limit from the thread's C stack (a 100000-deep list raises at an 8 MiB stack and parses at 16 MiB), so relying on
+#: RecursionError makes the result depend on the host. A real sidecar or ledger line nests a handful of levels.
+JSON_MAX_DEPTH = 500
+
+
+def json_depth_exceeds(data: bytes | str, limit: int = JSON_MAX_DEPTH) -> bool:
+    """True when ``[``/``{`` nest deeper than ``limit`` outside string literals. A linear scan, no recursion, so the
+    answer is the same on every Python and stack size. It does not validate the JSON: the decoder still does that."""
+    text = data.decode("utf-8") if isinstance(data, bytes) else data     # strict: never a different text from the parser's
+    depth = 0
+    in_str = False
+    esc = False
+    for ch in text:
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+        elif ch == '"':
+            in_str = True
+        elif ch in "[{":
+            depth += 1
+            if depth > limit:
+                return True
+        elif ch in "]}":
+            depth -= 1
+    return False
+
+
+def _read_sidecar(path: Path) -> tuple[bytes | None, str | None]:
+    """``(bytes, None)``; ``(None, None)`` when it does not exist; ``(None, reason)`` when it cannot be a sidecar (not a
+    regular file, over the size cap, or unreadable). The reason never carries the content."""
+    try:
+        if os.name == "nt":
+            fh = open_shared(path)
+        else:
+            # O_NONBLOCK: opening a FIFO with no writer would block forever here, before the regular-file check below
+            # (F3); on a regular file the flag changes nothing.
+            fh = os.fdopen(os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)), "rb")
+    except FileNotFoundError:
+        return None, None
+    except OSError as exc:  # a directory, a permission error: a failed verification, never a traceback
+        return None, f"cannot be read ({type(exc).__name__})"
+    with fh:
+        try:
+            if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
+                return None, "is not a regular file"
+            raw = fh.read(_SIDECAR_MAX_BYTES + 1)
+        except OSError as exc:
+            return None, f"cannot be read ({type(exc).__name__})"
+    if len(raw) > _SIDECAR_MAX_BYTES:
+        return None, f"is larger than {_SIDECAR_MAX_BYTES} bytes"
+    return raw, None
+
+
 def verify_segment_file(path: str | Path, public_key_pem: str | None = None) -> dict[str, Any]:
     """Verify ONE archived segment standalone from ``<file>.segment.json`` beside it.
 
@@ -1408,18 +1537,51 @@ def verify_segment_file(path: str | Path, public_key_pem: str | None = None) -> 
         "ok": False, "segment": None, "logical": None, "events": 0, "global_first": None,
         "global_last": None, "reason": None, "signature_checked": False,
     }
-    side_raw = read_shared(sidecar_path_for(p))
+    side_raw, side_bad = _read_sidecar(sidecar_path_for(p))
+    if side_bad is not None:
+        out["reason"] = f"sidecar {sidecar_path_for(p).name!r} {side_bad}"
+        return out
     if side_raw is None:
-        out["reason"] = f"no sidecar {sidecar_path_for(p).name} beside {p}"
+        out["reason"] = f"no sidecar {sidecar_path_for(p).name!r} beside {str(p)!r}"
         return out
     try:
-        side = json.loads(side_raw)
+        # Decode strictly ONCE and give the same text to the scan and the parser. json.loads(bytes) picks its own
+        # encoding (UTF-16/32 by the NUL pattern), so a scan over a different decoding could be blind to a deep run the
+        # parser then reads. A UTF-8 BOM is refused here (json.loads refuses it on a str): the writer never emits one.
+        side_text = side_raw.decode("utf-8")        # UnicodeDecodeError is a ValueError: a failed verification
+        if json_depth_exceeds(side_text):
+            raise ValueError(f"nesting is deeper than {JSON_MAX_DEPTH} levels")
+        side = json.loads(side_text)
         missing = [k for k in _SIDECAR_KEYS if k not in side]
         if missing or side["format"] != SIDECAR_FORMAT:
-            raise ValueError(f"missing {missing}" if missing else f"format {side['format']!r}")
-        n, start, end = int(side["n"]), int(side["start_index"]), int(side["end_index"])
-    except (ValueError, TypeError, KeyError) as exc:
-        out["reason"] = f"sidecar {sidecar_path_for(p).name} invalid: {exc}"
+            raise ValueError(f"missing {missing}" if missing else "format is not supported")   # never print the value (R2)
+        n, start, end = (_sidecar_int(side, k) for k in ("n", "start_index", "end_index"))
+        if n < 1 or start < 0:
+            raise ValueError("n must be at least 1 and start_index at least 0")
+        if end < start:
+            raise ValueError(f"end_index {end} is before start_index {start}")
+        for k in ("logical", "file"):
+            _sidecar_text(side, k)
+        for k in ("genesis_prev_hash", "head_hash", "sha256"):
+            _sidecar_text(side, k, ascii_only=True)
+        # The anchor is read only when a key is supplied, so its type is checked here, before the unsigned OK path: the
+        # result must not depend on whether a key was given (nor on how deep a nested value the JSON decoder accepts).
+        # A real sidecar always holds the signed rotation anchor object. null is "no anchor": still accepted unsigned
+        # (a signed check then fails: nothing to verify), as before. Anything else that is not an object is refused.
+        if side["anchor"] is not None and not isinstance(side["anchor"], dict):
+            raise ValueError("anchor is not an object")
+        # R1: ``logical`` is printed in the OK line, so it must be exactly what the writer put there: the ledger file's
+        # own name, from which ``file`` was derived (closed_path_for(logical, n)). A free-text value with spaces could
+        # otherwise read as part of the sentence ("... segment 1 of x (signed rotation anchor verified ...)") on an
+        # unsigned file.
+        logical = side["logical"]
+        if not logical or Path(logical).name != logical or closed_path_for(logical, n).name != side["file"]:
+            raise ValueError("logical is not the ledger file name that file was derived from")
+        # B1: even a consistent rename (file, sidecar and both fields) must not carry free text into the OK line
+        if _SIDECAR_LOGICAL_RE.fullmatch(logical) is None or _SIDECAR_FILE_RE.fullmatch(side["file"]) is None:
+            raise ValueError("logical and file must be plain file names (letters, digits, dot, dash, underscore)")
+    except (ValueError, TypeError, KeyError, RecursionError) as exc:
+        out["reason"] = f"sidecar {sidecar_path_for(p).name!r} invalid: {exc}"
         return out
     out.update(segment=n, logical=side["logical"], global_first=start, global_last=end)
 
@@ -1431,11 +1593,11 @@ def verify_segment_file(path: str | Path, public_key_pem: str | None = None) -> 
         return fail(f"sidecar describes {side['file']!r}, not {p.name!r}")
     data = read_shared(p)
     if data is None:
-        return fail(f"file {p} is missing (expected {end - start + 1} events)")
+        return fail(f"file {str(p)!r} is missing (expected {end - start + 1} events)")
     try:
         events = _parse_events(data)
-    except ValueError as exc:
-        return fail(f"unparseable line: {exc}")
+    except (ValueError, RecursionError) as exc:
+        return fail(f"unparseable line: {_unparseable_text(exc)}")
     out["events"] = len(events)
     if n == 1 and (start != 0 or side["genesis_prev_hash"] != GENESIS_HASH):
         return fail("segment 1 must start at global index 0 from the genesis hash")
@@ -1716,7 +1878,12 @@ class LedgerStore:
                     tail = data_open[data_open.rfind(b"\n") + 1:]
                     if tail.strip():
                         try:
-                            json.loads(tail)
+                            # decode once, scan for depth, parse that text: a deep unterminated line is refused by the
+                            # cap here (treated like any torn tail) on every stack, and no bytes reach json.loads
+                            tail_text = tail.decode("utf-8")
+                            if json_depth_exceeds(tail_text):
+                                raise JsonTooDeep()
+                            json.loads(tail_text)
                         except ValueError:
                             now = time.monotonic()
                             if torn is None or torn[0] != (len(data_open), tail):
@@ -1814,7 +1981,7 @@ class LedgerStore:
             if raw.endswith(b"\n") and data.startswith(raw):
                 try:
                     tail = _parse_events(data[len(raw):])
-                except ValueError:  # JSONDecodeError, ValidationError, UnicodeDecodeError
+                except (ValueError, RecursionError):  # JSONDecodeError, ValidationError, UnicodeDecodeError, a nested line
                     tail = None
                 if tail is not None:
                     grown = events + tuple(tail)
@@ -1824,7 +1991,7 @@ class LedgerStore:
             # reader must still raise on. On clean bytes the two parses are the same events.
             try:
                 out = _parse_events(data)
-            except ValueError:
+            except (ValueError, RecursionError):
                 events, bad = _parse_events_located(data)
                 return events, None, bad
         else:
@@ -2188,6 +2355,10 @@ class LedgerStore:
     ) -> LedgerEvent:
         if not isinstance(event_type, str) or not event_type.strip():
             raise ValueError("event_type must not be blank")  # S6-10: no writer seals an event with a blank type
+        # B101: a payload make_event would refuse never takes the writer lock or triggers the reconciliation in
+        # _ensure_fresh_locked (the checks are repeated inside make_event; this walk is O(payload), bounded)
+        reject_too_deep(payload)
+        reject_non_finite(payload)
         self._require_appendable(event_type)  # before the writer lock: nothing to undo
         with self._writer():
             self._ensure_fresh_locked()
@@ -2779,8 +2950,8 @@ class LedgerStore:
 
             try:
                 events = _parse_events(data)
-            except ValueError as exc:
-                raise refuse(f"unparseable line: {exc}") from exc
+            except (ValueError, RecursionError) as exc:
+                raise refuse(f"unparseable line: {_unparseable_text(exc)}") from exc
             res = _verify_segment(events, seg.genesis, seg.start_index)
             if not res.ok:
                 raise refuse(res.reason or "chain break")

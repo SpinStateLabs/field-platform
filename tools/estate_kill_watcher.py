@@ -16,7 +16,8 @@ so an estate kill (`POST /kill/{agent_id}`) did not stop a governed session. The
 WHAT IT DOES, per poll (each step is pinned by tools/tests/test_estate_kill_watcher.py):
 1. GET {base}{kill-prefix}/heartbeat/{agent}. A read: a poll is not a check-in and writes nothing on the estate.
    The answer is trusted only when it is HTTP 200, a JSON object naming the same agent_id, with a boolean
-   `killed`. Anything else (transport error, 4xx/5xx, redirect, malformed body, wrong agent) is "no answer".
+   `killed`. HTTP 422 (the estate rejects the agent id) counts as killed=true. Anything else (transport error,
+   another 4xx or a 5xx, redirect, malformed body, wrong agent) is "no answer".
 2. killed=true  -> create the sentinel (atomic), unless it already exists.
    killed=false -> remove the sentinel, but ONLY a file this tool wrote (first line is MARKER). A sentinel a
                    human created is left in place: a revive on the estate does not undo a human's halt.
@@ -61,7 +62,7 @@ import urllib.request
 
 MARKER = "field-estate-kill-watcher v1"
 STAMP_SUFFIX = ".alive"
-AGENT_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+AGENT_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,127}")     # field_core.ids' rule, spelled here (standard library only)
 HTTP_TIMEOUT = 5.0
 EXIT_OK, EXIT_REFUSED, EXIT_NO_ANSWER = 0, 2, 3
 
@@ -124,6 +125,8 @@ def poll(base: str, prefix: str, agent: str, secret: str | None, timeout: float)
         with _OPENER.open(urllib.request.Request(url, headers=headers, method="GET"), timeout=timeout) as resp:
             status, raw = resp.status, _read_total(resp, deadline)
     except urllib.error.HTTPError as exc:
+        if exc.code == 422:     # the estate cannot hold this agent id, so it cannot say "alive": halt
+            return True, "id rejected HTTP 422"
         return None, f"HTTP {exc.code}"
     except Exception as exc:  # the type name only: a message can carry the URL or the secret
         return None, f"transport error {type(exc).__name__}"
@@ -286,7 +289,8 @@ def settle(args) -> tuple[str, int | None]:
     else:
         raise Refused("give --sentinel or --manifest")
     if not AGENT_RE.fullmatch(args.agent):
-        raise Refused("--agent must be 1-128 characters of letters, digits, '.', '_' or '-'")
+        raise Refused("--agent must be 1-128 characters: lower-case letters, digits, '.', '_' or '-', "
+                      "starting with a letter or digit")
     if not args.base.lower().startswith(("http://", "https://")):
         raise Refused("--base must be an http(s) URL")
     if not args.kill_prefix.startswith("/") or args.kill_prefix.endswith("/") and args.kill_prefix != "/":

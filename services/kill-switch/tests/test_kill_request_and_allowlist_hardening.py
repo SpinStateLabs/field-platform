@@ -82,7 +82,7 @@ def test_the_operator_and_reason_come_back_exactly_as_sent_padding_and_case_incl
     """Review B6: a validator that returns value.strip() (or changes case) passes a bare 200 check; pin the values."""
     stack = Stack(tmp_path)
     stack.register("agent-1")
-    sent = {"operator": "  Don  HAGELL" + chr(9), "reason": chr(10) + " incident 42, RE-check " + chr(10)}
+    sent = {"operator": "  Don  HAGELL" + chr(9), "reason": "  incident 42, RE-check  "}
     r = stack.kill.post("/kill/agent-1", json=sent)
     assert r.status_code == 200, r.text
     body = r.json()
@@ -168,7 +168,9 @@ def test_a_normal_unregistered_id_still_surfaces_as_a_shadow_agent(hb_stack):
     assert store.get("ghost-agent")["status"] == "unregistered"
 
 
-def test_the_read_only_get_is_not_bounded(hb_stack):
+def test_the_read_only_get_refuses_an_id_over_the_registry_client_bound(hb_stack):
+    """the registry client refuses such an id, so the poll is a 422 (clients halt on it); a GET still never writes"""
     stack, store = hb_stack
-    assert stack.kill.get(f"/heartbeat/{'a' * 300}").status_code == 200       # a GET never writes, so no bound
-    assert store.get("a" * 300) is None
+    assert stack.kill.get(f"/heartbeat/{'a' * 128}").status_code == 200
+    assert stack.kill.get(f"/heartbeat/{'a' * 129}").status_code == 422
+    assert store.get("a" * 128) is None and store.get("a" * 129) is None

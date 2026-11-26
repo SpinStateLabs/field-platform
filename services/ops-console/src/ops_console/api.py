@@ -37,8 +37,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from field_core import operator_auth, operator_health
 from field_core.startup import warn_open
 from field_core.authn import HEADER as AUTH_HEADER, install as install_authn, shared_secret
+from field_core.http import get_retrying_once, pooled_limits
 from field_core.http_errors import install_validation_handler
+from field_core.ids import REGISTRY_ID_MAX_LENGTH, REGISTRY_ID_PATTERN, registry_id_ok
 from field_core.buildinfo import build_sha
+from field_core.stop_text import require_operator, require_reason
 from field_core.clients import (
     CallerSigner,
     LedgerUnreachableError,
@@ -161,13 +164,14 @@ class ServiceClient:
         if self._client is None:
             import httpx
 
+            # B16: idle connections expire before the upstream's keep-alive closes them
             self._client = httpx.Client(
-                base_url=self.base, timeout=10.0, headers=_console_headers()
+                base_url=self.base, timeout=10.0, headers=_console_headers(), limits=pooled_limits()
             )
 
     def get(self, path: str, **kw) -> tuple[int, Any]:
         try:
-            return _decode(self._client.get(path, **kw))
+            return _decode(get_retrying_once(self._client, path, **kw))   # B16: once more on a dead connection
         except Exception as exc:
             return 0, type(exc).__name__
 
@@ -207,7 +211,22 @@ MAX_OPERATOR_CHARS = 200
 MAX_REASON_CHARS = 1000
 
 
-class OperatorAction(BaseModel):
+class _StopText(BaseModel):
+    """The two texts of a stop action, held at the console to the kill-switch's character rules
+    (``field_core.stop_text``): a value it would refuse is one 422 here and nothing is sent."""
+
+    @field_validator("operator", check_fields=False)
+    @classmethod
+    def _writable_operator(cls, value: str) -> str:
+        return require_operator(value)
+
+    @field_validator("reason", check_fields=False)
+    @classmethod
+    def _one_plain_line(cls, value: str) -> str:
+        return require_reason(value)
+
+
+class OperatorAction(_StopText):
     model_config = ConfigDict(extra="forbid")
 
     operator: str = Field(min_length=1, max_length=MAX_OPERATOR_CHARS, description="Human operator — recorded")
@@ -221,10 +240,10 @@ class ResolveAction(BaseModel):
 
 
 #: The registry's agent id grammar (agent_registry/models.py), the only ids a bulk action may name.
-AGENT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+AGENT_ID_RE = re.compile(REGISTRY_ID_PATTERN)
 
 
-class BulkAction(BaseModel):
+class BulkAction(_StopText):
     model_config = ConfigDict(extra="forbid")
 
     action: Literal["kill", "drill", "revive"]
@@ -243,7 +262,7 @@ class BulkAction(BaseModel):
         return ids
 
 
-class FleetHalt(BaseModel):
+class FleetHalt(_StopText):
     model_config = ConfigDict(extra="forbid")
 
     operator: str = Field(min_length=1, max_length=MAX_OPERATOR_CHARS, description="Human operator — recorded")
@@ -277,7 +296,7 @@ class CheckRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # B-S11-31: bounded here because the sentinel does not bound them and the verdict lands on the ledger.
-    agent_id: str = Field(min_length=1, max_length=128)
+    agent_id: str = Field(min_length=1, max_length=REGISTRY_ID_MAX_LENGTH)
     action: str = Field(min_length=1, max_length=500)
     token_id: str | None = Field(default=None, min_length=1, max_length=200)
     irreversible: bool = False
@@ -383,6 +402,48 @@ MAX_ERROR_TEXT = 200
 
 #: the most skipped registry rows one fleet-halt answer (and its ledger row) lists
 MAX_LISTED_SKIPPED = 50
+
+#: The registry's write rule for a NEW domain (agent_registry.models._NEW_DOMAIN, backlog B80). Copied, not imported: the
+#: console does not depend on the registry package. tests/test_fleet_halt_uncovered_b80.py pins that the two are equal.
+REGISTRY_DOMAIN_RE = re.compile(r"[A-Za-z0-9]+(?:[ ._-][A-Za-z0-9]+)*")
+
+
+def _named_halt_uncovered(registry: Any, results: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
+    """B80: the agents a fleet halt that NAMED its domains cannot have reached. The registry's domain filter folds ASCII
+    case and trims spaces only, so a stored row whose domain is outside the registry's write rule (a look-alike such as
+    "fin" + zero-width space + "ance", written before the rule existed) is in no named domain's listing: the halt never
+    touches it, and the completeness check, built from that same listing, cannot see it. The registry is read ONCE, after
+    every kill was sent (it never delays one). Returned: each active row whose domain is outside the rule and whose id no
+    domain report confirmed, by id only (never the domain text; an unusable id is None), and whether the read worked. A
+    failed read cannot show the halt complete. Nothing is killed here: the operator named the domains; the fallback is a
+    halt by id or a fleet halt naming no domain."""
+    reached: set[str] = set()
+    for r in results:
+        try:
+            reached |= _result_ids(r.get("result", r.get("error"))) or set()
+        except Exception:  # noqa: BLE001 - an odd report confirms nothing
+            pass
+    try:
+        status, rows = registry.get("/agents")
+    except Exception:  # noqa: BLE001 - the halt already happened; the check just cannot be made
+        return [], False
+    if status != 200 or not isinstance(rows, list):
+        return [], False
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict) or row.get("status") in ("retired", "killed"):
+            continue
+        d = row["domain"] if row.get("domain") is not None else "general"
+        # strip(" ") exactly as the registry filter's SQLite trim() (U+0020 only): str.strip() would also drop a TAB, a LF or a
+        # no-break space, judge "finance" + NBSP conforming, and leave out the very row the listing for "finance" missed
+        if isinstance(d, str) and REGISTRY_DOMAIN_RE.fullmatch(d.strip(" ")):
+            continue
+        aid = row.get("agent_id")
+        aid = aid if registry_id_ok(aid) else None
+        if aid is not None and aid in reached:
+            continue
+        out.append({"agent_id": aid, "reason": "domain is outside the registry rule: no named halt reaches it"})
+    return out, True
 
 
 def _result_ids(data: Any) -> set[str] | None:
@@ -949,7 +1010,7 @@ def create_app(
                 aid = a.get("agent_id")
                 # a usable id is ONE valid path segment (AGENT_ID_RE, at most 128 chars): anything else (a "/" would
                 # reach the whole-domain route, C-936 F-C936-1) is reported but never used to build a URL
-                aid = aid if isinstance(aid, str) and len(aid) <= 128 and AGENT_ID_RE.fullmatch(aid) else None
+                aid = aid if registry_id_ok(aid) else None
                 # a missing key or null is the default domain; any other non-string (0, False, [], {}) or a blank or
                 # slashed string is malformed, never silently "general"
                 d = a["domain"] if a.get("domain") is not None else "general"
@@ -1008,6 +1069,8 @@ def create_app(
                 f"/kill/{_seg(aid)}", json={"operator": req.operator, "reason": req.reason}, **okw)
             good = st in (200, 201) and isinstance(data, dict) and data.get("agent_id") == aid
             agent_kills.append({"agent_id": aid, "ok": good, "status": st})
+        # B80: a halt that named its domains also reports the active agents no named halt can reach (after the kills)
+        uncovered, coverage_checked = _named_halt_uncovered(app.state.registry, results) if explicit else ([], True)
         if skipped:
             # best effort, never a reason to stop: the halt already happened
             try:
@@ -1021,11 +1084,15 @@ def create_app(
             except Exception:  # noqa: BLE001
                 pass
         return {"operator": req.operator, "domains": list(dict.fromkeys(domains)),
-                "all_ok": bad_rows == 0 and all(r["ok"] for r in results) and all(k["ok"] for k in agent_kills),
+                "all_ok": (bad_rows == 0 and all(r["ok"] for r in results) and all(k["ok"] for k in agent_kills)
+                           and coverage_checked and not uncovered),
                 "agent_errors": sum(r["counts"]["error"] for r in results if r["counts"]) + bad_rows,
                 "bad_rows": bad_rows,
                 "skipped_rows": skipped[:MAX_LISTED_SKIPPED],
                 "agent_kills": agent_kills,
+                "coverage_checked": coverage_checked,
+                "uncovered_count": len(uncovered),
+                "uncovered_rows": uncovered[:MAX_LISTED_SKIPPED],
                 "domains_failed": sum(1 for r in results if not r["ok"]),
                 "results": results}
 

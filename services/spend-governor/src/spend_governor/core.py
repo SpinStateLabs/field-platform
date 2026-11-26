@@ -21,6 +21,7 @@ from typing import Annotated, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
+from field_core.ids import REGISTRY_ID_MAX_LENGTH, REGISTRY_ID_PATTERN
 from field_core.manifest import FieldManifest
 
 _log = logging.getLogger(__name__)
@@ -175,11 +176,12 @@ def _encodable(value: str) -> str:
 Utf8Str = Annotated[str, AfterValidator(_encodable)]
 
 #: Bounds for the text a caller PUTs (S7-17); numbers as PR 585 chose for /spend and /usage.
-MAX_ID_LEN = 128
+MAX_ID_LEN = REGISTRY_ID_MAX_LENGTH
 MAX_LABEL_LEN = 200
 #: Strip, then non-blank, then bounded: the "Inbound" models below carry these. The READ
 #: models stay lax so a row stored before the bound still loads (C-316 / C-363 pattern).
-BoundedId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_ID_LEN)]
+BoundedId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_ID_LEN,
+                                             pattern=REGISTRY_ID_PATTERN)]
 BoundedLabel = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_LABEL_LEN)]
 
 

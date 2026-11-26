@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
 import os
 import urllib.parse
 from datetime import datetime, timedelta, timezone
@@ -62,6 +63,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from field_core.clients import AgentNotRegisteredError, RegistryUnreachableError
 from field_core.manifest import FieldManifest
+from field_core.stop_text import OPERATOR_RULE, REASON_RULE, operator_ok, reason_ok
 from field_core.validation import (
     ValidationStatus,
     load_manifest,
@@ -79,6 +81,8 @@ from spend_governor.provisioning import (
     load_rate_limits,
     rate_limits_from_manifest,
 )
+
+log = logging.getLogger("lifecycle_manager")
 
 
 class SweepConfig(BaseModel):
@@ -225,6 +229,11 @@ class SweepReport(BaseModel):
     reattestation_due: list[ReattestationDue]
     orphans: list[Orphan]
     escalations_written: int
+    ledger_notes_dropped: int = Field(
+        default=0,
+        description="Ledger notes of this sweep whose append failed (logged by exception type). A default, so a "
+        "last_sweep.json written before S9-10 still validates.",
+    )
     retention_policy: RetentionFinding | None = Field(
         default=None,
         description="None = the retention check was not configured, or came back ok. "
@@ -260,6 +269,16 @@ class SweepReport(BaseModel):
 class LifecycleError(Exception):
     """A transition refused before it changed anything. Carries the message
     the CLI prints; the caller exits non-zero and nothing was created."""
+
+
+class SweepUpstreamError(LifecycleError):
+    """A sweep could not read the registry or the delegation service (S9-10). ``detail`` is fixed text naming the
+    step plus a status code or an exception class name, never any text the upstream sent; POST /sweep answers it as a
+    502 and the scheduled tick records it."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(detail)
+        self.detail = detail
 
 
 # The kill-switch's KillRequest bounds (operator <= 200, reason <= 1000); the
@@ -702,8 +721,36 @@ class LifecycleEngine:
         try:
             self.ledger.append(event_type, payload=payload, agent_id=agent_id)
             return 1
-        except Exception:
+        except Exception as exc:
+            # the exception TYPE only (its text can carry a URL); the sweep counts the drop in the report (S9-10)
+            log.warning("lifecycle ledger note %s dropped (%s)", event_type, type(exc).__name__)
             return 0
+
+    def _list_agents(self) -> list[dict[str, Any]]:
+        try:
+            return self.registry.list_agents()
+        except RegistryUnreachableError:
+            raise SweepUpstreamError("registry listing failed: unreachable") from None
+
+    def _list_tokens(self) -> list[dict[str, Any]]:
+        """The delegation token list, or a SweepUpstreamError naming the step. A bad answer must never read as "no tokens"."""
+        what = "delegation token listing failed"
+        try:
+            resp = self.delegation.get("/tokens")
+        except Exception as exc:
+            raise SweepUpstreamError(f"{what}: unreachable ({type(exc).__name__})") from None
+        if hasattr(resp, "status_code"):
+            if resp.status_code != 200:
+                raise SweepUpstreamError(f"{what}: HTTP {resp.status_code}")
+            try:
+                body = resp.json()
+            except Exception as exc:
+                raise SweepUpstreamError(f"{what}: the answer is unreadable ({type(exc).__name__})") from None
+        else:
+            body = resp
+        if not isinstance(body, list) or not all(isinstance(t, dict) for t in body):
+            raise SweepUpstreamError(f"{what}: the answer is not a list of objects")
+        return body
 
     def sweep(
         self,
@@ -728,13 +775,18 @@ class LifecycleEngine:
         roster = {s for entry in entries for s in entry.match_strings()}
         roster_size = len({entry.owner.lower() for entry in entries})
 
-        agents: list[dict[str, Any]] = self.registry.list_agents()
-        tokens_resp = self.delegation.get("/tokens")
-        tokens: list[dict[str, Any]] = (
-            tokens_resp.json() if hasattr(tokens_resp, "json") else tokens_resp
-        )
+        agents: list[dict[str, Any]] = self._list_agents()
+        tokens: list[dict[str, Any]] = self._list_tokens()
 
         escalations = 0
+        dropped = 0
+
+        def note(event_type: str, payload: dict, agent_id: str | None) -> int:
+            nonlocal dropped
+            wrote = self._ledger_note(event_type, payload, agent_id)
+            if self.ledger is not None and not wrote:
+                dropped += 1
+            return wrote
         unreadable: list[UnreadableTimestamp] = []
 
         # 1. Expiring authorities.
@@ -756,7 +808,7 @@ class LifecycleEngine:
                     days_left=days_left, scope=t["scope"],
                 )
                 expiring.append(finding)
-                escalations += self._ledger_note(
+                escalations += note(
                     "lifecycle.expiring_authority",
                     {"token_id": finding.token_id, "days_left": days_left,
                      "granted_by": finding.granted_by, "operator": config.operator},
@@ -788,7 +840,7 @@ class LifecycleEngine:
                     basis=basis, attested_by=a.get("attested_by"),
                 )
                 reattest.append(finding)
-                escalations += self._ledger_note(
+                escalations += note(
                     "lifecycle.reattestation_due",
                     # Keys are ADDITIVE: `owner`, `days_stale` and `operator`
                     # keep their meaning so existing counters keep working.
@@ -810,7 +862,7 @@ class LifecycleEngine:
                 agent_id=a["agent_id"], owner=owner, status=a.get("status", "?"),
                 reason=f"owner '{owner}' not found in roster ({roster_size} entries)",
             )
-            escalations += self._ledger_note(
+            escalations += note(
                 "lifecycle.orphan",
                 {"owner": owner, "operator": config.operator,
                  "auto_kill_requested": config.auto_kill_orphans},
@@ -838,7 +890,7 @@ class LifecycleEngine:
         # 3b. Records the sweep could not judge (R-PR489 C2): a finding, not a silent skip. One escalation per
         # record, naming the record id and the field only, never the unreadable value.
         for u in unreadable:
-            escalations += self._ledger_note(
+            escalations += note(
                 "lifecycle.unreadable_timestamp",
                 {"kind": u.kind, "record_id": u.record_id, "field": u.field, "operator": config.operator},
                 u.record_id if u.kind == "agent" else None,
@@ -860,6 +912,7 @@ class LifecycleEngine:
             reattestation_due=reattest,
             orphans=orphans,
             escalations_written=escalations,
+            ledger_notes_dropped=dropped,
             retention_policy=retention_policy,
             witness=witness,
             unreadable_timestamps=unreadable,
@@ -1213,6 +1266,10 @@ class LifecycleEngine:
                 f"--reason must be non-blank and at most {MAX_DECOMMISSION_REASON} "
                 "characters — nothing decommissioned"
             )
+        if not operator_ok(by):
+            raise LifecycleError(f"--by {OPERATOR_RULE} — nothing decommissioned")
+        if not reason_ok(reason):
+            raise LifecycleError(f"--reason {REASON_RULE} — nothing decommissioned")
         now = now or datetime.now(timezone.utc)
         try:
             record = self.registry.get_agent(agent_id)
@@ -1453,5 +1510,7 @@ def render_markdown(report: SweepReport) -> str:
             add(f"- {u.kind} {_inline(u.record_id)}: `{u.field}` is not a readable time")
         add("")
     add(f"*Escalations written to ledger:* {report.escalations_written}")
+    if report.ledger_notes_dropped:
+        add(f"*Ledger notes dropped:* {report.ledger_notes_dropped} (the ledger could not be written; see the service log)")
     add(f"\n---\n*Method:* {report.method}")
     return "\n".join(lines)

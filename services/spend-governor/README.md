@@ -141,6 +141,7 @@ unchanged here).
 | One action checked AND self-reported is counted once toward the `action_limit` cap, and an action only one side saw is never lost from that count | **Enforced in code** | option A: per-action max(self, metered) for `action_limit`; unattributed rows count toward totals only (`tests/test_throttle.py` option A tests). Rate WINDOWS are different: they prefer metered rows and can under-count self-reports — an agent THROTTLED on 3/2 self-reports reads OK after one sentinel-metered row (`test_window_prefers_metered_rows_while_the_cap_takes_the_max`; LIMITS) |
 | `session` rate limits are enforced | **Declared only** (gate-only) | stored `declared_unenforced`, ledgered `spend.rate_limit_declared_unenforced`, loud CLI warning, never throttles (test); the Claude Code Enforcement Gate is what counts a session |
 | Unknown rate-limit periods and rate limits without a spend cap are refused | **Enforced in code** | `parse_rate_period` → 422 / CLI exit 1 with nothing configured; `PUT` and `GET /rate-limits` 404 for an uncapped agent; `spend_governor.provisioning` refuses before any PUT and reports a refused load as `failed`, never silently (tests) |
+| An agent id outside the registry's id rule is neither metered nor configured | **Enforced in code** | `/spend`, `/usage` and `PUT` on `/caps`, `/rate-limits` and `/policies` answer 422 before any store call or ledger row (`tests/test_agent_id_rule_routes.py`). A row already stored under such an id still reads; it cannot be replaced or metered under that id |
 | A manifest's `rate_limits` are loaded by both manifest-driven provisioning paths, `governor set-cap --from-manifest` and `lifecycle provision` | **Enforced in code** | both call `spend_governor.provisioning` (tests here; `services/lifecycle-manager/tests/test_provision_rate_limits.py`: a declared set is loaded after the cap and the window throttles after max, a re-provision without `rate_limits` clears the stale set, an unknown period or duplicate entry raises before any side effect, a governor that refuses the set or is unreachable fails the `rate_limits` step and mints nothing). A hand-written `PUT /caps` (SDK example operator, raw REST) loads none |
 | An unsupported `spend_cap.period` (`per-run`) is refused, never metered as `total` | **Enforced in code** | `UnsupportedCapPeriodError` from `SpendCapConfig.from_manifest`; `set-cap --from-manifest` exits 1 naming it and configures nothing (tests) |
 | A pre-D1 `spend.sqlite3` (7-column `spend`) opens and keeps its rows | **Enforced in code** | `_migrate_spend_attribution` at open: PRAGMA → ALTER; old rows read as `source='self'`, unattributed (`test_old_seven_column_spend_db_migrates_at_open`) |
@@ -154,6 +155,14 @@ unchanged here).
   is visible in audit as missing `spend.*` events). Mint-style fail-closed
   semantics belong to authority changes, not meters.
 - Window boundaries are UTC calendar days/months.
+- Retired agents are metered, not refused (C-757, Don's ruling on C-467): with `FIELD_REGISTRY_URL` set at
+  `serve`, a `PUT /caps` or `POST /spend` for an agent the registry reports as `retired` still succeeds, is
+  counted as `retired_agent_metered` on `/health` (every call that is looked up; a call beyond the bound below is neither counted nor logged) and logged as a fixed line that names no agent,
+  at most once per agent per 5 minutes (the next line says how many calls were held back).
+  The registry is asked off the request path, on a small dedicated executor (2 workers, at most 16 agents
+  waiting; calls for an agent already being looked up join that lookup, and a call beyond the bound is not
+  looked up), so a slow registry costs a spend a cache read, not a wait. An answer is cached for a minute and a
+  failure to answer for 10 seconds; a registry that cannot answer means no line, never a refusal. A retired identity that still reports spend means something still holds its credential.
 - A persisted database that already holds duplicate open escalations
   (written before the check-and-insert was atomic) still opens: it logs a
   warning, skips the unique index, and leaves every duplicate in the queue

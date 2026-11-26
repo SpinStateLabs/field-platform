@@ -75,6 +75,8 @@ from field_core.http_errors import install_validation_handler
 from field_core.buildinfo import build_sha
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from field_core.ids import REGISTRY_ID_MAX_LENGTH, REGISTRY_ID_RE, registry_id_ok
+from field_core.stop_text import require_operator, require_reason
 from field_core.clients import (
     AgentNotRegisteredError,
     AgentRowChangedError,
@@ -119,7 +121,13 @@ _URLISH = re.compile(r"\b[a-zA-Z][a-zA-Z0-9+.-]*://\S+")
 
 
 #: longest agent id the POST /heartbeat route will record (a row per distinct id).
-MAX_HEARTBEAT_ID_LEN = 128
+MAX_HEARTBEAT_ID_LEN = REGISTRY_ID_MAX_LENGTH
+
+
+def _reason_header(reason: str) -> str:
+    """The reason as the halt signal's header value: capped, then percent-encoded, so no line break or non-ASCII byte
+    reaches the header whatever the text holds."""
+    return quote(reason[:REASON_HEADER_MAX], safe="")
 
 
 class KillRequest(BaseModel):
@@ -135,6 +143,17 @@ class KillRequest(BaseModel):
         if not value.strip():
             raise ValueError("must not be blank")
         return value
+
+    @field_validator("operator")
+    @classmethod
+    def _writable_operator(cls, value: str) -> str:
+        return require_operator(value)
+
+    @field_validator("reason")
+    @classmethod
+    def _one_plain_line(cls, value: str) -> str:
+        """``field_core.stop_text``: the reason is written to ledger rows and shown to people."""
+        return require_reason(value)
 
 
 class EndpointResult(BaseModel):
@@ -386,6 +405,11 @@ def _exc_name(exc: BaseException) -> str:
     return type(exc.__cause__ or exc).__name__
 
 
+#: the ``reason`` of the fixed-shape row written when the ledger refused a kill-path row (4xx)
+LEDGER_FALLBACK_REASON = "the ledger refused this row; fixed-shape record"
+#: the only payload keys that row may carry; the last two are the authenticated context, present when a mode is on
+LEDGER_FALLBACK_KEYS = ("operator", "reason", "refused_status", "operator_id_authenticated", "operator_key_fp")
+
 #: status code -> fixed failure class for the kill.agent.failed ledger row
 _FAIL_CLASS = {404: "not_registered", 409: "retired", 403: "not_authorized", 502: "registry_failure"}
 
@@ -415,7 +439,7 @@ def _scrub(text: Any, limit: int = 200) -> str:
 
 #: B-RT4 F1: bounds on what POST /heartbeat/{agent_id} may store. The id rule is the registry's own.
 MAX_UNREGISTERED_HEARTBEATS = 500      # MAX_HEARTBEAT_ID_LEN (S4-4) is defined once, above
-_HEARTBEAT_ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]*")
+_HEARTBEAT_ID_RE = REGISTRY_ID_RE
 
 #: Path shapes served by THIS service. The recursion guard matches the shape,
 #: not the agent id: a manifest that points at ``/heartbeat/<other-agent>``
@@ -454,6 +478,18 @@ def _canonical_path(path: str) -> str | None:
     if any(seg in (".", "..") for seg in segments):
         return None
     return "/" + "/".join(segments) + ("/" if decoded.endswith("/") and segments else "")
+
+
+def _record_id(record: dict, path_id: str) -> str:
+    """The agent id a ledger row carries once the record is read: the record's own; the (validated) path id only if the
+    record names none inside the id rule (the ledger must be able to take the row)."""
+    rid = record.get("agent_id")
+    return rid if registry_id_ok(rid) else path_id
+
+
+def _valid_id_or_none(path_id: str | None) -> str | None:
+    """For a row written before the route has checked the id (the guard's ``operator.refused``)."""
+    return path_id if registry_id_ok(path_id) else None
 
 
 def _is_self_endpoint(path: str, agent_id: str) -> bool:
@@ -496,9 +532,9 @@ def create_app(
         return a.state.ledger
 
     op_health = operator_health.install(app, ledger_getter=_ledger_of)
-    guard_kill = op_health.guard("kill")
-    guard_revive = op_health.guard("revive")
-    guard_drill = op_health.guard("drill")
+    guard_kill = op_health.guard("kill", row_agent_id=_valid_id_or_none)
+    guard_revive = op_health.guard("revive", row_agent_id=_valid_id_or_none)
+    guard_drill = op_health.guard("drill", row_agent_id=_valid_id_or_none)
 
     def _check_authorized_operators(record: dict, action: str = "kill") -> None:
         """Phase G: the manifest's kill_switch.authorized_operators (shared
@@ -513,6 +549,15 @@ def create_app(
                 exc, action=action, path=f"/{action}/{record.get('agent_id', '')}",
                 headers={}, claimed=operator_auth.current().claimed,
                 agent_id=record.get("agent_id")) from None
+
+    def _require_agent_id(agent_id: str, action: str) -> None:
+        """/kill, /revive, /drill and GET /heartbeat refuse a path id outside the registry's id rule
+        (``field_core.ids.registry_id_ok``, at most 128 characters) before the registry is asked, a row is written or a
+        halt signal is sent. The log line never quotes the id; a refused poll (GET) is not logged."""
+        if not registry_id_ok(agent_id):
+            if action != "heartbeat":
+                log.warning("kill-switch: %s refused, the path id is outside the agent-id rule", action)
+            raise HTTPException(422, "agent_id is not a valid agent id")
 
     def _manifest_refs() -> list:
         """C-8 manifests_unresolved: every agent that can still be killed or
@@ -551,7 +596,8 @@ def create_app(
             app.state.endpoint_client = new_endpoint_client()
         return app.state.endpoint_client
 
-    app.state.ledger_note_failures = _GapCounter()
+    app.state.ledger_note_failures = _GapCounter()    # rows whose first append failed
+    app.state.ledger_rows_lost = _GapCounter()        # of those, the rows that were not written at all
     # Per-agent bookkeeping of REAL kills that went through THIS process (R-PR1025 drill restore race): a generation
     # counter bumped when a kill begins and ends, and the number of kills in flight. It is the in-process FIRST line:
     # a drill refuses to start while a kill is in flight and skips its restore when the generation moved. The real
@@ -590,6 +636,31 @@ def create_app(
             # type and exception type only, never the message, which can quote an endpoint or a key).
             app.state.ledger_note_failures.add()
             log.warning("kill-switch: ledger record not written (event %s, %s); the action already happened",
+                        event_type, type(exc).__name__)
+            status = getattr(exc, "status_code", None)
+            if isinstance(status, int) and 400 <= status < 500:
+                _ledger_fallback(event_type, agent_id, status)
+            else:
+                app.state.ledger_rows_lost.add()          # an outage: no second attempt
+
+    def _ledger_fallback(event_type: str, agent_id: str | None, status: int) -> None:
+        """The ledger REFUSED a row (4xx): something in it was not acceptable. One more attempt under the same event
+        type with a fixed shape that carries no text a request chose (the authenticated operator, never body text or a
+        claimed name; an agent id only inside the id rule), so a halt does not go unrecorded. An outage (no 4xx) gets
+        no second attempt."""
+        auth = operator_auth.current()
+        payload = operator_auth.merge_payload({
+            "operator": auth.operator_id if auth.authenticated else "(not recorded)",
+            "reason": LEDGER_FALLBACK_REASON, "refused_status": status})
+        # an allowlist: the merge also adds what a request SAID (claimed, body and on-behalf-of names), which is not
+        # part of the fixed shape, and any field it gains later stays out until it is named above
+        payload = {k: v for k, v in payload.items() if k in LEDGER_FALLBACK_KEYS}
+        try:
+            app.state.ledger.append(event_type, payload=payload,
+                                    agent_id=agent_id if registry_id_ok(agent_id) else None)
+        except Exception as exc:
+            app.state.ledger_rows_lost.add()
+            log.warning("kill-switch: the fixed-shape fallback row failed too (event %s, %s)",
                         event_type, type(exc).__name__)
 
     # -- agent-side halt signal ---------------------------------------------
@@ -651,7 +722,7 @@ def create_app(
 
         headers = {ORIGIN_HEADER: ORIGIN_VALUE}
         if reason:
-            headers[REASON_HEADER] = quote(reason[:REASON_HEADER_MAX], safe="")
+            headers[REASON_HEADER] = _reason_header(reason)
         t0 = time.perf_counter()
         try:
             resp = _endpoint_http().request(
@@ -698,7 +769,7 @@ def create_app(
         _ledger_note(
             f"kill.endpoint_{result.outcome}",
             {**base, **result.model_dump(exclude_none=True)},
-            agent_id,
+            _record_id(record, agent_id),
         )
         return result
 
@@ -710,15 +781,16 @@ def create_app(
         extra: dict | None = None,
     ) -> KillReport:
         _kill_begin(agent_id)
+        row = {"agent_id": agent_id}          # replaced by the record's id as soon as the record is read
         try:
-            return _kill_one_inner(agent_id, operator, reason, origin, extra)
+            return _kill_one_inner(agent_id, operator, reason, origin, extra, row)
         except HTTPException as exc:
             if exc.status_code != 403:        # an operator refusal is already ledgered as operator.refused
-                _ledger_kill_failed(agent_id, operator, reason, extra, exc.status_code,
+                _ledger_kill_failed(row["agent_id"], operator, reason, extra, exc.status_code,
                                     _FAIL_CLASS.get(exc.status_code, "refused"))
             raise
         except Exception as exc:
-            _ledger_kill_failed(agent_id, operator, reason, extra, 500, "unexpected:" + type(exc).__name__)
+            _ledger_kill_failed(row["agent_id"], operator, reason, extra, 500, "unexpected:" + type(exc).__name__)
             raise
         finally:
             _kill_end(agent_id)
@@ -739,6 +811,7 @@ def create_app(
         reason: str,
         origin: str | None,
         extra: dict | None,
+        row: dict,
     ) -> KillReport:
         t0 = time.perf_counter()
         try:
@@ -747,6 +820,7 @@ def create_app(
             raise HTTPException(404, f"agent '{agent_id}' not registered")
         except RegistryUnreachableError as exc:
             raise HTTPException(502, f"registry unreachable — cannot kill: {_registry_reason(exc)}")
+        row["agent_id"] = _record_id(record, agent_id)
         _check_authorized_operators(record)
         previous = record.get("status", "<unknown>")
         if previous == "retired":
@@ -762,7 +836,6 @@ def create_app(
         # drill's compare-and-set restore compares, so a kill that lands during a drill can never be mistaken for the
         # drill's own state (from this process or any other).
         failure: HTTPException | None = None
-        signal_anyway = previous == "killed"        # already marked killed: still try to stop the agent itself
         try:
             answer = _set_status(agent_id, "killed")
         except AgentNotRegisteredError:
@@ -781,10 +854,22 @@ def create_app(
                 # a 200 whose body does not say killed is NOT a kill: never report or ledger it as one. A kill we could
                 # not confirm in the registry should still try to stop the agent, so the halt signal goes out first.
                 failure = HTTPException(502, f"registry did not confirm the kill of '{agent_id}'")
-                signal_anyway = True
         if failure is not None:
-            if signal_anyway:
-                _signal_and_ledger(agent_id, record, origin, {"operator": operator, "reason": reason})
+            # B108: ANY failed or unconfirmed write still sends the halt signal (an agent left active must not also be
+            # left unsignalled: the signal is the only stop left). That includes a registry 401/403 on the PATCH (an
+            # expired or revoked service key must not leave an agent running; who may kill was decided before the
+            # write). The refusals that must send nothing (operator 403, retired 409, unknown agent 404 on the read) are
+            # raised before the write, so they never reach here. The caller still gets the write's error, never a 200,
+            # and a domain kill records it and moves on to the next agent.
+            base = {"operator": operator, "reason": reason}
+            try:
+                _signal_and_ledger(agent_id, record, origin, base)
+            except Exception:  # noqa: BLE001  (never replaces the write's error, below)
+                # an exception inside the signal path (manifest resolution, a bug) never replaces the write's error:
+                # the signal is ledgered as failed with a fixed reason (nothing from the exception), and the original
+                # failure is raised below
+                result = EndpointResult(outcome="failed", reason="signal_error")
+                _ledger_note("kill.endpoint_failed", {**base, **result.model_dump(exclude_none=True)}, row["agent_id"])
             raise failure
         # The signal is sent even on an idempotent re-kill: the flip is what
         # is idempotent, the halt signal is the whole point of repeating it.
@@ -806,7 +891,7 @@ def create_app(
             {"operator": operator, "reason": reason,
              "previous_status": previous, "elapsed_ms": report.elapsed_ms,
              **(extra or {})},
-            agent_id,
+            row["agent_id"],
         )
         return report
 
@@ -841,6 +926,7 @@ def create_app(
         return {"ok": True, "service": "kill-switch", "version": __version__,
                 "build_sha": build_sha(),
                 "ledger_note_failures": app.state.ledger_note_failures.value,
+                "ledger_rows_lost": app.state.ledger_rows_lost.value,
                 "heartbeats_refused": app.state.heartbeats_refused.value,
                 "heartbeat_ids_refused": app.state.heartbeat_ids_refused.value,
                 "allowlist_entries_unusable": _allowlist_unusable(),
@@ -850,6 +936,7 @@ def create_app(
     def kill_agent(agent_id: str, req: KillRequest, request: Request,
                    _op: Any = Depends(guard_kill)) -> KillReport:
         req.operator = operator_auth.bind_body_operator(req.operator)
+        _require_agent_id(agent_id, "kill")
         return _kill_one(
             agent_id, req.operator, req.reason,
             origin=request.headers.get(ORIGIN_HEADER),
@@ -963,6 +1050,7 @@ def create_app(
     def revive(agent_id: str, req: KillRequest,
                _op: Any = Depends(guard_revive)) -> Heartbeat:
         req.operator = operator_auth.bind_body_operator(req.operator)
+        _require_agent_id(agent_id, "revive")
         try:
             record = app.state.registry.get_agent(agent_id)
         except AgentNotRegisteredError:
@@ -986,7 +1074,7 @@ def create_app(
         except RegistryUnreachableError as exc:
             raise HTTPException(502, f"registry unreachable — cannot revive: {_registry_reason(exc)}")
         _ledger_note(
-            "kill.revive", {"operator": req.operator, "reason": req.reason}, agent_id
+            "kill.revive", {"operator": req.operator, "reason": req.reason}, _record_id(record, agent_id)
         )
         return Heartbeat(
             agent_id=agent_id, status="active", killed=False,
@@ -995,7 +1083,9 @@ def create_app(
 
     @app.get("/heartbeat/{agent_id}", response_model=Heartbeat)
     def heartbeat(agent_id: str) -> Heartbeat:
-        """Read-only. A poll is not a check-in and must never write."""
+        """Read-only. A poll is not a check-in and must never write. An id outside the rule is 422, which every agent
+        client treats as "halt", like any answer that is not an explicit ``killed: false``."""
+        _require_agent_id(agent_id, "heartbeat")
         return _heartbeat_for(agent_id)[0]
 
     @app.post("/heartbeat/{agent_id}", response_model=Heartbeat)
@@ -1098,6 +1188,7 @@ def create_app(
     def drill(agent_id: str, req: KillRequest, request: Request,
               _op: Any = Depends(guard_drill)) -> DrillReport:
         req.operator = operator_auth.bind_body_operator(req.operator)
+        _require_agent_id(agent_id, "drill")
         t0 = time.perf_counter()
         gen0, inflight0 = _kill_snapshot(agent_id)    # BEFORE the read
         with _kill_gen_lock:
@@ -1125,6 +1216,7 @@ def create_app(
             raise HTTPException(404, f"agent '{agent_id}' not registered")
         except RegistryUnreachableError as exc:
             raise HTTPException(502, f"registry unreachable — cannot drill")
+        row_id = _record_id(record, agent_id)         # every row from here names the record
         _check_authorized_operators(record, "drill")
         previous = record.get("status", "active")
         if previous == "retired":
@@ -1152,10 +1244,10 @@ def create_app(
             # A drill is optional, a kill is not: with no usable row version the drill cannot be made safe (an
             # unconditional flip could undo a kill that landed between the read and the flip), so it does not start.
             _ledger_note("kill.drill.refused",
-                         {"operator": req.operator, "reason": "registry gave no row version; drill refused"}, agent_id)
+                         {"operator": req.operator, "reason": "registry gave no row version; drill refused"}, row_id)
             raise HTTPException(409, f"registry gave no row version for agent '{agent_id}'; drill refused, nothing was changed")
         _ledger_note(
-            "kill.drill.start", {"operator": req.operator, "reason": req.reason}, agent_id
+            "kill.drill.start", {"operator": req.operator, "reason": req.reason}, row_id
         )
 
         restored = False
@@ -1176,7 +1268,7 @@ def create_app(
                 refused_row_changed = True
                 _ledger_note("kill.drill.refused", {"operator": req.operator,
                                                     "reason": "the agent's row changed while the drill started"},
-                             agent_id)
+                             row_id)
                 raise HTTPException(409, f"agent '{agent_id}' changed while the drill started — drill refused")
             flip_token = _usable_version(flip.get("updated_at") if isinstance(flip, dict) else None)
             kill_confirmed = None
@@ -1236,7 +1328,7 @@ def create_app(
                                     else "superseded by kill" if superseded
                                     else "restore read failed: the agent was left as it is (killed)" if read_failed
                                     else "superseded: status changed during the drill")},
-                        agent_id,
+                        row_id,
                     )
                 else:
                     try:
@@ -1251,7 +1343,7 @@ def create_app(
                             {"operator": req.operator, "target_status": previous, "current_status": "killed",
                              "reason": "superseded: the registry row was written after the drill's kill (a kill "
                                        "from this or another process, or any other write)"},
-                            agent_id,
+                            row_id,
                         )
                     else:
                         restored_status = app.state.registry.get_agent(agent_id).get("status") or "<unknown>"
@@ -1265,7 +1357,7 @@ def create_app(
                     "kill.drill.restore_failed",
                     {"operator": req.operator, "target_status": previous,
                      "error": _exc_name(exc)},
-                    agent_id,
+                    row_id,
                 )
 
         total = (time.perf_counter() - t0) * 1000
@@ -1283,8 +1375,8 @@ def create_app(
         _ledger_note(
             "kill.drill.complete",
             {"operator": req.operator,
-             **report.model_dump(exclude={"note"}, exclude_none=True)},
-            agent_id,
+             **report.model_dump(exclude={"note"}, exclude_none=True), "agent_id": row_id},
+            row_id,
         )
         if restore_skipped:
             # a real kill (or a retire) overlapped the drill: the agent was deliberately left as that change set it

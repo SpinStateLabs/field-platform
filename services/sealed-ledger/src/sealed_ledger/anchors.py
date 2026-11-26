@@ -61,14 +61,40 @@ class AnchorVerification(BaseModel):
     distinct_positions: int | None = None   # C-573: anchors at different chain positions (a repeat counts once)
 
 
+def _last_line_needs_newline(anchors_path: Path) -> bool:
+    """True when the file's last line is a COMPLETE record with no newline after it (it gets one before the next record is
+    appended). A last line that is a torn or invalid record raises ``LedgerCorrupt``: appending after it would glue two records
+    onto one line and make every older anchor in the file unreadable (S9-18). An absent or empty file, or one that ends in a
+    newline, needs nothing."""
+    try:
+        raw = anchors_path.read_bytes()
+    except FileNotFoundError:
+        return False
+    if not raw or raw.endswith(b"\n"):
+        return False
+    last = raw.rsplit(b"\n", 1)[-1]
+    if b"\n" not in raw and last.startswith(b"\xef\xbb\xbf"):
+        last = last[3:]                         # a Windows editor's byte order mark, as parse_anchors strips it
+    if not last.strip():
+        return False
+    try:
+        AnchorRecord.model_validate(json.loads(last.decode("utf-8")))
+    except ValueError:
+        raise LedgerCorrupt("the anchors file ends in a partial record (no final newline and not a complete anchor): "
+                            "refusing to append after it") from None
+    return True
+
+
 def append_anchor_line(anchors_path: str | Path, anchor: AnchorRecord) -> None:
     """Append one record (+ flush + fsync). A record without ``segment`` is
-    written without the key, byte-compatible with pre-C2 readers."""
+    written without the key, byte-compatible with pre-C2 readers. A last line
+    that lacks its newline is completed first, or refused when it is torn."""
     anchors_path = Path(anchors_path)
     anchors_path.parent.mkdir(parents=True, exist_ok=True)
     exclude = {"segment"} if anchor.segment is None else None
+    prefix = "\n" if _last_line_needs_newline(anchors_path) else ""
     with anchors_path.open("a", encoding="utf-8") as fh:
-        fh.write(anchor.model_dump_json(exclude=exclude) + "\n")
+        fh.write(prefix + anchor.model_dump_json(exclude=exclude) + "\n")
         fh.flush()
         os.fsync(fh.fileno())
 

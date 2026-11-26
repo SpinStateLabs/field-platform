@@ -6,6 +6,7 @@ import logging
 import threading
 from contextlib import asynccontextmanager
 
+from field_core.ids import REGISTRY_ID_PATTERN
 from field_core.startup import warn_open
 from field_core.guarded_operator import perimeter_headers
 
@@ -32,7 +33,7 @@ from compliance_crosswalk.mapping import CONTROLS, FRAMEWORKS
 #: The registry's own id grammar (agent_registry.models), or empty (no agent: unchanged). An id outside it can be no
 #: registry record, and ``collect_evidence`` puts the id into URL paths and queries (S5-17).
 AGENT_ID_MAX = 200
-AGENT_ID_PATTERN = r"^([a-z0-9][a-z0-9._-]*)?$"
+AGENT_ID_PATTERN = "^(" + REGISTRY_ID_PATTERN[1:-1] + ")?$"     # the registry's rule, or empty
 
 
 class CrosswalkRequest(BaseModel):
@@ -196,13 +197,16 @@ def create_app(stale_store: Any = None, fetcher: Any = None, every: int = 0) -> 
         """Evidence pack (ADR 07) over HTTP — a thin adapter over
         ``generate_pack`` mirroring the ``crosswalk pack`` CLI exactly; the
         CLI stays the canonical path. 422 on a blank/whitespace signer; 409
-        when active stale flags block generation (no override exists)."""
+        when active stale flags block generation (no override exists). Body
+        ``sources`` are caller-asserted: a verdict is evidenced only when this
+        run's live collection (``agent_id``) confirms it (B2)."""
         from compliance_crosswalk.evidence_pack import StalePackError, generate_pack
         from compliance_crosswalk.staleness import StaleStore
 
-        sources = req.sources or (
-            collect_evidence(req.agent_id) if req.agent_id else None
-        )
+        # B2: body sources are the caller's word, never evidence on their own. With an agent_id the live
+        # collection runs either way and is the only thing that can make a verdict "evidenced"; without one,
+        # every positive verdict from body sources is reported caller-asserted (a gap), not evidenced.
+        sources = collect_evidence(req.agent_id) if req.agent_id else None
         store = app.state.stale_store
         try:
             md, payload = generate_pack(
@@ -211,6 +215,7 @@ def create_app(stale_store: Any = None, fetcher: Any = None, every: int = 0) -> 
                 stale_store=store if store is not None else StaleStore(),
                 agent_id=req.agent_id,
                 sources=sources,
+                caller_sources=req.sources,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc))

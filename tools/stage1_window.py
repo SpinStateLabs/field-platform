@@ -47,7 +47,7 @@ GATE = "G18"
 SECONDS_PER_HOUR = 3600.0
 #: The shortest window that counts as a Stage 1 window (the runbook's Stage 2 entry states it). A shorter one, or one
 #: where the flag was forgotten, is not clean: the default is not zero.
-DEFAULT_MIN_HOURS = 24.0
+DEFAULT_MIN_HOURS = sc.G18_MIN_WINDOW_HOURS
 
 
 def _finite(value: Any) -> bool:
@@ -178,9 +178,22 @@ def main(argv: list[str] | None = None) -> int:
         except sc.Refused as exc:
             print(f"refused: {exc.reason}")
             return 2
-        span = {"window_hours": round((after["taken_at"] - before["taken_at"]) / SECONDS_PER_HOUR, 2),
-                "window_end": int(after["taken_at"]),               # when the window closed: Stage 2 judges how old it is
+        hours = (after["taken_at"] - before["taken_at"]) / SECONDS_PER_HOUR
+        if hours < sc.G18_MIN_WINDOW_HOURS:
+            # B5: the controller counts a G18 row only for a window of at least that length; never write one it ignores
+            print(f"[FAIL] the window is clean but shorter than the {sc.G18_MIN_WINDOW_HOURS:g} hours a gate {GATE} row "
+                  "needs; no row written")
+            return 1
+        span = {"window_hours": round(hours, 2),
+                # when the window closed. Nothing judges its age yet (no freshness limit at Stage 2): a follow-up row
+                "window_end": int(after["taken_at"]),
                 "services": len(before["counters"])}
+        if not sc.g18_evidence_ok(span):
+            # B5 review: the writer checks its row with the controller's own rule, so it never prints "recorded" for a
+            # row the controller ignores (a ninth service label, a window_end at or before the epoch)
+            print(f"[FAIL] the window is clean but its evidence is not a gate {GATE} row the stage controller counts "
+                  "(it needs window_hours >= 24, window_end > 0 and the eight services); no row written")
+            return 1
         try:                         # the record is written BEFORE the PASS line: a failed write must not look recorded
             sc.Records(args.records).append("gate", gate=GATE, ok=True, **sha, **span)
         except OSError as exc:

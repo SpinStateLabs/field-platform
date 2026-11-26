@@ -26,7 +26,7 @@ import pytest
 import field_core.clients as clients
 from field_core import operator_auth as oa
 from field_core.authn import ENV_VAR as SECRET_ENV, HEADER as SECRET_HEADER
-from field_core.clients import LedgerClient, RegistryClient
+from field_core.clients import AgentNotRegisteredError, LedgerClient, RegistryClient
 
 AGENT = {"agent_id": "agent-a1", "status": "active", "domain": "canary"}
 
@@ -228,10 +228,15 @@ def test_an_injected_client_is_called_exactly_as_before(monkeypatch):
 
 @pytest.mark.parametrize("agent_id", ["..", ".", "%2e%2e", "%2E", "a%2fb", "a%25b", "x?y", "x/y"])
 def test_registry_set_status_with_a_dot_segment_id_never_carries_the_pair(wire, monkeypatch, agent_id):
-    """C-683 F-C683-2: httpx normalises ``/agents/..`` to ``/``; the pair is decided on that wire path, so an id
-    that rewrites the route (or, percent-encoded, may be rewritten by a receiver) is not a guarded PATCH and gets the
-    perimeter secret only."""
+    """C-683 F-C683-2: httpx normalises ``/agents/..`` to ``/``, so an id that would rewrite the route must never take
+    the operator pair there. Such an id is outside the registry's id rule: the client refuses it before it builds a URL,
+    so NOTHING is sent. The second layer stays pinned too: the per-request headers for that path, decided on the wire
+    path, carry no pair."""
     _identity(monkeypatch, "svc-killswitch", secrets.token_urlsafe(24))
-    RegistryClient(base_url="http://registry.test").set_status(agent_id, "killed")
-    assert wire[-1].method == "PATCH"
-    assert _pair(wire[-1]) == (None, None)
+    with pytest.raises(AgentNotRegisteredError):
+        RegistryClient(base_url="http://registry.test").set_status(agent_id, "killed")
+    assert wire == []
+    headers = clients._request_auth(True, "PATCH", f"/agents/{agent_id}", clients.REGISTRY_GUARDED)["headers"]
+    assert oa.HEADER_OPERATOR not in headers and oa.HEADER_KEY not in headers
+    ordinary = clients._request_auth(True, "PATCH", "/agents/agent-a1", clients.REGISTRY_GUARDED)["headers"]
+    assert ordinary[oa.HEADER_OPERATOR] == "svc-killswitch"      # the same helper does give an ordinary id the pair

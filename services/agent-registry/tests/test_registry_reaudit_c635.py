@@ -152,7 +152,8 @@ def test_the_422_for_an_unresolvable_ref_does_not_name_the_server_directory(env)
     r = _post(client, "gone-1", manifest_ref="nope.yaml")
     assert r.status_code == 422
     body = r.json()["detail"]
-    assert body["error"] == "manifest_ref does not resolve" and body["manifest_ref"] == "nope.yaml"
+    assert body["error"] == "manifest_ref does not resolve"
+    assert "manifest_ref" not in body                  # RT-HARD-4 F2: the caller's value is not reflected (rebuild of 862)
     assert "manifest_dir" not in body
     assert str(d) not in r.text and d.name not in r.text
 
