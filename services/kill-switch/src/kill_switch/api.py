@@ -457,9 +457,15 @@ def _canonical_path(path: str) -> str | None:
 
 
 def _record_id(record: dict, path_id: str) -> str:
-    """The id a refusal row carries: the registry record's own; the (validated) path id only if it names none."""
+    """The agent id a ledger row carries once the record is read: the record's own; the (validated) path id only if it
+    names none."""
     rid = record.get("agent_id")
     return rid if isinstance(rid, str) and rid else path_id
+
+
+def _valid_id_or_none(path_id: str | None) -> str | None:
+    """For a row written before the route has checked the id (the guard's ``operator.refused``)."""
+    return path_id if path_id and _HEARTBEAT_ID_RE.fullmatch(path_id) else None
 
 
 def _is_self_endpoint(path: str, agent_id: str) -> bool:
@@ -502,9 +508,9 @@ def create_app(
         return a.state.ledger
 
     op_health = operator_health.install(app, ledger_getter=_ledger_of)
-    guard_kill = op_health.guard("kill")
-    guard_revive = op_health.guard("revive")
-    guard_drill = op_health.guard("drill")
+    guard_kill = op_health.guard("kill", row_agent_id=_valid_id_or_none)
+    guard_revive = op_health.guard("revive", row_agent_id=_valid_id_or_none)
+    guard_drill = op_health.guard("drill", row_agent_id=_valid_id_or_none)
 
     def _check_authorized_operators(record: dict, action: str = "kill") -> None:
         """Phase G: the manifest's kill_switch.authorized_operators (shared
@@ -522,9 +528,9 @@ def create_app(
 
     def _require_agent_id(agent_id: str, action: str) -> None:
         """/kill, /revive and /drill refuse a path id outside the registry's id rule (``_HEARTBEAT_ID_RE``) before the
-        registry is asked or a row is written: the id goes into the registry URL unquoted, so ``<id>%3F`` would read
-        another record and ledger the caller's text as the agent id. No length bound, unlike check-ins: a stored row
-        with a long id must stay killable. The log line never quotes the id."""
+        registry is asked or a row is written, so a caller cannot choose a ledger row's agent id with an encoded ``?``,
+        ``#`` or ``/``. No length bound, unlike check-ins: a stored row with a long id must stay killable. The log line
+        never quotes the id."""
         if not _HEARTBEAT_ID_RE.fullmatch(agent_id):
             log.warning("kill-switch: %s refused, the path id is outside the agent-id rule", action)
             raise HTTPException(422, "agent_id is not a valid agent id")
@@ -713,7 +719,7 @@ def create_app(
         _ledger_note(
             f"kill.endpoint_{result.outcome}",
             {**base, **result.model_dump(exclude_none=True)},
-            agent_id,
+            _record_id(record, agent_id),
         )
         return result
 
@@ -725,15 +731,16 @@ def create_app(
         extra: dict | None = None,
     ) -> KillReport:
         _kill_begin(agent_id)
+        row = {"agent_id": agent_id}          # replaced by the record's id as soon as the record is read
         try:
-            return _kill_one_inner(agent_id, operator, reason, origin, extra)
+            return _kill_one_inner(agent_id, operator, reason, origin, extra, row)
         except HTTPException as exc:
             if exc.status_code != 403:        # an operator refusal is already ledgered as operator.refused
-                _ledger_kill_failed(getattr(exc, "row_agent_id", agent_id), operator, reason, extra, exc.status_code,
+                _ledger_kill_failed(row["agent_id"], operator, reason, extra, exc.status_code,
                                     _FAIL_CLASS.get(exc.status_code, "refused"))
             raise
         except Exception as exc:
-            _ledger_kill_failed(agent_id, operator, reason, extra, 500, "unexpected:" + type(exc).__name__)
+            _ledger_kill_failed(row["agent_id"], operator, reason, extra, 500, "unexpected:" + type(exc).__name__)
             raise
         finally:
             _kill_end(agent_id)
@@ -754,6 +761,7 @@ def create_app(
         reason: str,
         origin: str | None,
         extra: dict | None,
+        row: dict,
     ) -> KillReport:
         t0 = time.perf_counter()
         try:
@@ -762,20 +770,19 @@ def create_app(
             raise HTTPException(404, f"agent '{agent_id}' not registered")
         except RegistryUnreachableError as exc:
             raise HTTPException(502, f"registry unreachable — cannot kill: {_registry_reason(exc)}")
+        row["agent_id"] = _record_id(record, agent_id)
         previous = record.get("status", "<unknown>")
         if previous == "retired":
             # A retire is terminal. Flipping retired -> killed would let a
             # later /revive put a decommissioned agent back to `active`.
             # Answered BEFORE the manifest's authorized_operators (the guard's key and scope check ran first): the
             # same 409 for a listed and an unlisted operator, and nothing is written or signalled either way.
-            refusal = HTTPException(
+            raise HTTPException(
                 409,
                 f"agent '{agent_id}' is retired — a retired agent is already "
                 "non-active and must not be flipped to 'killed' (a later "
                 "/revive would undo the decommission)",
             )
-            refusal.row_agent_id = _record_id(record, agent_id)    # the kill.agent.failed row names the record
-            raise refusal
         _check_authorized_operators(record)
         # ALWAYS written, even when the row already reads killed: the write moves the row's updated_at, which is what a
         # drill's compare-and-set restore compares, so a kill that lands during a drill can never be mistaken for the
@@ -814,7 +821,7 @@ def create_app(
                 # the signal is ledgered as failed with a fixed reason (nothing from the exception), and the original
                 # failure is raised below
                 result = EndpointResult(outcome="failed", reason="signal_error")
-                _ledger_note("kill.endpoint_failed", {**base, **result.model_dump(exclude_none=True)}, agent_id)
+                _ledger_note("kill.endpoint_failed", {**base, **result.model_dump(exclude_none=True)}, row["agent_id"])
             raise failure
         # The signal is sent even on an idempotent re-kill: the flip is what
         # is idempotent, the halt signal is the whole point of repeating it.
@@ -836,7 +843,7 @@ def create_app(
             {"operator": operator, "reason": reason,
              "previous_status": previous, "elapsed_ms": report.elapsed_ms,
              **(extra or {})},
-            agent_id,
+            row["agent_id"],
         )
         return report
 
@@ -1021,7 +1028,7 @@ def create_app(
         except RegistryUnreachableError as exc:
             raise HTTPException(502, f"registry unreachable — cannot revive: {_registry_reason(exc)}")
         _ledger_note(
-            "kill.revive", {"operator": req.operator, "reason": req.reason}, agent_id
+            "kill.revive", {"operator": req.operator, "reason": req.reason}, _record_id(record, agent_id)
         )
         return Heartbeat(
             agent_id=agent_id, status="active", killed=False,
@@ -1161,6 +1168,7 @@ def create_app(
             raise HTTPException(404, f"agent '{agent_id}' not registered")
         except RegistryUnreachableError as exc:
             raise HTTPException(502, f"registry unreachable — cannot drill")
+        row_id = _record_id(record, agent_id)         # every row from here names the record
         previous = record.get("status", "active")
         if previous == "retired":
             # The fourth status-writing route, and the one that made the other
@@ -1169,8 +1177,7 @@ def create_app(
             # accepts. Drill-then-revive laundered a decommissioned agent back
             # to active. A drill on a decommissioned agent proves nothing.
             # Before the authorized_operators list, as on /kill.
-            _ledger_note("kill.drill.refused", {"operator": req.operator, "reason": "agent is retired"},
-                         _record_id(record, agent_id))
+            _ledger_note("kill.drill.refused", {"operator": req.operator, "reason": "agent is retired"}, row_id)
             raise HTTPException(
                 409,
                 f"agent '{agent_id}' is retired — a drill on a decommissioned "
@@ -1191,10 +1198,10 @@ def create_app(
             # A drill is optional, a kill is not: with no usable row version the drill cannot be made safe (an
             # unconditional flip could undo a kill that landed between the read and the flip), so it does not start.
             _ledger_note("kill.drill.refused",
-                         {"operator": req.operator, "reason": "registry gave no row version; drill refused"}, agent_id)
+                         {"operator": req.operator, "reason": "registry gave no row version; drill refused"}, row_id)
             raise HTTPException(409, f"registry gave no row version for agent '{agent_id}'; drill refused, nothing was changed")
         _ledger_note(
-            "kill.drill.start", {"operator": req.operator, "reason": req.reason}, agent_id
+            "kill.drill.start", {"operator": req.operator, "reason": req.reason}, row_id
         )
 
         restored = False
@@ -1215,7 +1222,7 @@ def create_app(
                 refused_row_changed = True
                 _ledger_note("kill.drill.refused", {"operator": req.operator,
                                                     "reason": "the agent's row changed while the drill started"},
-                             agent_id)
+                             row_id)
                 raise HTTPException(409, f"agent '{agent_id}' changed while the drill started — drill refused")
             flip_token = _usable_version(flip.get("updated_at") if isinstance(flip, dict) else None)
             kill_confirmed = None
@@ -1275,7 +1282,7 @@ def create_app(
                                     else "superseded by kill" if superseded
                                     else "restore read failed: the agent was left as it is (killed)" if read_failed
                                     else "superseded: status changed during the drill")},
-                        agent_id,
+                        row_id,
                     )
                 else:
                     try:
@@ -1290,7 +1297,7 @@ def create_app(
                             {"operator": req.operator, "target_status": previous, "current_status": "killed",
                              "reason": "superseded: the registry row was written after the drill's kill (a kill "
                                        "from this or another process, or any other write)"},
-                            agent_id,
+                            row_id,
                         )
                     else:
                         restored_status = app.state.registry.get_agent(agent_id).get("status") or "<unknown>"
@@ -1304,7 +1311,7 @@ def create_app(
                     "kill.drill.restore_failed",
                     {"operator": req.operator, "target_status": previous,
                      "error": _exc_name(exc)},
-                    agent_id,
+                    row_id,
                 )
 
         total = (time.perf_counter() - t0) * 1000
@@ -1322,8 +1329,8 @@ def create_app(
         _ledger_note(
             "kill.drill.complete",
             {"operator": req.operator,
-             **report.model_dump(exclude={"note"}, exclude_none=True)},
-            agent_id,
+             **report.model_dump(exclude={"note"}, exclude_none=True), "agent_id": row_id},
+            row_id,
         )
         if restore_skipped:
             # a real kill (or a retire) overlapped the drill: the agent was deliberately left as that change set it

@@ -400,10 +400,14 @@ class OperatorHealth:
                           agent_id=agent_id)
         return HTTPException(exc.status, exc.detail)
 
-    def guard(self, action: str, rows_loader: Callable[[], list[dict]] | None = None):
+    def guard(self, action: str, rows_loader: Callable[[], list[dict]] | None = None,
+              row_agent_id: Callable[[str | None], str | None] | None = None):
         """operator_auth.guard for ``action`` (same checks, same LOG-ONLY
         ``operator.unauthenticated`` record through this app's ledger), plus:
-        every refusal it returns is counted and, under ENFORCE, ledgered."""
+        every refusal it returns is counted and, under ENFORCE, ledgered.
+        ``row_agent_id`` maps the route's raw ``agent_id`` path text to what the
+        ``operator.refused`` row carries as its agent id (the guard refuses
+        before the route can check the id); None keeps the path text."""
         from fastapi import HTTPException, Request
         from starlette.concurrency import run_in_threadpool
 
@@ -413,10 +417,13 @@ class OperatorHealth:
             try:
                 return await inner(request)
             except HTTPException as exc:      # the inner guard raises only refusals
+                agent_id = request.path_params.get("agent_id")
+                if row_agent_id is not None:
+                    agent_id = row_agent_id(agent_id)
                 await run_in_threadpool(
                     self.note_refused, oa.OperatorRefused(exc.status_code, str(exc.detail)),
                     action=action, path=request.url.path, headers=request.headers,
-                    agent_id=request.path_params.get("agent_id"))
+                    agent_id=agent_id)
                 raise
 
         _guard.__annotations__ = {"request": Request, "return": oa.OperatorAuth}

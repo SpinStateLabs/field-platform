@@ -59,6 +59,7 @@ import stat
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import quote
 
 from field_core.errors import upstream_error
 from field_core.http import get_retrying_once, pooled_limits
@@ -391,6 +392,14 @@ class LedgerClient:
         return body
 
 
+def _path_segment(value: str) -> str:
+    """An id as ONE URL path segment: every reserved character is percent-encoded, so a ``?``, ``#`` or ``/`` in it
+    cannot change which record the registry reads or writes, and the dot segments ``.`` and ``..`` (which a URL resolver
+    collapses, and ``quote`` leaves alone) are spelled ``%2E``. An id in the registry's id rule is unchanged."""
+    out = quote(str(value), safe="")
+    return {".": "%2E", "..": "%2E%2E"}.get(out, out)
+
+
 class RegistryClient:
     def __init__(self, client: HttpLike | None = None, base_url: str | None = None):
         self._client = client
@@ -407,9 +416,10 @@ class RegistryClient:
             self._client = httpx.Client(timeout=5.0, trust_env=False, limits=pooled_limits())
 
     def get_agent(self, agent_id: str) -> dict[str, Any]:
+        path = f"/agents/{_path_segment(agent_id)}"
         try:
-            resp = get_retrying_once(self._client, f"{self._base}/agents/{agent_id}",
-                                     **_request_auth(self._own_client, "GET", f"/agents/{agent_id}", REGISTRY_GUARDED))
+            resp = get_retrying_once(self._client, f"{self._base}{path}",
+                                     **_request_auth(self._own_client, "GET", path, REGISTRY_GUARDED))
         except Exception as exc:
             raise RegistryUnreachableError(_transport_text(exc)) from exc
         if resp.status_code == 404:
@@ -463,12 +473,13 @@ class RegistryClient:
         ``updated_at`` still equals this value (the one an earlier read or write of the row returned); any other
         write in between makes the registry answer 412 and this method raise :class:`AgentRowChangedError`. ``None``
         (the default) is the unconditional write it always was."""
+        path = f"/agents/{_path_segment(agent_id)}"
         try:
-            auth = _request_auth(self._own_client, "PATCH", f"/agents/{agent_id}", REGISTRY_GUARDED)
+            auth = _request_auth(self._own_client, "PATCH", path, REGISTRY_GUARDED)
             if extra_headers is not None:
                 auth = {"headers": _with_extra_headers(auth.get("headers", {}), extra_headers)}
             resp = self._client.patch(
-                f"{self._base}/agents/{agent_id}",
+                f"{self._base}{path}",
                 json={"status": status} if if_updated_at is None else {"status": status, "if_updated_at": if_updated_at},
                 **auth,
             )

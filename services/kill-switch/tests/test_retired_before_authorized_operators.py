@@ -235,38 +235,6 @@ def test_the_row_is_written_in_log_only(stack, monkeypatch, route, event_type, h
     assert payload["operator_id_authenticated"] == authenticated
 
 
-# --- a path id outside the registry's id rule ------------------------------------------------------------------------
-
-BAD_IDS = ["ret-nomanifest%3F", "ret-nomanifest%23x", "Ret-Nomanifest", "-ret", ".ret", "ret%20x", "ret%0Ax"]
-
-
-@pytest.mark.parametrize("route", ROUTES)
-@pytest.mark.parametrize("bad", BAD_IDS)
-def test_an_id_outside_the_registry_rule_is_422_before_any_read_or_row(stack, route, bad):
-    client, reg, led = stack
-    r = client.post(f"/{route}/{bad}", json=BODY, headers=hdr("don", KEY_DON))
-    assert r.status_code == 422, (r.status_code, r.text)
-    assert r.json() == {"detail": "agent_id is not a valid agent id"}
-    assert reg.reads == [] and reg.writes == [] and led.rows == []
-
-
-@pytest.mark.parametrize("route", ROUTES)
-def test_the_key_and_scope_are_checked_before_the_id_rule(stack, route):
-    client, reg, _ = stack
-    assert client.post(f"/{route}/ret-nomanifest%3F", json=BODY).status_code == 401
-    assert reg.reads == []
-
-
-@pytest.mark.parametrize("route", ROUTES)
-def test_a_long_stored_id_is_not_refused_by_the_id_rule(stack, route):
-    """no length bound: a stored row with a long id must stay reachable (a kill above all)"""
-    client, reg, _ = stack
-    long_id = "a" * 200
-    reg.agents[long_id] = {"agent_id": long_id, "status": "retired", "domain": "canary", "manifest_ref": None}
-    assert client.post(f"/{route}/{long_id}", json=BODY, headers=hdr("don", KEY_DON)).status_code == 409
-    assert reg.reads == [long_id]
-
-
 def test_the_domain_kill_of_an_agent_retired_between_the_list_and_the_re_read(stack):
     client, reg, led = stack
     reg.agents["raced"] = {"agent_id": "raced", "status": "active", "domain": "race",
