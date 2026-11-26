@@ -747,17 +747,19 @@ def create_app(
             raise HTTPException(404, f"agent '{agent_id}' not registered")
         except RegistryUnreachableError as exc:
             raise HTTPException(502, f"registry unreachable — cannot kill: {_registry_reason(exc)}")
-        _check_authorized_operators(record)
         previous = record.get("status", "<unknown>")
         if previous == "retired":
             # A retire is terminal. Flipping retired -> killed would let a
             # later /revive put a decommissioned agent back to `active`.
+            # Answered BEFORE the manifest's authorized_operators (the guard's key and scope check ran first): the
+            # same 409 for a listed and an unlisted operator, and nothing is written or signalled either way.
             raise HTTPException(
                 409,
                 f"agent '{agent_id}' is retired — a retired agent is already "
                 "non-active and must not be flipped to 'killed' (a later "
                 "/revive would undo the decommission)",
             )
+        _check_authorized_operators(record)
         # ALWAYS written, even when the row already reads killed: the write moves the row's updated_at, which is what a
         # drill's compare-and-set restore compares, so a kill that lands during a drill can never be mistaken for the
         # drill's own state (from this process or any other).
@@ -980,16 +982,16 @@ def create_app(
             raise HTTPException(404, f"agent '{agent_id}' not registered")
         except RegistryUnreachableError as exc:
             raise HTTPException(502, f"registry unreachable — cannot revive: {_registry_reason(exc)}")
-        _check_authorized_operators(record, "revive")
         if record.get("status") == "retired":
             # The one that matters: without this, one console click undoes a
-            # decommission and the agent is `active` again.
+            # decommission and the agent is `active` again. Before the authorized_operators list, as on /kill.
             raise HTTPException(
                 409,
                 f"agent '{agent_id}' is retired — reviving a decommissioned "
                 "agent is not a kill-switch operation; register a new agent or "
                 "have the owner re-provision it",
             )
+        _check_authorized_operators(record, "revive")
         try:
             _set_status(agent_id, "active")
         except AgentNotRegisteredError:
@@ -1136,7 +1138,6 @@ def create_app(
             raise HTTPException(404, f"agent '{agent_id}' not registered")
         except RegistryUnreachableError as exc:
             raise HTTPException(502, f"registry unreachable — cannot drill")
-        _check_authorized_operators(record, "drill")
         previous = record.get("status", "active")
         if previous == "retired":
             # The fourth status-writing route, and the one that made the other
@@ -1144,12 +1145,14 @@ def create_app(
             # the restore then fails the record is left `killed`, which /revive
             # accepts. Drill-then-revive laundered a decommissioned agent back
             # to active. A drill on a decommissioned agent proves nothing.
+            # Before the authorized_operators list, as on /kill.
             raise HTTPException(
                 409,
                 f"agent '{agent_id}' is retired — a drill on a decommissioned "
                 "agent proves nothing and a failed restore would leave the "
                 "record 'killed', which /revive accepts",
             )
+        _check_authorized_operators(record, "drill")
         if previous == "killed":
             # Writing 'killed' over 'killed' passes the first propagation poll at once and the report would show a
             # confirmed kill, heartbeat and restore although nothing was proven; the halt signal would still go out
