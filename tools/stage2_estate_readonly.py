@@ -168,7 +168,8 @@ class ReadOnlyStage2Estate:
     def __init__(self, transport: Transport, *, services: Sequence[str] | None = None,
                  kill_switch: str = KILL_SWITCH, expected_build_sha: str | None = None,
                  health_base: str = DEFAULT_HEALTH_BASE, override_path: str = DEFAULT_OVERRIDE_PATH,
-                 paths: Mapping[str, str] | None = None, service_names: Mapping[str, str] | None = None):
+                 paths: Mapping[str, str] | None = None, service_names: Mapping[str, str] | None = None,
+                 require_armed: bool = True):
         paths = dict(HEALTH_PATHS if paths is None else paths)
         self.services = tuple(paths if services is None else services)
         if not self.services or any(s not in paths for s in self.services) or kill_switch not in self.services:
@@ -185,6 +186,10 @@ class ReadOnlyStage2Estate:
         self.service_names = {s: names[s] for s in self.services}
         self.script = probe_script(health_base=health_base, override_path=override_path,
                                    paths={s: paths[s] for s in self.services})
+        #: ``counters()`` also proves, in the SAME probe, that the estate is armed (B-1055-ATOMIC-ARMED). It is the
+        #: controller's last read before every ``step_done`` and before ``stage_done``, so separate reads of the override,
+        #: the mode and health can never add up to "armed" when no single answer was. Off only for driver-level tests.
+        self.require_armed = require_armed
         #: how many probes were run (each read method runs exactly one)
         self.probes = 0
 
@@ -241,6 +246,9 @@ class ReadOnlyStage2Estate:
 
     def counters(self) -> dict[str, dict[str, int]]:
         snap, out = self.snapshot(), {}
+        reason = self._not_armed(snap) if self.require_armed else None
+        if reason:
+            raise ProbeError(reason)                 # the controller fails closed: no step_done, no stage_done
         for service in self.services:
             row = snap["services"][service]
             if not self._answers(row, service):
@@ -274,7 +282,11 @@ class ReadOnlyStage2Estate:
     def preflight(self) -> str | None:
         """One probe, before the driver is called: the fixed refusal token, or None when the estate is armed, the
         kill-switch reads ``enforce`` and every service reports the expected build. ``ProbeError`` when it cannot tell."""
-        snap = self.snapshot()
+        return self._not_armed(self.snapshot())
+
+    def _not_armed(self, snap: Mapping[str, Any]) -> str | None:
+        """The fixed refusal token for one answer, or None when that ONE answer shows the override, ``enforce`` on the
+        kill-switch, every answering service's identity and the expected build together."""
         if not snap["override_present"]:
             return REFUSE_NOT_ARMED
         row = snap["services"][self.kill_switch]

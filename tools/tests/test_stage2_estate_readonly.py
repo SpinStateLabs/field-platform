@@ -50,8 +50,9 @@ class Host:
     """The estate as the probe sees it. Each call is one probe; the script it was sent is kept."""
 
     def __init__(self, *, armed=True, mode="enforce", build=SHA, down=(), bump_at=None, bump_key=None, raw=None,
-                 wrong_identity=()):
+                 wrong_identity=(), at=None):
         self.armed, self.mode, self.build, self.down = armed, mode, build, set(down)
+        self.at = dict(at or {})                    # probe number (1-based) -> {"armed": .., "mode": ..} for that probe
         self.wrong_identity = set(wrong_identity)   # these paths are answered by the console (a proxy fall-through)
         self.bump_at = bump_at                      # the Nth probe and later show a dropped record
         self.bump_key = bump_key or sc.COUNTER_KEYS[0]
@@ -59,6 +60,8 @@ class Host:
         self.scripts: list[str] = []
 
     def snapshot(self):
+        now = self.at.get(len(self.scripts), {})
+        armed, mode = now.get("armed", self.armed), now.get("mode", self.mode)
         services = {}
         for name in EIGHT:
             if name in self.down:
@@ -68,11 +71,11 @@ class Host:
                    "service": "ops-console" if name in self.wrong_identity else ro.SERVICE_NAMES[name],
                    "dropped_unauthenticated_records": 0, "dropped_refused_records": 0}
             if name == ro.KILL_SWITCH:
-                row["operator_mode"] = self.mode
+                row["operator_mode"] = mode
             if self.bump_at is not None and len(self.scripts) >= self.bump_at:
                 row[self.bump_key] = 1
             services[name] = row
-        return {"v": 1, "override_present": self.armed, "services": services}
+        return {"v": 1, "override_present": armed, "services": services}
 
     def __call__(self, script):
         self.scripts.append(script)
@@ -93,8 +96,8 @@ def _kinds(rec):
     return [r["kind"] for r in rec.rows()][3:]       # after the three precondition rows
 
 
-def _drive(rec, host, **kw):
-    estate = ro.ReadOnlyStage2Estate(host, expected_build_sha=SHA)
+def _drive(rec, host, *, require_armed=True, **kw):
+    estate = ro.ReadOnlyStage2Estate(host, expected_build_sha=SHA, require_armed=require_armed)
     result = drv.run_stage2(rec, estate, go_sentence=GO, build_sha=SHA, expected_services=EIGHT, live=True,
                             allow_already_armed=True, env={}, **kw)
     return estate, result
@@ -200,7 +203,7 @@ def test_a_path_answered_by_another_service_is_not_that_service(tmp_path):
     rec, host = _records(tmp_path), Host(wrong_identity={"lifecycle"})
     assert _cli(tmp_path, rec, host, "--live") == 2
     assert rec.rows()[-1]["reason"] == "service_identity_mismatch" and "stage_start" not in _kinds(rec)
-    estate = ro.ReadOnlyStage2Estate(Host(wrong_identity={"lifecycle"}), expected_build_sha=SHA)
+    estate = ro.ReadOnlyStage2Estate(Host(wrong_identity={"lifecycle"}), expected_build_sha=SHA, require_armed=False)
     assert estate.healthy() is False and "lifecycle" not in estate.counters() and len(estate.counters()) == 7
     wrong_ks = ro.ReadOnlyStage2Estate(Host(wrong_identity={"killswitch"}), expected_build_sha=SHA)
     with pytest.raises(ro.ProbeError):
@@ -246,12 +249,53 @@ def test_a_stub_snapshot_run_records_into_a_stub_records_file(tmp_path):
 def test_a_half_armed_estate_fails_closed_through_the_driver(tmp_path):
     """Override present, kill-switch still log-only: the mode check fails, the no-op rollback cannot verify enforce."""
     rec, host = _records(tmp_path), Host(armed=True, mode="log-only")
-    estate, result = _drive(rec, host)
+    estate, result = _drive(rec, host, require_armed=False)      # the driver's own mode check, not the estate's
     assert result.status == "rollback_failed" and result.abort == "phase_g_check_failed"
     kinds = _kinds(rec)
     assert "stage_done" not in kinds and kinds[-1] == "rollback_failed" and not rec.stage_clean(2)
     assert rec.unresolved(2) == "rollback_failed_unresolved"
     assert set(host.scripts) == {estate.script}
+
+
+# B-1055-ATOMIC-ARMED (roley.reviewer F1/F2 on PR 1055). Probes through the driver: 1 armed? / 2 baseline counters /
+# 3 check 1 / 4 counters / 5-7 check 2 (override, mode, health) / 8 counters, then stage_done is written.
+
+@pytest.mark.parametrize("last", [{"armed": False, "mode": "log-only"}, {"armed": False}, {"mode": "log-only"}],
+                         ids=["disarmed", "override_gone", "mode_dropped"])
+def test_an_estate_disarmed_at_the_last_probe_before_stage_done_is_never_recorded_done(tmp_path, last):
+    """F1: the estate is disarmed after check 2 passed. The counters read just before stage_done must see it."""
+    rec, host = _records(tmp_path), Host(at={8: last})
+    estate, result = _drive(rec, host)
+    assert result.status != "completed" and result.abort == "controller_error"
+    assert "stage_done" not in _kinds(rec) and not rec.stage_clean(2)
+    assert set(host.scripts) == {estate.script}
+
+
+def test_no_probe_seeing_override_and_enforce_together_is_never_recorded_done(tmp_path):
+    """F2: every probe shows the override OR enforce, never both, yet each separate check passes on its own probe."""
+    rec, host = _records(tmp_path), Host(mode="log-only", at={6: {"armed": False, "mode": "enforce"}})
+    estate, result = _drive(rec, host)
+    assert result.status != "completed" and "stage_done" not in _kinds(rec) and not rec.stage_clean(2)
+
+
+def test_the_command_line_never_records_done_when_no_probe_after_preflight_saw_the_estate_armed(tmp_path, capsys):
+    rec, host = _records(tmp_path), Host(mode="log-only", at={1: {"mode": "enforce"}, 7: {"armed": False,
+                                                                                         "mode": "enforce"}})
+    assert _cli(tmp_path, rec, host, "--live") == 3
+    assert "stage_done" not in _kinds(rec) and not rec.stage_clean(2)
+
+
+@pytest.mark.parametrize("host,token", [(Host(armed=False), ro.REFUSE_NOT_ARMED),
+                                        (Host(mode="log-only"), ro.REFUSE_NOT_ENFORCE),
+                                        (Host(build="f" * 40), ro.REFUSE_BUILD),
+                                        (Host(wrong_identity={"ledger"}), ro.REFUSE_IDENTITY)])
+def test_counters_is_one_read_that_also_proves_the_estate_armed(host, token):
+    estate = ro.ReadOnlyStage2Estate(host, expected_build_sha=SHA)
+    with pytest.raises(ro.ProbeError, match=token):
+        estate.counters()
+    assert estate.probes == 1
+    loose = ro.ReadOnlyStage2Estate(host, expected_build_sha=SHA, require_armed=False)
+    assert isinstance(loose.counters(), dict) and loose.probes == 1
 
 
 @pytest.mark.parametrize("call", [lambda e: e.write_override(), lambda e: e.delete_override(),
@@ -269,7 +313,7 @@ def test_a_write_reached_through_the_driver_raises_and_the_run_fails_closed(tmp_
     """The estate is NOT armed, so the driver does call write_override: it raises, the rollback raises, nothing is
     written to the estate and the stage is never recorded done."""
     rec, host = _records(tmp_path), Host(armed=False, mode="log-only")
-    estate, result = _drive(rec, host)
+    estate, result = _drive(rec, host, require_armed=False)      # so the driver does reach write_override
     assert result.status == "rollback_failed" and result.abort == "controller_error" and result.steps_done == []
     assert "stage_done" not in _kinds(rec) and not rec.stage_clean(2)
     assert set(host.scripts) == {estate.script}
@@ -298,7 +342,7 @@ def test_a_counter_rise_is_exit_3_on_the_command_line(tmp_path, capsys):
 
 def test_a_service_that_does_not_answer_is_a_health_failure(tmp_path):
     rec, host = _records(tmp_path), Host(down={"ledger"})
-    estate = ro.ReadOnlyStage2Estate(host, expected_build_sha=SHA)
+    estate = ro.ReadOnlyStage2Estate(host, expected_build_sha=SHA, require_armed=False)    # the leave-out itself
     assert estate.healthy() is False and "ledger" not in estate.counters()
     assert ro.ReadOnlyStage2Estate(host).healthy() is False              # with no build to compare, still not healthy
     assert ro.ReadOnlyStage2Estate(Host()).healthy() is True
@@ -509,7 +553,7 @@ def test_the_probe_reads_the_override_file_and_each_health_with_a_get_and_nothin
     assert all(data is None for _, data in opened)                       # GET only
     assert sorted(p.as_posix() for p in tmp_path.rglob("*")) == before   # nothing written
     assert "secretish" not in printed and "refused_count" not in printed
-    estate = ro.ReadOnlyStage2Estate(lambda s: printed, expected_build_sha=SHA)
+    estate = ro.ReadOnlyStage2Estate(lambda s: printed, expected_build_sha=SHA, require_armed=False)
     assert estate.override_present() is True and estate.mode() == "enforce" and estate.healthy() is False
     counters = estate.counters()
     assert "ledger" not in counters and counters["registry"] == {"dropped_unauthenticated_records": 0,
