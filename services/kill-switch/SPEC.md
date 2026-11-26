@@ -79,6 +79,12 @@ give agents a heartbeat to poll, and prove readiness with timed drills.
   `FieldAgent.checkin`, `fieldagent checkin`, plus `Send-FieldCheckin` in
   `tools/field-rest.ps1` and the check-in in the demo agent.
 
+- **A caller cannot choose a ledger row's agent id.** `/kill`, `/revive` and `/drill` answer **422** to a path id
+  outside the registry's id rule (`[a-z0-9][a-z0-9._-]*`), after the key and scope check and before the registry is
+  asked; no `kill.*` row is written, and the guard's `operator.refused` row carries no agent id for such a request. Once
+  a record is read, every row names the record's own `agent_id`. There is **no length bound** (unlike check-ins): a
+  stored row with a long id must stay killable; the ledger itself refuses a row whose agent id is over 200 characters.
+
 - **Retired agents are protected (B4).** `retired` is terminal on **all four**
   status-writing routes: `/kill`, `/revive` and `/drill` answer **409**, and
   `/kill/domain` skips them and lists them in `skipped_retired` (per-agent
