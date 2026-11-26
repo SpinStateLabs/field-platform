@@ -210,6 +210,11 @@ def _to_utc(value: Any) -> datetime | None:
     return None
 
 
+#: An ABSOLUTE URL: a scheme and "://" before any "/", "?" or "#". Group 1 is everything after the host. A uri that only
+#: holds "://" inside its query (``/login?next=http://evil.example/x``) is relative and must keep its query.
+_ABSOLUTE_URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^/?#]*(.*)", re.DOTALL)
+
+
 def make_jsonl_parser(field_map: dict[str, list[str]]) -> LineParser:
     missing = {"ts", "ip", "uri", "status"} - set(field_map)
     if missing:
@@ -229,16 +234,23 @@ def make_jsonl_parser(field_map: dict[str, list[str]]) -> LineParser:
         status = _pick(record, field_map["status"])
         if ts is None or ip is None or uri is None or status is None:
             return None
+        if isinstance(status, bool):            # int(True) is 1: a flag is not a status
+            return None
         try:
             status_int = int(status)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if not 100 <= status_int <= 599:        # the CLF parser's three-digit rule, as an HTTP status range
             return None
         method = _pick(record, field_map.get("method", [])) or "GET"
         ua = _pick(record, field_map.get("ua", [])) or ""
         ref = _pick(record, field_map.get("referer", [])) or ""
         target = str(uri)
-        if "://" in target:  # full URL: keep path + query
-            target = "/" + target.split("://", 1)[1].partition("/")[2]
+        absolute = _ABSOLUTE_URL.match(target)
+        if absolute:  # a full URL: keep path + query (a bare host is "/"; a host then ?query keeps the query, S12-25);
+            # a relative uri that merely holds "://" later is left exactly as logged (S6-17)
+            rest = absolute.group(1)
+            target = rest if rest.startswith("/") else "/" + rest
         # JSON strings may hold lone surrogates (\udXXX); drop them so a later
         # utf-8 encode (hashing, canonical pack) cannot raise on one bad line.
         clean = lambda s: str(s).encode("utf-8", "replace").decode("utf-8")
@@ -264,12 +276,20 @@ def resolve_parser(fmt: str, preset: str = "generic", overrides: dict[str, str] 
 
 
 def unique_labels(paths: list[Path]) -> list[str]:
-    seen: dict[str, int] = {}
+    """One label per input, the key the evidence pack and the cited-line check use. A repeated name takes ``#2``,
+    ``#3``…; a candidate already taken (a real file named ``a.log#2`` beside two ``a.log``) is skipped, never shared."""
+    used: set[str] = set()
     labels: list[str] = []
     for path in paths:
         base = path.name
-        seen[base] = seen.get(base, 0) + 1
-        labels.append(base if seen[base] == 1 else f"{base}#{seen[base]}")
+        n = 0
+        while True:
+            n += 1
+            label = base if n == 1 else f"{base}#{n}"
+            if label not in used:
+                break
+        used.add(label)
+        labels.append(label)
     return labels
 
 

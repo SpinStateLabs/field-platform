@@ -147,10 +147,19 @@ def s_pivot(s: Session, window_s: float) -> ClauseHit | None:
     a payload within the window (the A6 'search, then tamper' pattern)."""
     refs: list[LineRef] = []
     pairs = 0
-    benign_by_path: dict[str, list[Request]] = defaultdict(list)
-    for r in s.requests:
+    # (path, parameter) -> the latest benign use, as (order, values, request); `values` is
+    # the SET of every value of the name in that request (param_values keeps repeats,
+    # S10-31). A payload request is a hit on the latest use when some value of a tampered
+    # name is absent from that set: O(1) per value, so a request is answered in O(its own
+    # values), never O(benign values x payload values) however many repeats either holds
+    # (rebuild of PR 964, don.reviewer C1). Only the latest use is kept: a benign request
+    # is not hostile, so it never holds a payload value, and the latest use of the name is
+    # always a hit (the older-use fallback of main's index could not fire; reviewer N1).
+    benign: dict[tuple[str, str], tuple] = {}
+    for n, r in enumerate(s.requests):
         if not r.is_hostile:
-            benign_by_path[r.path].append(r)
+            for k, v in param_values(r.query).items():
+                benign[(r.path, k)] = (n, frozenset(v), r)
             continue
         if not r.is_payload:
             continue
@@ -158,15 +167,18 @@ def s_pivot(s: Session, window_s: float) -> ClauseHit | None:
         if not tampered:
             continue
         r_vals = param_values(r.query)
-        for b in reversed(benign_by_path.get(r.path, [])):
-            if (r.ts - b.ts).total_seconds() > window_s:
-                break
-            b_vals = param_values(b.query)
-            shared = [k for k in tampered if k in b_vals and b_vals[k] != r_vals.get(k)]
-            if shared:
-                refs.extend([b.ref, r.ref])
-                pairs += 1
-                break
+        best = None
+        for k in tampered:
+            cand = benign.get((r.path, k))
+            if cand is None:
+                continue
+            # S10-31: a hit when ANY value of the name in the payload request is absent from ALL the values of that
+            # benign use (`q=<payload>&q=cat` against a benign `q=cat` is a pivot); set membership, never a list scan
+            if any(v not in cand[1] for v in r_vals.get(k, ())) and (best is None or cand[0] > best[0]):
+                best = cand
+        if best is not None and (r.ts - best[2].ts).total_seconds() <= window_s:
+            refs.extend([best[2].ref, r.ref])
+            pairs += 1
     if not pairs:
         return None
     return _hit("S.pivot", f"{pairs} benign→tampered pivot(s) on the same path and parameter within {window_s:.0f} s", refs)

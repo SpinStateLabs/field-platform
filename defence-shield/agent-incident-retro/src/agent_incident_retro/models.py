@@ -7,6 +7,7 @@ them, the report renders them. Nothing here performs I/O.
 from __future__ import annotations
 
 import ipaddress
+import math
 from datetime import datetime
 from enum import Enum
 from typing import Any
@@ -16,6 +17,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 #: The narrowest-allowed-floor of an `--allow-ip` network: nothing wider than /8 (IPv4) or /32 (IPv6) is accepted.
 MIN_ALLOW_PREFIX_V4 = 8
 MIN_ALLOW_PREFIX_V6 = 32
+#: The shortest `allow_ua_substrings` entry (after trimming): `" "` or `"a"` sits inside nearly every browser UA, so a short
+#: entry would mark nearly every client AUTHORIZED (S12-31). This is a length floor ONLY, not a catch-all check: a longer
+#: common browser token (`Mozilla`, `/5.0`, `Gecko`, `http`) is still accepted and still authorizes most browser clients, so
+#: the operator must choose a specific string. An empty entry is still accepted: it matches nothing.
+MIN_ALLOW_UA_CHARS = 4
 
 TOOL_NAME = "agent-incident-retro"
 TOOL_VERSION = "0.1.1"
@@ -143,6 +149,36 @@ class RetroConfig(BaseModel):
     include_raw: bool = True
     allow_ips: list[str] = Field(default_factory=list)
     allow_ua_substrings: list[str] = Field(default_factory=list)
+
+    @field_validator("session_gap_s", "pivot_window_s", "cadence_cv_max")
+    @classmethod
+    def _timing_is_finite_and_positive(cls, value: float, info) -> float:
+        """The clauses compare with `>`, `>=` and `<=`, all False for NaN. A NaN or infinite gap never splits a session. A
+        NaN pivot window matches nothing, so S.pivot and S.escalate-on-block never fire (an infinite one never closes). NaN
+        or infinity in cadence_cv_max makes S.cadence fire on every eligible session; zero or a negative value means it can
+        never fire. json.loads accepts NaN. The value is never echoed."""
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError(f"{info.field_name} must be a finite number greater than 0")
+        return value
+
+    @field_validator("cadence_min_requests")
+    @classmethod
+    def _cadence_needs_a_request(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("cadence_min_requests must be at least 1")
+        return value
+
+    @field_validator("allow_ua_substrings")
+    @classmethod
+    def _no_catch_all_ua_substring(cls, entries: list[str]) -> list[str]:
+        """An entry other than the empty string (which matches nothing) must be at least MIN_ALLOW_UA_CHARS long after
+        trimming: `" "` or `"a"` would AUTHORIZE nearly every client. A length floor only (a common long token such as
+        `Mozilla` still passes). The entry is not echoed."""
+        for entry in entries:
+            if entry != "" and len(entry.strip()) < MIN_ALLOW_UA_CHARS:
+                raise ValueError(
+                    f"allow_ua_substrings entries must be at least {MIN_ALLOW_UA_CHARS} characters after trimming")
+        return entries
 
     @field_validator("allow_ips")
     @classmethod

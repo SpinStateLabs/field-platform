@@ -164,6 +164,7 @@ flowchart TD
     C1 -- no --> B1["BLOCK L.unreachable<br/>(unloggable action may not run)"]
     C1 -- yes --> C2{"2 · registered<br/>and active?"}
     C2 -- "unregistered" --> B2["BLOCK R.unregistered"]
+    C2 -- "registry unreachable" --> B2b["BLOCK R.registry_unreachable"]
     C2 -- killed --> B3["BLOCK E.kill_switch"]
     C2 -- yes --> C3{"3 · manifest resolves<br/>+ field validate OK?"}
     C3 -- no --> B4["BLOCK I.manifest"]
@@ -242,13 +243,13 @@ an artifact; the one recorded drill is in
 | Service | Store | Key ledger events |
 |---|---|---|
 | sealed-ledger | hash-chained JSONL segments: `ledger/events.jsonl` (open) + `events-<n>.jsonl` (closed) + `events.segments.journal`, `legal_hold.json`; archived segments with `<file>.segment.json` sidecars under `ledger-archive/` (C2) | it *is* the ledger; its own records are `ledger.segment.rotated`, `ledger.retention.applied`, `ledger.legal_hold.placed\|released` |
-| agent-registry | SQLite `agents.sqlite3` | `registry.registered`, `registry.status_changed`, `registry.updated`, `registry.attested` — emitted when a ledger is wired (injected, or `FIELD_LEDGER_URL` set); silent otherwise, and the gap is then visible as missing `registry.*` events |
+| agent-registry | SQLite `agents.sqlite3` | `registry.registered`, `registry.status_changed`, `registry.updated`, `registry.attested` — emitted when a ledger is wired (injected, or `FIELD_LEDGER_URL` set); silent otherwise; a refused or lost append is counted in `/health` as `ledger_appends_dropped` and logged, and the gap is also visible as missing `registry.*` events |
 | delegation-authority | SQLite `tokens.sqlite3` (`tokens`, plus the v1.2 D1e side table `token_spend_ceilings`: a roster row's `max_spend_usd` stamped at mint) | `delegation.mint`, `delegation.revoke` |
-| conformance-sentinel | stateless (mtime manifest cache) | `conformance.allow\|block\|escalate`, `conformance.shadow_*` (log-only), `sentinel.metering_gap` (a metering post on an ALLOW got no 201; D1), `sentinel.judge` |
+| conformance-sentinel | stateless (mtime manifest cache) | `conformance.allow\|block\|escalate`, `conformance.shadow_*` (log-only), `sentinel.metering_gap` (a metering post on an ALLOW got no 201; D1), `sentinel.judge`; a shadow, judge or metering-gap append the ledger refuses is counted in `/health` as `ledger_appends_dropped` |
 | kill-switch | SQLite `killswitch/heartbeats.sqlite3` (check-ins only — the registry is still the authority on status) | `kill.agent`, `kill.domain`, `kill.revive`, `kill.drill.start|complete|restore_failed`, `kill.endpoint_called|failed|skipped` |
 | spend-governor | SQLite `spend.sqlite3` (`spend` gains `action`/`source` at open in D1; `rate_limits` table) | `spend.recorded`, `spend.escalate`, `spend.cap_reached`, `spend.escalation_resolved`, `usage.recorded`, `spend.rate_limit_declared_unenforced` |
 | federation-broker | SQLite `contracts.sqlite3` | `federation.allow\|block` |
-| lifecycle-manager | last sweep + last tick under `lifecycle/` (the served API; the CLI job itself is stateless) | `lifecycle.expiring_authority`, `lifecycle.reattestation_due`, `lifecycle.orphan`, `lifecycle.decommissioned`, `lifecycle.tick_skipped` |
+| lifecycle-manager | last sweep + last tick under `lifecycle/` (the served API; the CLI job itself is stateless) | `lifecycle.expiring_authority`, `lifecycle.reattestation_due`, `lifecycle.orphan`, `lifecycle.decommissioned`, `lifecycle.tick_skipped`, `lifecycle.tick_failed` |
 | incident-replay / attestation | stateless query engines | (readers, not writers) |
 | ops-console | none (a UI; no SQLite in its source) | `operator.refused` (`_RefusalLedger` in `services/ops-console/src/ops_console/api.py`); the writes it forwards are ledgered by the services that receive them |
 | claude-approver | `$FIELD_DATA_DIR/claude-approver/usage-cursor.json` (`services/claude-approver/src/claude_approver/core.py`, module docstring) | (none of its own: it calls governor, kill-switch and sentinel) |

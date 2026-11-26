@@ -57,6 +57,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import secrets
@@ -228,7 +229,7 @@ def _handler_for(state: CanaryState) -> type[BaseHTTPRequestHandler]:
                     parsed = json.loads(body)
                     if isinstance(parsed, dict) and isinstance(parsed.get("reason"), str):
                         reason = parsed["reason"]
-                except ValueError:
+                except (ValueError, RecursionError):  # deep nesting inside the body cap
                     reason = None
             snap = state.halt(source="endpoint", nonce=parse_nonce(reason), set_nonce=True)
             self._send(200, {"halted": snap["halted"], "nonce": snap["nonce"], "since": snap["since"],
@@ -322,6 +323,8 @@ HttpCall = Callable[..., "tuple[int, Any]"]
 #: A reply larger than this is an answer with no body, never read into memory or parsed (same bound as
 #: FieldClient.MAX_RESPONSE_BYTES; reviewer C-102 F-C102-3).
 MAX_RESPONSE_BYTES = 64 * 1024
+#: x3_check reads this many of the newest ledger rows of a type before and after a step (the ledger keeps the last N).
+X3_WINDOW = 20
 
 
 #: The kill-switch routes x3-check calls that carry an operator check. The
@@ -401,7 +404,7 @@ def urllib_call(method: str, url: str, body: Any | None = None, *, secret: str |
         return status, {"response_too_large": MAX_RESPONSE_BYTES}
     try:
         return status, json.loads(raw) if raw else None
-    except ValueError:
+    except (ValueError, RecursionError):  # as FieldClient does
         return status, {"non_json_bytes": len(raw)}
 
 
@@ -418,10 +421,22 @@ def x3_check(agent: str, *, killswitch_url: str, registry_url: str, ledger_url: 
         out(f"  [{'PASS' if ok else 'FAIL'}] {label}")
         return bool(ok)
 
-    def count(event_type: str) -> int | None:
-        q = urllib.parse.urlencode({"event_type": event_type, "agent_id": agent})
+    def recent_ids(event_type: str) -> frozenset[str] | None:
+        """The event ids of the LAST ``X3_WINDOW`` rows of this type for the agent (the ledger keeps the last N
+        matches), or None when the reply is not a readable list of events. Bounded on purpose: an unbounded read
+        crosses the 64 KiB reply cap once the canary has enough history, and the +1 checks then fail forever."""
+        q = urllib.parse.urlencode({"event_type": event_type, "agent_id": agent, "limit": X3_WINDOW})
         status, body = platform("GET", f"{ledger_url}/events?{q}")
-        return len(body) if status == 200 and isinstance(body, list) else None
+        if status != 200 or not isinstance(body, list):
+            return None
+        ids = [row.get("event_id") if isinstance(row, dict) else None for row in body]
+        return frozenset(ids) if all(isinstance(i, str) for i in ids) else None
+
+    def new_rows(before: frozenset[str] | None, after: frozenset[str] | None) -> int | None:
+        return None if before is None or after is None else len(after - before)
+
+    def seen(n: int | None) -> str:
+        return "unreadable" if n is None else f"{n} new"
 
     if agent not in CANARIES:
         out(f"refusing: '{agent}' is not one of {sorted(CANARIES)} - X3 runs on the canary only (rule 7)")
@@ -444,7 +459,7 @@ def x3_check(agent: str, *, killswitch_url: str, registry_url: str, ledger_url: 
     halts0 = before.get("halts") if isinstance(before.get("halts"), int) else None
 
     nonce = secrets.token_hex(8)
-    k0 = count("kill.endpoint_called")
+    k0 = recent_ids("kill.endpoint_called")
     status, killed = platform("POST", f"{killswitch_url}/kill/{q_agent}",
                               {"operator": "FIELD gate verification (canary)", "reason": f"x3-{nonce}"})
     er = killed.get("endpoint_result") if isinstance(killed, dict) else None
@@ -454,8 +469,8 @@ def x3_check(agent: str, *, killswitch_url: str, registry_url: str, ledger_url: 
           f"kill reason x3-{nonce} => 200, endpoint_result outcome={er.get('outcome')} "
           f"reason={er.get('reason')} http_status={er.get('http_status')} host={er.get('endpoint_host')} "
           f"(want called 200 {canary_host})")
-    k1 = count("kill.endpoint_called")
-    check(k0 is not None and k1 == k0 + 1, f"exactly +1 kill.endpoint_called ({k0} -> {k1})")
+    k_new = new_rows(k0, recent_ids("kill.endpoint_called"))
+    check(k_new == 1, f"exactly +1 kill.endpoint_called ({seen(k_new)})")
     status, after = canary("GET", f"{canary_url}/status")
     after = after if isinstance(after, dict) else {}
     check(status == 200 and after.get("halted") is True and after.get("nonce") == nonce
@@ -464,12 +479,12 @@ def x3_check(agent: str, *, killswitch_url: str, registry_url: str, ledger_url: 
           f"canary-agent /status halted=true nonce={after.get('nonce')} (want {nonce}) "
           f"by={after.get('last_halted_by')} halts {halts0} -> {after.get('halts')}")
 
-    r0 = count("kill.revive")
+    r0 = recent_ids("kill.revive")
     status, _ = platform("POST", f"{killswitch_url}/revive/{q_agent}",
                          {"operator": "FIELD gate verification (canary)", "reason": f"x3-{nonce} revive"})
-    r1 = count("kill.revive")
-    check(status == 200 and r0 is not None and r1 == r0 + 1,
-          f"revive 200 and exactly +1 kill.revive (HTTP {status}; {r0} -> {r1})")
+    r_new = new_rows(r0, recent_ids("kill.revive"))
+    check(status == 200 and r_new == 1,
+          f"revive 200 and exactly +1 kill.revive (HTTP {status}; {seen(r_new)})")
     status, hb = platform("GET", f"{killswitch_url}/heartbeat/{q_agent}")
     check(status == 200 and isinstance(hb, dict) and hb.get("killed") is False,
           f"heartbeat killed=false after revive (HTTP {status})")
@@ -478,7 +493,7 @@ def x3_check(agent: str, *, killswitch_url: str, registry_url: str, ledger_url: 
           "canary process still halted after revive (a revive flips the registry, not the process)")
 
     drill_nonce = secrets.token_hex(8)
-    d0 = count("kill.drill.complete")
+    d0 = recent_ids("kill.drill.complete")
     status, drill = platform("POST", f"{killswitch_url}/drill/{q_agent}",
                              {"operator": "FIELD gate verification (canary)", "reason": f"x3-{drill_nonce}"})
     drill = drill if isinstance(drill, dict) else {}
@@ -491,8 +506,8 @@ def x3_check(agent: str, *, killswitch_url: str, registry_url: str, ledger_url: 
           and drill.get("restored_status") == "active",
           f"drill on the {CANARY_DOMAIN}-domain canary => endpoint_confirmed_ms={ms} outcome={der.get('outcome')} "
           f"restored={drill.get('restored')} {drill.get('restored_status')} (HTTP {status})")
-    d1 = count("kill.drill.complete")
-    check(d0 is not None and d1 == d0 + 1, f"exactly +1 kill.drill.complete ({d0} -> {d1})")
+    d_new = new_rows(d0, recent_ids("kill.drill.complete"))
+    check(d_new == 1, f"exactly +1 kill.drill.complete ({seen(d_new)})")
     status, final = canary("GET", f"{canary_url}/status")
     check(status == 200 and isinstance(final, dict) and final.get("nonce") == drill_nonce,
           f"canary-agent /status nonce={final.get('nonce') if isinstance(final, dict) else None} after the drill (want {drill_nonce})")
@@ -507,9 +522,36 @@ def x3_check(agent: str, *, killswitch_url: str, registry_url: str, ledger_url: 
 # -- entry point -------------------------------------------------------------------
 
 
-def _env_float(name: str, default: float) -> float:
-    raw = os.environ.get(name, "").strip()
-    return float(raw) if raw else default
+def _setting(flag: str | None, env_name: str, default: str) -> tuple[str, str]:
+    """(raw value, the NAME to report if it is bad): the flag if given, else the
+    env var if set and non-blank, else the default. Read lazily, so a junk
+    serve-only variable never touches `x3-check`."""
+    if flag is not None:
+        return flag, flag_name(env_name)
+    raw = os.environ.get(env_name, "").strip()
+    return (raw, env_name) if raw else (default, env_name)
+
+
+def flag_name(env_name: str) -> str:
+    return {"FIELD_CANARY_PORT": "--port", "FIELD_CANARY_WORK_EVERY": "--work-every",
+            "FIELD_CANARY_HEARTBEAT_EVERY": "--heartbeat-every"}[env_name]
+
+
+def _bounded_number(raw: str, name: str, *, integer: bool, lo: float, hi: float | None,
+                    allow_zero: bool = False) -> float | int:
+    """Parse once; raise ValueError naming only NAME (never the offending value)."""
+    try:
+        value = int(raw) if integer else float(raw)
+    except ValueError:
+        value = math.nan
+    ok = not math.isnan(value) and not math.isinf(value)
+    ok = ok and ((allow_zero and value == 0) or (value >= lo and (hi is None or value <= hi)))
+    if not ok:
+        kind = "an integer" if integer else "a finite number"
+        rng = f"{lo:g}" + (f"..{hi:g}" if hi is not None else " or more")
+        zero = " (or 0 = off)" if allow_zero else ""
+        raise ValueError(f"error: {name} must be {kind} in {rng}{zero}")
+    return value
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -518,9 +560,10 @@ def main(argv: list[str] | None = None) -> int:
     serve = sub.add_parser("serve", help="run the canary agent (never exits on a halt)")
     serve.add_argument("--agent-id", default=os.environ.get("FIELD_CANARY_AGENT_ID", "canary-gb10"))
     serve.add_argument("--host", default=os.environ.get("FIELD_CANARY_HOST", "0.0.0.0"))
-    serve.add_argument("--port", type=int, default=int(os.environ.get("FIELD_CANARY_PORT", DEFAULT_PORT)))
-    serve.add_argument("--work-every", type=float, default=_env_float("FIELD_CANARY_WORK_EVERY", 5.0))
-    serve.add_argument("--heartbeat-every", type=float, default=_env_float("FIELD_CANARY_HEARTBEAT_EVERY", 0.0),
+    # type=str, default=None: validated once below, and the env is read only for `serve`
+    serve.add_argument("--port", default=None)
+    serve.add_argument("--work-every", default=None)
+    serve.add_argument("--heartbeat-every", default=None,
                        help="seconds between read-only heartbeat polls; 0 = off (default)")
     chk = sub.add_parser("x3-check", help="the X3 live check (run inside the kill-switch container)")
     chk.add_argument("--agent", required=True)
@@ -546,6 +589,21 @@ def main(argv: list[str] | None = None) -> int:
                 operator=is_guarded_killswitch_call(m, u, killswitch_url)),
             canary=lambda m, u, b=None: urllib_call(m, u, b, secret=None),
         )
+
+    try:
+        # port 0 = an ephemeral port chosen by the OS (tests rely on it); only a negative or > 65535 is refused
+        port = _bounded_number(*_setting(args.port, "FIELD_CANARY_PORT", str(DEFAULT_PORT)),
+                               integer=True, lo=0, hi=65535)
+        # the floor only rules out the hot loop (`_stop.wait(0)` at <= 0); 0.01 s leaves fast test intervals usable
+        work_every = _bounded_number(*_setting(args.work_every, "FIELD_CANARY_WORK_EVERY", "5.0"),
+                                     integer=False, lo=0.01, hi=None)
+        heartbeat_every = _bounded_number(
+            *_setting(args.heartbeat_every, "FIELD_CANARY_HEARTBEAT_EVERY", "0"),
+            integer=False, lo=1, hi=None, allow_zero=True)
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    args.port, args.work_every, args.heartbeat_every = port, work_every, heartbeat_every
 
     agent = CanaryAgent(args.agent_id, host=args.host, port=args.port,
                         work_every=args.work_every, heartbeat_every=args.heartbeat_every)

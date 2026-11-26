@@ -1,0 +1,86 @@
+[
+  {
+    "operator_id": "don",
+    "key_sha256": "0000000000000000000000000000000000000000000000000000000000000001",
+    "status": "active",
+    "created_at": "2026-01-01T00:00:00+00:00",
+    "scopes": ["kill", "revive", "drill", "caps", "escalation"],
+    "names": []
+  },
+  {
+    "operator_id": "don-admin",
+    "key_sha256": "0000000000000000000000000000000000000000000000000000000000000002",
+    "status": "active",
+    "created_at": "2026-01-01T00:00:00+00:00",
+    "scopes": ["registry_edit", "sweep", "revoke", "decommission", "retention", "export", "federation", "attest"],
+    "names": []
+  },
+  {
+    "operator_id": "don-breakglass",
+    "key_sha256": "0000000000000000000000000000000000000000000000000000000000000003",
+    "status": "active",
+    "created_at": "2026-01-01T00:00:00+00:00",
+    "scopes": ["kill", "revive", "bypass_operator_list"],
+    "names": []
+  },
+  {
+    "operator_id": "svc-killswitch",
+    "key_sha256": "0000000000000000000000000000000000000000000000000000000000000004",
+    "status": "active",
+    "created_at": "2026-01-01T00:00:00+00:00",
+    "scopes": ["kill", "revive", "drill", "bypass_operator_list", "ledger_attribute"],
+    "event_prefixes": ["kill."],
+    "names": []
+  },
+  {
+    "operator_id": "svc-lifecycle",
+    "key_sha256": "0000000000000000000000000000000000000000000000000000000000000005",
+    "status": "active",
+    "created_at": "2026-01-01T00:00:00+00:00",
+    "scopes": ["kill", "ledger_attribute"],
+    "event_prefixes": ["lifecycle.", "orphan."],
+    "names": []
+  },
+  {
+    "operator_id": "svc-registry",
+    "key_sha256": "0000000000000000000000000000000000000000000000000000000000000006",
+    "status": "active",
+    "created_at": "2026-01-01T00:00:00+00:00",
+    "scopes": ["ledger_attribute"],
+    "event_prefixes": ["registry."],
+    "names": []
+  },
+  {
+    "operator_id": "svc-delegation",
+    "key_sha256": "0000000000000000000000000000000000000000000000000000000000000007",
+    "status": "active",
+    "created_at": "2026-01-01T00:00:00+00:00",
+    "scopes": ["ledger_attribute"],
+    "event_prefixes": ["delegation."],
+    "names": []
+  },
+  {
+    "operator_id": "job-provision-gb10",
+    "key_sha256": "0000000000000000000000000000000000000000000000000000000000000008",
+    "status": "active",
+    "created_at": "2026-01-01T00:00:00+00:00",
+    "scopes": ["register", "caps", "mint", "mint_for_others", "revoke"],
+    "names": []
+  },
+  {
+    "operator_id": "job-renewal-gb10",
+    "key_sha256": "0000000000000000000000000000000000000000000000000000000000000009",
+    "status": "active",
+    "created_at": "2026-01-01T00:00:00+00:00",
+    "scopes": ["mint", "revoke"],
+    "names": []
+  },
+  {
+    "operator_id": "job-renewal-rog",
+    "key_sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+    "status": "active",
+    "created_at": "2026-01-01T00:00:00+00:00",
+    "scopes": ["mint", "revoke"],
+    "names": []
+  }
+]
