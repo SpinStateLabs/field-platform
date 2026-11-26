@@ -586,7 +586,8 @@ def create_app(
             app.state.endpoint_client = new_endpoint_client()
         return app.state.endpoint_client
 
-    app.state.ledger_note_failures = _GapCounter()
+    app.state.ledger_note_failures = _GapCounter()    # rows whose first append failed
+    app.state.ledger_rows_lost = _GapCounter()        # of those, the rows that were not written at all
     # Per-agent bookkeeping of REAL kills that went through THIS process (R-PR1025 drill restore race): a generation
     # counter bumped when a kill begins and ends, and the number of kills in flight. It is the in-process FIRST line:
     # a drill refuses to start while a kill is in flight and skips its restore when the generation moved. The real
@@ -629,21 +630,25 @@ def create_app(
             status = getattr(exc, "status_code", None)
             if isinstance(status, int) and 400 <= status < 500:
                 _ledger_fallback(event_type, agent_id, status)
+            else:
+                app.state.ledger_rows_lost.add()          # an outage: no second attempt
 
     def _ledger_fallback(event_type: str, agent_id: str | None, status: int) -> None:
         """The ledger REFUSED a row (4xx): something in it was not acceptable. One more attempt under the same event
-        type with a fixed shape that carries no text a request chose (the authenticated operator, never body text; an
-        agent id only inside the id rule), so a halt does not go unrecorded. An outage (no 4xx) gets no second
-        attempt."""
+        type with a fixed shape that carries no text a request chose (the authenticated operator, never body text or a
+        claimed name; an agent id only inside the id rule), so a halt does not go unrecorded. An outage (no 4xx) gets
+        no second attempt."""
         auth = operator_auth.current()
         payload = operator_auth.merge_payload({
             "operator": auth.operator_id if auth.authenticated else "(not recorded)",
             "reason": LEDGER_FALLBACK_REASON, "refused_status": status})
+        # the authenticated context adds what a request SAID it was (header and body text): not part of the fixed shape
+        payload = {k: v for k, v in payload.items() if k not in ("operator_claimed", "operator_body_claimed")}
         try:
             app.state.ledger.append(event_type, payload=payload,
                                     agent_id=agent_id if registry_id_ok(agent_id) else None)
         except Exception as exc:
-            app.state.ledger_note_failures.add()
+            app.state.ledger_rows_lost.add()
             log.warning("kill-switch: the fixed-shape fallback row failed too (event %s, %s)",
                         event_type, type(exc).__name__)
 
@@ -910,6 +915,7 @@ def create_app(
         return {"ok": True, "service": "kill-switch", "version": __version__,
                 "build_sha": build_sha(),
                 "ledger_note_failures": app.state.ledger_note_failures.value,
+                "ledger_rows_lost": app.state.ledger_rows_lost.value,
                 "heartbeats_refused": app.state.heartbeats_refused.value,
                 "heartbeat_ids_refused": app.state.heartbeat_ids_refused.value,
                 "allowlist_entries_unusable": _allowlist_unusable(),
