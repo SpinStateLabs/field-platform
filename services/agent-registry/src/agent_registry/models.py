@@ -206,6 +206,13 @@ def parse_updated_at(value: str) -> datetime:
     parsed = datetime.fromisoformat(text)
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
+    @model_validator(mode="after")
+    def _at_least_one_field(self) -> "AgentUpdate":
+        """S8-15: a patch that edits nothing wrote no row yet was ledgered as ``registry.updated`` with no fields."""
+        if all(getattr(self, f) is None for f in type(self).model_fields):
+            raise ValueError("a patch must carry at least one field to change")
+        return self
+
 
 class ShadowCandidate(BaseModel):
     """An unregistered-agent candidate found by the discovery scanner."""
