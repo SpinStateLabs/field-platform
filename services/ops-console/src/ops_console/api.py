@@ -39,6 +39,7 @@ from field_core.startup import warn_open
 from field_core.authn import HEADER as AUTH_HEADER, install as install_authn, shared_secret
 from field_core.http import get_retrying_once, pooled_limits
 from field_core.http_errors import install_validation_handler
+from field_core.ids import REGISTRY_ID_PATTERN
 from field_core.buildinfo import build_sha
 from field_core.clients import (
     CallerSigner,
@@ -223,7 +224,7 @@ class ResolveAction(BaseModel):
 
 
 #: The registry's agent id grammar (agent_registry/models.py), the only ids a bulk action may name.
-AGENT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+AGENT_ID_RE = re.compile(REGISTRY_ID_PATTERN)
 
 
 class BulkAction(BaseModel):

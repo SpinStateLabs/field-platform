@@ -76,7 +76,7 @@ from field_core.http_errors import install_validation_handler
 from field_core.buildinfo import build_sha
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from field_core.ids import registry_id_ok
+from field_core.ids import REGISTRY_ID_MAX_LENGTH, REGISTRY_ID_RE, registry_id_ok
 from field_core.clients import (
     AgentNotRegisteredError,
     AgentRowChangedError,
@@ -121,7 +121,7 @@ _URLISH = re.compile(r"\b[a-zA-Z][a-zA-Z0-9+.-]*://\S+")
 
 
 #: longest agent id the POST /heartbeat route will record (a row per distinct id).
-MAX_HEARTBEAT_ID_LEN = 128
+MAX_HEARTBEAT_ID_LEN = REGISTRY_ID_MAX_LENGTH
 
 
 class KillRequest(BaseModel):
@@ -429,7 +429,7 @@ def _scrub(text: Any, limit: int = 200) -> str:
 
 #: B-RT4 F1: bounds on what POST /heartbeat/{agent_id} may store. The id rule is the registry's own.
 MAX_UNREGISTERED_HEARTBEATS = 500      # MAX_HEARTBEAT_ID_LEN (S4-4) is defined once, above
-_HEARTBEAT_ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]*")
+_HEARTBEAT_ID_RE = REGISTRY_ID_RE
 
 #: Path shapes served by THIS service. The recursion guard matches the shape,
 #: not the agent id: a manifest that points at ``/heartbeat/<other-agent>``

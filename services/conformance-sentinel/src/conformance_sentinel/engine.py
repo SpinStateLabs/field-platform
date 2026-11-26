@@ -36,7 +36,7 @@ from field_core.clients import (
 )
 from field_core.conformance import ConformanceVerdict, Decision
 from field_core.http import get_retrying_once, pooled_limits
-from field_core.ids import registry_id_ok
+from field_core.ids import REGISTRY_ID_RE, registry_id_ok
 from field_core.ledger_context import correlation_context
 from field_core.operator_health import NOT_SHOWN, shown_label
 
@@ -55,7 +55,7 @@ CONTEXT_MAX_BYTES = 16 * 1024
 #: The registry's own id pattern (agent_registry.models). An id outside it cannot be registered, so it is answered as
 #: R.unregistered WITHOUT a registry call (RegistryClient refuses such an id too, before it builds a URL, and also
 #: refuses one over its own length bound).
-_REGISTRY_ID = re.compile(r"[a-z0-9][a-z0-9._-]*")
+_REGISTRY_ID = REGISTRY_ID_RE
 
 
 def _row_agent_id(agent_id: str) -> str | None:
