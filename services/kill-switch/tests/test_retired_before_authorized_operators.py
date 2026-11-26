@@ -1,10 +1,9 @@
 """A retired agent answers 409 on /kill, /revive and /drill BEFORE the manifest's ``authorized_operators`` list is read.
 
-Before this, the list check ran first, so a list-bound machine verifier (P35, ``svc-verifier-<estate>``) got 403 on the
-retired canary (a record with no ``manifest_ref``) and the retired guard was never exercised under that identity. The
-operator's key and the route's scope are still checked first (the route guard), so an unauthenticated or out-of-scope
-caller learns nothing new; nothing is written or signalled to a retired agent either way. Non-retired targets and the
-domain kill are unchanged.
+The operator's key and the route's scope are checked first (the route guard), so an unauthenticated or out-of-scope
+caller learns nothing about the target. Every identity that holds the scope, a list-bound one included, then gets the
+retired 409; nothing is written to the registry or signalled for a retired agent. Non-retired targets and the domain
+kill are unchanged.
 
 Test key values are throwaway constants; nothing here reads a real key."""
 

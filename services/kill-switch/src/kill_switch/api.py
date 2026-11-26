@@ -75,6 +75,7 @@ from field_core.http_errors import install_validation_handler
 from field_core.buildinfo import build_sha
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from field_core.ids import registry_id_ok
 from field_core.clients import (
     AgentNotRegisteredError,
     AgentRowChangedError,
@@ -386,6 +387,11 @@ def _exc_name(exc: BaseException) -> str:
     return type(exc.__cause__ or exc).__name__
 
 
+#: the ``reason`` of the fixed-shape row written when the ledger refused a kill-path row (4xx)
+LEDGER_FALLBACK_REASON = "the ledger refused this row; fixed-shape record"
+#: the only payload keys that row may carry; the last two are the authenticated context, present when a mode is on
+LEDGER_FALLBACK_KEYS = ("operator", "reason", "refused_status", "operator_id_authenticated", "operator_key_fp")
+
 #: status code -> fixed failure class for the kill.agent.failed ledger row
 _FAIL_CLASS = {404: "not_registered", 409: "retired", 403: "not_authorized", 502: "registry_failure"}
 
@@ -457,15 +463,15 @@ def _canonical_path(path: str) -> str | None:
 
 
 def _record_id(record: dict, path_id: str) -> str:
-    """The agent id a ledger row carries once the record is read: the record's own; the (validated) path id only if it
-    names none."""
+    """The agent id a ledger row carries once the record is read: the record's own; the (validated) path id only if the
+    record names none inside the id rule (the ledger must be able to take the row)."""
     rid = record.get("agent_id")
-    return rid if isinstance(rid, str) and rid else path_id
+    return rid if registry_id_ok(rid) else path_id
 
 
 def _valid_id_or_none(path_id: str | None) -> str | None:
     """For a row written before the route has checked the id (the guard's ``operator.refused``)."""
-    return path_id if path_id and _HEARTBEAT_ID_RE.fullmatch(path_id) else None
+    return path_id if registry_id_ok(path_id) else None
 
 
 def _is_self_endpoint(path: str, agent_id: str) -> bool:
@@ -527,12 +533,12 @@ def create_app(
                 agent_id=record.get("agent_id")) from None
 
     def _require_agent_id(agent_id: str, action: str) -> None:
-        """/kill, /revive and /drill refuse a path id outside the registry's id rule (``_HEARTBEAT_ID_RE``) before the
-        registry is asked or a row is written, so a caller cannot choose a ledger row's agent id with an encoded ``?``,
-        ``#`` or ``/``. No length bound, unlike check-ins: a stored row with a long id must stay killable. The log line
-        never quotes the id."""
-        if not _HEARTBEAT_ID_RE.fullmatch(agent_id):
-            log.warning("kill-switch: %s refused, the path id is outside the agent-id rule", action)
+        """/kill, /revive, /drill and GET /heartbeat refuse a path id outside the registry's id rule
+        (``field_core.ids.registry_id_ok``, at most 128 characters) before the registry is asked, a row is written or a
+        halt signal is sent. The log line never quotes the id; a refused poll (GET) is not logged."""
+        if not registry_id_ok(agent_id):
+            if action != "heartbeat":
+                log.warning("kill-switch: %s refused, the path id is outside the agent-id rule", action)
             raise HTTPException(422, "agent_id is not a valid agent id")
 
     def _manifest_refs() -> list:
@@ -572,7 +578,8 @@ def create_app(
             app.state.endpoint_client = new_endpoint_client()
         return app.state.endpoint_client
 
-    app.state.ledger_note_failures = _GapCounter()
+    app.state.ledger_note_failures = _GapCounter()    # rows whose first append failed
+    app.state.ledger_rows_lost = _GapCounter()        # of those, the rows that were not written at all
     # Per-agent bookkeeping of REAL kills that went through THIS process (R-PR1025 drill restore race): a generation
     # counter bumped when a kill begins and ends, and the number of kills in flight. It is the in-process FIRST line:
     # a drill refuses to start while a kill is in flight and skips its restore when the generation moved. The real
@@ -611,6 +618,31 @@ def create_app(
             # type and exception type only, never the message, which can quote an endpoint or a key).
             app.state.ledger_note_failures.add()
             log.warning("kill-switch: ledger record not written (event %s, %s); the action already happened",
+                        event_type, type(exc).__name__)
+            status = getattr(exc, "status_code", None)
+            if isinstance(status, int) and 400 <= status < 500:
+                _ledger_fallback(event_type, agent_id, status)
+            else:
+                app.state.ledger_rows_lost.add()          # an outage: no second attempt
+
+    def _ledger_fallback(event_type: str, agent_id: str | None, status: int) -> None:
+        """The ledger REFUSED a row (4xx): something in it was not acceptable. One more attempt under the same event
+        type with a fixed shape that carries no text a request chose (the authenticated operator, never body text or a
+        claimed name; an agent id only inside the id rule), so a halt does not go unrecorded. An outage (no 4xx) gets
+        no second attempt."""
+        auth = operator_auth.current()
+        payload = operator_auth.merge_payload({
+            "operator": auth.operator_id if auth.authenticated else "(not recorded)",
+            "reason": LEDGER_FALLBACK_REASON, "refused_status": status})
+        # an allowlist: the merge also adds what a request SAID (claimed, body and on-behalf-of names), which is not
+        # part of the fixed shape, and any field it gains later stays out until it is named above
+        payload = {k: v for k, v in payload.items() if k in LEDGER_FALLBACK_KEYS}
+        try:
+            app.state.ledger.append(event_type, payload=payload,
+                                    agent_id=agent_id if registry_id_ok(agent_id) else None)
+        except Exception as exc:
+            app.state.ledger_rows_lost.add()
+            log.warning("kill-switch: the fixed-shape fallback row failed too (event %s, %s)",
                         event_type, type(exc).__name__)
 
     # -- agent-side halt signal ---------------------------------------------
@@ -878,6 +910,7 @@ def create_app(
         return {"ok": True, "service": "kill-switch", "version": __version__,
                 "build_sha": build_sha(),
                 "ledger_note_failures": app.state.ledger_note_failures.value,
+                "ledger_rows_lost": app.state.ledger_rows_lost.value,
                 "heartbeats_refused": app.state.heartbeats_refused.value,
                 "heartbeat_ids_refused": app.state.heartbeat_ids_refused.value,
                 "allowlist_entries_unusable": _allowlist_unusable(),
@@ -1037,7 +1070,9 @@ def create_app(
 
     @app.get("/heartbeat/{agent_id}", response_model=Heartbeat)
     def heartbeat(agent_id: str) -> Heartbeat:
-        """Read-only. A poll is not a check-in and must never write."""
+        """Read-only. A poll is not a check-in and must never write. An id outside the rule is 422, which every agent
+        client treats as "halt", like any answer that is not an explicit ``killed: false``."""
+        _require_agent_id(agent_id, "heartbeat")
         return _heartbeat_for(agent_id)[0]
 
     @app.post("/heartbeat/{agent_id}", response_model=Heartbeat)

@@ -51,8 +51,8 @@ CONTEXT_MAX_KEYS = 50
 CONTEXT_MAX_BYTES = 16 * 1024
 
 #: The registry's own id pattern (agent_registry.models). An id outside it cannot be registered, so it is answered as
-#: R.unregistered WITHOUT a registry call: RegistryClient builds f"{base}/agents/{agent_id}" unquoted, and an id like
-#: 'x/../health' or 'a?b=1' would otherwise address another route.
+#: R.unregistered WITHOUT a registry call (RegistryClient refuses such an id too, before it builds a URL, and also
+#: refuses one over its own length bound).
 _REGISTRY_ID = re.compile(r"[a-z0-9][a-z0-9._-]*")
 
 
