@@ -190,5 +190,5 @@ def test_under_require_a_job_identity_renews_unchanged_but_a_change_is_still_ref
     assert len(stack.spy.patches) == 1
     step = _register(changed)
     assert step.outcome == "failed" and step.http_status == 403 and "PATCH refused" in step.detail
-    assert changed.ok is False and changed.registry_outcome is None
+    assert changed.ok is False and changed.registry_outcome == "edit_refused"   # G21: a refused human edit, named
     assert stack.record()["owner"] == "AP Team Lead"                # the refused edit wrote nothing

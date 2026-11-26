@@ -69,6 +69,7 @@ def load_strict(text: str):
 
 def _files(root: Path = ROOT) -> list[str]:
     pats = (".github/workflows/*.yml", ".github/workflows/*.yaml",
+            ".github/actions/**/action.yml", ".github/actions/**/action.yaml",
             "integration/**/docker-compose*.yml", "integration/**/docker-compose*.yaml",
             "integration/**/compose*.yml", "integration/**/compose*.yaml")
     found: set[str] = set()
@@ -174,6 +175,8 @@ def test_the_discovered_file_set_is_not_empty():
     "integration/a/docker-compose.x.yaml",
     "integration/a/compose.x.yml",
     "integration/a/compose.x.yaml",
+    ".github/actions/a/action.yml",
+    ".github/actions/a/action.yaml",
 ])
 def test_each_discovery_pattern_finds_its_file(tmp_path: Path, rel: str):
     f = tmp_path / rel
