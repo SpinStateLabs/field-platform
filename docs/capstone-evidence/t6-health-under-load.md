@@ -4,7 +4,7 @@
 once. The sustained, all-service failure seen on the Fly estate was **not** reproduced.
 No code fix ships with this note: no candidate passed a test that fails on main.
 
-Production finding (Fly estate, image main-6bc2c80): during one heavy authenticated request (/attest/pack,
+Production finding (Fly estate, 2026-11-20): during one heavy authenticated request (/attest/pack,
 /ledger/verify or an unfiltered /ledger/events; about 11,200 events, 5.7 MB) all eight monitored /health answers
 failed for 11-63 s. The monitor uses a 5 s timeout; two failed polls in a row roll back.
 
