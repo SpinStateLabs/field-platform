@@ -91,12 +91,15 @@ Subcommands (all take --base):
 from __future__ import annotations
 
 import argparse
+import http.client
 import ipaddress
 import json
 import math
 import os
 import re
+import socket
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -449,7 +452,114 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None  # a 3xx is an answer, never a hop: the header must not travel
 
 
-_OPENER = urllib.request.build_opener(_NoRedirect, urllib.request.ProxyHandler({}))
+class _Deadline:
+    """A wall-clock limit on ONE request (B-1074-TOTAL-DEADLINE). The ``timeout=`` of ``urlopen`` bounds each socket
+    operation, so a server that sends one byte at a time never trips it. When ``seconds`` pass, this shuts every socket
+    the request opened down (through a duplicate descriptor, so it also reaches a socket TLS has since wrapped), which
+    wakes the blocked read; ``fired`` then makes the call a transport error, whatever the read returned (fail closed)."""
+
+    def __init__(self, seconds: float):
+        self.fired = False
+        self._dups: list[socket.socket] = []
+        self._lock = threading.Lock()
+        self._timer = threading.Timer(seconds, self._fire)
+        self._timer.daemon = True
+
+    def track(self, sock: socket.socket) -> socket.socket:
+        dup = sock.dup()
+        with self._lock:
+            self._dups.append(dup)
+            fired = self.fired
+        if fired:
+            self._shut(dup)
+        return sock
+
+    @staticmethod
+    def _shut(sock: socket.socket) -> None:
+        try:
+            sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+
+    def _fire(self) -> None:
+        with self._lock:
+            self.fired = True
+            dups = list(self._dups)
+        for dup in dups:
+            self._shut(dup)
+
+    def __enter__(self) -> "_Deadline":
+        self._timer.start()
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        self._timer.cancel()
+        with self._lock:
+            dups, self._dups = self._dups, []
+        for dup in dups:
+            dup.close()
+        return False
+
+
+_ACTIVE = threading.local()   # .deadline: the _Deadline of the request this thread is sending, if any
+
+
+def _tracked(conn_class):
+    class Conn(conn_class):
+        def __init__(self, *args, **kw):
+            super().__init__(*args, **kw)
+            create = self._create_connection
+
+            def connect(*a, **k):
+                sock = create(*a, **k)
+                deadline = getattr(_ACTIVE, "deadline", None)
+                return deadline.track(sock) if deadline is not None else sock
+            self._create_connection = connect
+    return Conn
+
+
+_HTTPConn, _HTTPSConn = _tracked(http.client.HTTPConnection), _tracked(http.client.HTTPSConnection)
+
+
+class _DeadlineHTTP(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        return self.do_open(_HTTPConn, req)
+
+
+class _DeadlineHTTPS(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        return self.do_open(_HTTPSConn, req, context=self._context)
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect, urllib.request.ProxyHandler({}), _DeadlineHTTP, _DeadlineHTTPS)
+
+
+def _fetch(req: urllib.request.Request, seconds: float) -> tuple[int, bytes, str | None]:
+    """Send ``req`` and read the answer within ``seconds`` IN ALL (connect, headers and body), not per socket read.
+    Returns (status, raw body, Retry-After). An overrun raises ``TimeoutError``; a 4xx/5xx is an answer, not a raise."""
+    with _Deadline(seconds) as deadline:
+        _ACTIVE.deadline = deadline
+        retry_after = None
+        try:
+            try:
+                with _OPENER.open(req, timeout=seconds) as resp:
+                    raw, status = resp.read(MAX_RESPONSE_BYTES + 1), resp.status
+            except urllib.error.HTTPError as exc:
+                try:
+                    raw = exc.read(MAX_RESPONSE_BYTES + 1)
+                except Exception:
+                    raw = b""
+                status = exc.code
+                retry_after = exc.headers.get("Retry-After") if exc.headers else None
+        except Exception:
+            if deadline.fired:
+                raise TimeoutError from None
+            raise
+        finally:
+            _ACTIVE.deadline = None
+        if deadline.fired:                       # a read cut short by the shutdown may LOOK complete: never trust it
+            raise TimeoutError
+        return status, raw, retry_after
 
 
 class Estate:
@@ -487,20 +597,11 @@ class Estate:
         deadline = time.monotonic() + self.timeout   # the retry budget: --timeout, per call
         first, retries = True, 0
         while True:
-            retry_after = None
             # the first attempt gets the full --timeout (unchanged behaviour); a retry gets what is left of it
             attempt = self.timeout if first else max(min(self.timeout, deadline - time.monotonic()), 0.001)
             first = False
             try:
-                with _OPENER.open(req, timeout=attempt) as resp:
-                    raw, status = resp.read(MAX_RESPONSE_BYTES + 1), resp.status
-            except urllib.error.HTTPError as exc:
-                try:
-                    raw = exc.read(MAX_RESPONSE_BYTES + 1)
-                except Exception:
-                    raw = b""
-                status = exc.code
-                retry_after = exc.headers.get("Retry-After") if exc.headers else None
+                status, raw, retry_after = _fetch(req, attempt)   # attempt = the whole request's wall clock
             except Exception as exc:  # type name only: never a message
                 return 0, {"transport_error": type(exc).__name__}
             if (status == 503 and retry_after is not None and method.upper() in RETRY_METHODS   # 503 WITHOUT Retry-After is not a busy signal
@@ -1116,8 +1217,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--base", required=True)
     parser.add_argument("--secret-file")
     parser.add_argument("--timeout", metavar="SECONDS",
-                        help=f"timeout of every request, in every subcommand (default: ${TIMEOUT_ENV}, else "
-                             f"{DEFAULT_TIMEOUT:g}); a request that outlasts it fails the check. It is also the retry "
+                        help=f"wall-clock limit of every request (connect, headers and body in all), in every subcommand "
+                             f"(default: ${TIMEOUT_ENV}, else {DEFAULT_TIMEOUT:g}); a request that outlasts it fails "
+                             f"the check. It is also the retry "
                              f"budget of one call: a busy 503 with a Retry-After is resent while the wait leaves at "
                              f"least {RETRY_MIN_BUDGET:g} s of it")
     parser.add_argument("--allow-heavy", action="store_true",
