@@ -1,9 +1,6 @@
-"""A listed operator must not be able to halt an agent while the ledger takes no row for it.
-
-The reproduction: an id over the ledger's 200-character ``agent_id`` bound that reads agent X. Before the id rule, the
-kill authorised on X, the registry write was refused, the halt signal went to X's own endpoint and every row was refused
-(422), leaving nothing in the ledger. The stubs here stand for that chain. This file imports nothing the fix added, so
-it runs, and fails, on the code before it.
+"""A kill for an id outside the registry's id rule sends no halt signal, even for a listed operator and with a ledger
+that refuses every row: 422, nothing read, nothing written. Stubs stand for the registry, the ledger and the agent
+endpoint.
 
 Test key values are throwaway constants; nothing here reads a real key."""
 
@@ -32,8 +29,8 @@ class RefusingLedger:
         raise LedgerUnreachableError("ledger append returned 422", status_code=422)
 
 
-class RegistryAnsweringX:
-    """Every read answers agent X; every write is refused."""
+class StubRegistry:
+    """Answers one record for every read; refuses every write."""
 
     def __init__(self, record):
         self.record = record
@@ -61,7 +58,7 @@ class Endpoint:
         return httpx.Response(200)
 
 
-def test_an_over_long_id_that_reads_x_sends_no_signal(tmp_path, monkeypatch):
+def test_an_id_outside_the_rule_sends_no_signal(tmp_path, monkeypatch):
     for name in (oa.ENV_REGISTRY, oa.ENV_REQUIRE, oa.ENV_OPERATOR, oa.ENV_OPERATOR_KEY, oa.ENV_OPERATOR_KEY_FILE):
         monkeypatch.delenv(name, raising=False)
     ops = tmp_path / "operators.json"
@@ -76,12 +73,12 @@ def test_an_over_long_id_that_reads_x_sends_no_signal(tmp_path, monkeypatch):
                                               method="HTTP POST")
     manifest = tmp_path / "agent-x.yaml"
     manifest.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
-    registry = RegistryAnsweringX({"agent_id": "agent-x", "status": "active", "domain": "ops",
-                                   "manifest_ref": str(manifest)})
+    registry = StubRegistry({"agent_id": "agent-x", "status": "active", "domain": "ops",
+                             "manifest_ref": str(manifest)})
     ledger, endpoint = RefusingLedger(), Endpoint()
     client = TestClient(create_app(registry=registry, ledger=ledger, endpoint_client=endpoint))
     r = client.post("/kill/" + "a" * 201, json={"operator": "someone", "reason": "a1"},
                     headers={oa.HEADER_OPERATOR: "don", oa.HEADER_KEY: KEY_DON})
-    assert endpoint.calls == [], "a halt signal went out although no ledger row could be written"
+    assert endpoint.calls == [], "no halt signal may go out for an id outside the rule"
     assert r.status_code == 422, (r.status_code, r.text)
     assert registry.reads == [] and registry.writes == [] and ledger.attempts == []

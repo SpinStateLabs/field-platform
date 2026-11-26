@@ -1,5 +1,5 @@
-"""``RegistryClient`` refuses an id outside the registry's id rule before it builds a URL or sends anything, so a ``?``,
-``#``, ``/`` or dot segment cannot make it read or write another record. An id inside the rule is sent as before."""
+"""``RegistryClient`` refuses an id outside the registry's id rule before it builds a URL or sends anything. An id
+inside the rule is sent as before."""
 
 from __future__ import annotations
 

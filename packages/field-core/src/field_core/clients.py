@@ -395,8 +395,8 @@ class LedgerClient:
 
 def _agent_path(agent_id: str) -> str:
     """``/agents/<id>``, or :class:`AgentNotRegisteredError` BEFORE any URL is built or request sent for an id outside
-    the registry's id rule (``field_core.ids.registry_id_ok``): such a text names no agent, and an unquoted ``?``, ``#``
-    or ``/`` in it used to address another record. The quoting is a second guard; an id inside the rule is unchanged."""
+    the registry's id rule (``field_core.ids.registry_id_ok``): such a text names no agent. The segment is also
+    percent-encoded; an id inside the rule is unchanged."""
     if not registry_id_ok(agent_id):
         raise AgentNotRegisteredError(agent_id)
     return f"/agents/{quote(agent_id, safe='')}"

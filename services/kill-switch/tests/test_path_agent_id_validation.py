@@ -1,11 +1,10 @@
-"""A caller cannot choose the agent id text of a kill-switch ledger row.
+"""Kill-switch ledger rows are keyed by a registry agent id.
 
 /kill, /revive, /drill and GET /heartbeat answer 422 to a path id outside the registry's id rule (at most 128
-characters), after the route guard and before the registry is asked; every ledger row carries the registry record's own
-``agent_id`` once the record is read, and the validated path id otherwise; the guard's ``operator.refused``
-row carries no
-agent id for an invalid one. A row the ledger refuses (4xx) is attempted once more in a fixed shape. A valid id behaves
-as before.
+characters), after the route guard and before the registry is asked; every ledger row carries the registry record's
+own ``agent_id`` once the record is read, and the validated path id otherwise; the guard's ``operator.refused`` row
+carries no agent id for an invalid one. A row the ledger refuses (4xx) is attempted once more in a fixed shape. A
+valid id behaves as before.
 
 Test key values are throwaway constants; nothing here reads a real key."""
 
@@ -13,14 +12,19 @@ from __future__ import annotations
 
 import json
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from field_core import operator_auth as oa
-from field_core.clients import AgentNotRegisteredError, LedgerUnreachableError, RegistryUnreachableError
-from kill_switch.api import LEDGER_FALLBACK_REASON, create_app
+from field_core.clients import (AgentNotRegisteredError, AgentRowChangedError, LedgerUnreachableError, RegistryClient,
+                                RegistryUnreachableError)
+from kill_switch import api as kill_api
+from kill_switch.api import create_app
 
 KEY_DON = "tkv-pdon-key-0123456789abcdef"
+#: spelled here, not imported, so that this file collects on a tree without the constant (its tests then fail, not error)
+FALLBACK_REASON = "the ledger refused this row; fixed-shape record"
 BODY = {"operator": "someone", "reason": "path-id"}
 ROUTES = ["kill", "revive", "drill"]
 ALL_ROUTES = ROUTES + ["heartbeat"]
@@ -232,41 +236,170 @@ class PickyLedger(Ledger):
 
     def append(self, event_type, payload, agent_id=None):
         self.attempts += 1
-        if self.refuse_all or payload.get("reason") != LEDGER_FALLBACK_REASON:
+        if self.refuse_all or payload.get("reason") != FALLBACK_REASON:
             raise LedgerUnreachableError(f"ledger append returned {self.status}", status_code=self.status)
         super().append(event_type, payload, agent_id)
 
 
-def _kill_with(stack, ledger, path_id="live"):
+def _kill_with(stack, ledger, path_id="live", headers=None):
     client, reg, _ = stack
     client.app.state.ledger = ledger
-    r = client.post(f"/kill/{path_id}", json=BODY, headers=don())
-    return r, client.get("/health").json()["ledger_note_failures"], reg
+    r = client.post(f"/kill/{path_id}", json=BODY, headers=don() if headers is None else headers)
+    health = client.get("/health").json()
+    return r, (health["ledger_note_failures"], health["ledger_rows_lost"]), reg
+
+
+def test_the_fallback_reason_is_the_one_this_file_expects():
+    assert getattr(kill_api, "LEDGER_FALLBACK_REASON", None) == FALLBACK_REASON
 
 
 @pytest.mark.parametrize("status", [400, 403, 413, 422])
 def test_a_halt_whose_rows_are_refused_is_recorded_in_the_fixed_shape(stack, status):
     ledger = PickyLedger(status)
-    r, failures, reg = _kill_with(stack, ledger)
+    r, counters, reg = _kill_with(stack, ledger)
     assert r.status_code == 200 and reg.writes == [("live", "killed")]
     assert ids(ledger) == [("kill.endpoint_skipped", "live"), ("kill.agent", "live")]
     for _, payload, _ in ledger.rows:
         shape = (payload["operator"], payload["reason"], payload["refused_status"])
-        assert shape == ("don", LEDGER_FALLBACK_REASON, status)
-        assert BODY["reason"] not in json.dumps(payload)
-    assert failures == 2 and ledger.attempts == 4
+        assert shape == ("don", FALLBACK_REASON, status)
+        assert payload["operator_id_authenticated"] == "don"
+        assert "operator_claimed" not in payload and "operator_body_claimed" not in payload
+        assert BODY["reason"] not in json.dumps(payload) and BODY["operator"] not in json.dumps(payload)
+    assert counters == (2, 0) and ledger.attempts == 4
 
 
 @pytest.mark.parametrize("status", [500, 502, 503, None])
 def test_an_outage_gets_no_second_attempt_and_the_kill_still_happens(stack, status):
     ledger = PickyLedger(status)
-    r, failures, reg = _kill_with(stack, ledger)
+    r, counters, reg = _kill_with(stack, ledger)
     assert r.status_code == 200 and reg.writes == [("live", "killed")]
-    assert ledger.rows == [] and ledger.attempts == 2 and failures == 2
+    assert ledger.rows == [] and ledger.attempts == 2 and counters == (2, 2)
 
 
-def test_a_ledger_refusing_the_fixed_shape_too_is_counted_and_does_not_block_the_kill(stack):
+def test_a_ledger_refusing_the_fixed_shape_too_is_counted_as_lost_and_does_not_block_the_kill(stack):
     ledger = PickyLedger(422, refuse_all=True)
-    r, failures, reg = _kill_with(stack, ledger)
+    r, counters, reg = _kill_with(stack, ledger)
     assert r.status_code == 200 and reg.writes == [("live", "killed")]
-    assert ledger.attempts == 4 and failures == 4
+    assert ledger.attempts == 4 and counters == (2, 2)
+
+
+def test_a_healthy_ledger_counts_nothing(stack):
+    client, _, _ = stack
+    assert client.post("/kill/live", json=BODY, headers=don()).status_code == 200
+    health = client.get("/health").json()
+    assert (health["ledger_note_failures"], health["ledger_rows_lost"]) == (0, 0)
+
+
+@pytest.mark.parametrize("mode", ["off", "log-only"])
+def test_the_fixed_shape_names_no_operator_for_an_unauthenticated_caller(stack, monkeypatch, mode):
+    monkeypatch.delenv(oa.ENV_REQUIRE)
+    if mode == "off":
+        monkeypatch.delenv(oa.ENV_REGISTRY)
+    ledger = PickyLedger(422)
+    claimed = {oa.HEADER_OPERATOR: "someone-claimed", oa.HEADER_KEY: "tkv-wrong-key-00000000000000"}
+    r, _, _ = _kill_with(stack, ledger, headers=claimed)
+    assert r.status_code == 200, r.text
+    rows = [payload for event_type, payload, _ in ledger.rows if event_type.startswith("kill.")]
+    assert len(rows) == 2
+    for payload in rows:
+        assert payload["operator"] == "(not recorded)" and payload.get("operator_id_authenticated") is None
+        text = json.dumps(payload)
+        assert "someone-claimed" not in text and BODY["operator"] not in text and "operator_claimed" not in payload
+
+
+# --- the rows of the drill's other endings and of a failed signal name the record ------------------------------------
+
+class ScriptedRegistry(Registry):
+    """``write_script[n]`` replaces the n-th status write: an exception is raised; "no-version" answers without one."""
+
+    def __init__(self, agents, write_script):
+        super().__init__(agents)
+        self.write_script = write_script
+
+    def set_status(self, agent_id, status, **kw):
+        step = self.write_script.get(len(self.writes) + 1)
+        if isinstance(step, Exception):
+            self.writes.append((agent_id, status))
+            raise step
+        answer = super().set_status(agent_id, status, **kw)
+        if step == "no-version":
+            answer.pop("updated_at", None)
+        return answer
+
+
+@pytest.mark.parametrize("script,ending,code", [
+    ({1: "no-version"}, "kill.drill.restore_skipped", 409),
+    ({2: AgentRowChangedError("path-text")}, "kill.drill.restore_skipped", 409),
+    ({2: RegistryUnreachableError("registry returned 503")}, "kill.drill.restore_failed", 500),
+], ids=["no-version-token", "row-changed-at-restore", "restore-write-failed"])
+def test_every_drill_ending_row_names_the_record(stack, script, ending, code):
+    client, _, led = stack
+    client.app.state.registry = ScriptedRegistry({"path-text": _row("real-one")}, script)
+    r = client.post("/drill/path-text", json=BODY, headers=don())
+    assert r.status_code == code, (r.status_code, r.text)
+    assert ids(led) == [("kill.drill.start", "real-one"), ("kill.endpoint_skipped", "real-one"),
+                        (ending, "real-one"), ("kill.drill.complete", "real-one")]
+
+
+def test_the_row_of_a_signal_that_raised_names_the_record(stack, monkeypatch):
+    client, reg, led = stack
+    reg.write_error = RegistryUnreachableError("registry returned 503")
+
+    def boom(manifest_ref):
+        raise RuntimeError("resolver down")
+
+    monkeypatch.setattr(kill_api, "resolve_manifest_detail", boom)
+    assert client.post("/kill/path-text", json=BODY, headers=don()).status_code == 502
+    assert ids(led) == [("kill.endpoint_failed", "real-one"), ("kill.agent.failed", "real-one")]
+    assert led.rows[0][1]["reason"] == "signal_error"
+
+
+# --- a domain kill over a stored id outside the rule -----------------------------------------------------------------
+
+class NoSignal:
+    def __init__(self):
+        self.calls = []
+
+    def request(self, method, url, headers=None, timeout=None):
+        self.calls.append(url)
+        return httpx.Response(200)
+
+
+def test_a_domain_kill_records_an_error_and_signals_nothing_for_a_stored_id_over_the_bound(stack):
+    """the real registry client: the list is read, the over-long id is never put into a URL (``stack``: the operator
+    file and ENFORCE)"""
+    long_id, seen = "a" * 129, []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path))
+        return httpx.Response(200, json=[_row(long_id)])
+
+    registry = RegistryClient(client=httpx.Client(transport=httpx.MockTransport(handler)), base_url="http://registry")
+    led, endpoint = Ledger(), NoSignal()
+    client = TestClient(create_app(registry=registry, ledger=led, endpoint_client=endpoint))
+    r = client.post("/kill/domain/ops", json=BODY, headers=don())
+    assert r.status_code == 502, r.text
+    report = r.json()["detail"]
+    assert report["killed"] == [] and report["already_killed"] == []
+    [result] = report["results"]
+    assert (result["agent_id"], result["outcome"]) == (long_id, "error") and result["error"].startswith("404:")
+    assert seen == [("GET", "/agents")] and endpoint.calls == []
+    assert ids(led) == [("kill.agent.failed", long_id), ("kill.domain", None)]
+    assert led.rows[0][1]["failure_class"] == "not_registered"
+    assert led.rows[1][1]["errored"] == [{"agent_id": long_id, "status_code": 404}]
+
+
+def test_the_fixed_shape_row_carries_no_agent_id_outside_the_rule(stack):
+    """a domain kill over a stored id outside the rule: the first row is keyed by it, the fixed shape is not"""
+    long_id = "a" * 201
+
+    class Refusing(Registry):
+        def get_agent(self, agent_id):
+            raise AgentNotRegisteredError(agent_id)
+
+    client, _, _ = stack
+    client.app.state.registry = Refusing({long_id: _row(long_id)})
+    ledger = PickyLedger(422)
+    client.app.state.ledger = ledger
+    assert client.post("/kill/domain/ops", json=BODY, headers=don()).status_code == 502
+    assert ids(ledger) == [("kill.agent.failed", None), ("kill.domain", None)]
