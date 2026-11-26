@@ -87,7 +87,8 @@ give agents a heartbeat to poll, and prove readiness with timed drills.
   itself, before it builds a URL. A stored agent with an id over 128 characters can therefore not be halted here.
 - **A refused row is attempted once more.** When the ledger answers a kill-switch row with a **4xx**, the same event
   type is appended once with a fixed shape (the authenticated operator or `(not recorded)`, a fixed reason, the refusal's
-  status; no request text, no claimed name). An outage (5xx, unreachable) gets no second attempt, and in neither case is
+  status; no request text, no claimed name). Its payload keys are only `operator`, `reason`, `refused_status` and, while
+  an operator mode is on, `operator_id_authenticated` and `operator_key_fp`. An outage (5xx, unreachable) gets no second attempt, and in neither case is
   the halt held back (the kill still succeeds during a ledger outage). `/health` counts both: `ledger_note_failures` is
   every row whose first append failed; `ledger_rows_lost` is those not written at all (an outage, or the fixed shape
   refused too).
