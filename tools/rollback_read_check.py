@@ -51,6 +51,7 @@ _CONTRACT_BEFORE = {"org_before": "example org", "active_before": True, "key_pre
 FIXTURES: dict[str, tuple[str | None, dict[str, Any]]] = {
     "kill.agent.failed": (AGENT, {"operator": "rollback-check", "reason": "registry returned 502", "status_code": 502,
                                   "failure_class": "registry_failure"}),
+    "kill.endpoint_failed": (AGENT, {"operator": "rollback-check", "reason": "signal_error", "outcome": "failed"}),
     "kill.drill.refused": (AGENT, {"operator": "rollback-check", "reason": "a real kill is in flight"}),
     "kill.drill.restore_skipped": (AGENT, {"operator": "rollback-check", "target_status": "active",
                                            "current_status": "killed", "reason": "superseded by kill"}),
