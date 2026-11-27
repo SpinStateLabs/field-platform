@@ -23,6 +23,7 @@ ALLOWED = [
 REFUSED = [
     "http://sentinel.example.org", "HTTP://sentinel.example.org", "Http://203.0.113.5",
     "http://sentinel.", "Http://Sentinel.:8004", "http://governor./x",
+    "http://127.0.0.1.", "http://127.0.0.1.:8004", "http://sentinel.test.", "http://a.b.localhost.",
     "http://evil.example.", "http://sentinel..", "http://localhost..", "http://sentinel.internal",
     "http://host.docker.internal:8004", "http://sentinel.test.example.org",
     "http://192.0.2.5", "http://198.51.100.7:8004", "http://0.0.0.0", "http://128.0.0.1",
@@ -94,7 +95,7 @@ def test_without_a_secret_a_remote_http_env_url_is_called_as_before(monkeypatch,
 
 def test_the_readme_says_what_a_refused_url_costs():
     text = " ".join((Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8").split())
-    assert "A single-label name with a trailing dot is refused" in text
+    assert "A trailing dot is accepted on `localhost` only" in text
     assert "where the kill-switch deadman is on for an agent, that agent is halted" in text
     assert "such as `.internal`) are refused too" in text
 

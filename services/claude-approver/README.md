@@ -125,7 +125,8 @@ it the env URLs and `field_core.authn.auth_headers()` apply (the GB10 stack). St
 **The env URLs and the shared secret.** When `FIELD_SHARED_SECRET` is set, a request built from `FIELD_SENTINEL_URL`,
 `FIELD_KILLSWITCH_URL` or `FIELD_GOVERNOR_URL` is sent only over https, or over http to a loopback address,
 `localhost`, a `.test` / `.localhost` name, or a single-label host name (no dot, such as a compose service name).
-A single-label name with a trailing dot is refused: it is an absolute name that skips the search path. A
+A trailing dot is accepted on `localhost` only; any other host written with one is refused, because such a name is
+absolute and skips the search path. A
 provider's private DNS names that contain a dot (such as `.internal`) are refused too, so running the approver where
 services are reached by such names needs a change to this rule. Any other http URL, including a number written in
 place of an address, is not called: the tool call is denied and the heartbeat and usage post are counted as
