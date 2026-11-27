@@ -156,15 +156,17 @@ def seen(jsdom_dir) -> dict:
 
 
 def test_a_hidden_page_asks_for_nothing(seen):
-    nothing = {"overview": 0, "streams": 0, "open": 0}
+    nothing = {"overview": 0, "platform": 0, "streams": 0, "open": 0}
     assert seen["hiddenAtLoad"] == nothing and seen["hiddenAfterPoll"] == nothing
+    assert seen["hiddenRequests"] == 0 and seen["askedWhileHiddenAgain"] == 0
 
 
 def test_the_page_asks_while_visible_and_stops_when_hidden(seen):
-    assert seen["visibleAtLoad"] == {"overview": 1, "streams": 1, "open": 1}
-    assert seen["shown"] == {"overview": 1, "streams": 1, "open": 1}
-    assert seen["hiddenAgain"] == {"overview": 1, "streams": 1, "open": 0}
-    assert seen["shownAgain"] == {"overview": 2, "streams": 2, "open": 1}
+    assert seen["visibleAtLoad"] == {"overview": 1, "platform": 1, "streams": 1, "open": 1}
+    assert seen["visibleAfterPoll"]["platform"] == 2             # the strip is polled while visible
+    assert seen["shown"] == {"overview": 1, "platform": 1, "streams": 1, "open": 1}
+    assert seen["hiddenAgain"] == {"overview": 1, "platform": 1, "streams": 1, "open": 0}
+    assert seen["shownAgain"] == {"overview": 2, "platform": 2, "streams": 2, "open": 1}
 
 
 def test_the_integrity_tile_says_busy_retrying(seen):

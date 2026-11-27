@@ -1373,6 +1373,7 @@ document.addEventListener("click", async ev => {
   } catch (e) { say("could not reach the estate from this browser"); }
 });
 async function refreshPlatform() {
+  if (pageHidden()) return;         // as refresh(): nothing is asked while hidden
   let p;
   try { p = await api("/api/platform"); } catch (e) { return; }
   const strip = Object.entries(p.health).map(([name, s]) =>
@@ -1484,6 +1485,7 @@ document.addEventListener("visibilitychange", () => {
   }
   streamBackoff = 5000;
   refresh();
+  refreshPlatform();
   startStream();
 });
 

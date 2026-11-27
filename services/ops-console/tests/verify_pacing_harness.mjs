@@ -19,7 +19,7 @@ const overview = { generated_at: "2026-01-01T10:11:12+00:00", agents: none(), to
 const platform = { health: {}, lifecycle: none(), attest: none(), crosswalk: none(), federation: none() };
 
 async function page(initial) {
-  const state = { visibility: initial, overview: 0, streams: [], intervals: [] };
+  const state = { visibility: initial, all: 0, overview: 0, platform: 0, streams: [], intervals: [] };
   const vc = new VirtualConsole();
   vc.on("jsdomError", () => {});
   const dom = new JSDOM(readFileSync(htmlPath, "utf8"), {
@@ -30,6 +30,7 @@ async function page(initial) {
       w.setInterval = (fn) => { state.intervals.push(fn); return state.intervals.length; };
       w.fetch = async (u, opts) => {
         const p = new URL(String(u), ORIGIN).pathname;
+        state.all += 1;               // every request the page makes
         if (p === "/api/stream") {
           const signal = opts.signal;
           state.streams.push(signal);
@@ -38,6 +39,7 @@ async function page(initial) {
           return { status: 200, ok: true, body: { getReader: () => ({ read }) }, headers: { get: () => null } };
         }
         if (p === "/api/overview") state.overview += 1;
+        if (p === "/api/platform") state.platform += 1;
         const j = p === "/api/overview" ? overview : p === "/api/platform" ? platform : {};
         return { status: 200, ok: true, headers: { get: () => null }, json: async () => j,
                  text: async () => JSON.stringify(j) };
@@ -50,12 +52,13 @@ async function page(initial) {
   });
   await sleep(300);
   const w = dom.window;
-  const seen = () => ({ overview: state.overview, streams: state.streams.length,
+  const seen = () => ({ overview: state.overview, platform: state.platform, streams: state.streams.length,
                         open: state.streams.filter((s) => !s.aborted).length });
+  const requests = () => state.all;
   const tick = async () => { for (const fn of state.intervals) fn(); await sleep(100); };
   const turn = async (v) => { state.visibility = v; w.document.dispatchEvent(new w.Event("visibilitychange"));
                               await sleep(100); };
-  return { w, seen, tick, turn };
+  return { w, seen, requests, tick, turn };
 }
 
 const out = {};
@@ -63,16 +66,22 @@ const a = await page("hidden");
 out.hiddenAtLoad = a.seen();
 await a.tick();
 out.hiddenAfterPoll = a.seen();
+out.hiddenRequests = a.requests();
 await a.turn("visible");
 out.shown = a.seen();
 await a.turn("hidden");
+const before = a.requests();
+await a.tick();
 await a.tick();
 out.hiddenAgain = a.seen();
+out.askedWhileHiddenAgain = a.requests() - before;
 await a.turn("visible");
 out.shownAgain = a.seen();
 
 const b = await page("visible");
 out.visibleAtLoad = b.seen();
+await b.tick();
+out.visibleAfterPoll = b.seen();
 const tile = (sec) => { b.w.renderIntegrity(sec); const el = b.w.document.getElementById("integrity");
                         return { text: el.textContent, cls: el.className }; };
 const busy = (data) => ({ available: false, source: "GET /verify", error: "busy, retrying", data });
