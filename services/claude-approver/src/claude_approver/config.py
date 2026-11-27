@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+import httpx
+
 DEFAULT_KEY_FILE = "/run/claude-approver/api-key"
 DEFAULT_POLL_SECONDS = 2.0
 #: Floor on the poll interval: 0 would spin against the 600 RPM org limit.
@@ -184,6 +186,29 @@ def _cleartext_ok(host: str) -> bool:
         return ipaddress.ip_address(host).is_loopback
     except ValueError:
         return host == "localhost" or host.endswith((".test", ".localhost"))
+
+
+#: a host with no dot, as raw ASCII: an in-network service name. A number (decimal, octal or hex) is an address.
+_SINGLE_LABEL = re.compile(r"[a-z0-9_][a-z0-9_-]*")
+_NUMERIC_HOST = re.compile(r"[0-9]+|0x[0-9a-f]*")
+
+
+def env_url_secret_ok(url: str) -> bool:
+    """May the shared secret travel to ``url``, built from a ``FIELD_*_URL`` value? https, or http to what
+    ``_cleartext_ok`` accepts, or to a single-label host name (a service name on the stack's own network). The URL
+    is read with the parser that sends the request; one it cannot read is refused."""
+    try:
+        parsed = httpx.URL(url)
+        if parsed.scheme == "https":
+            return True
+        if parsed.scheme != "http":
+            return False
+        host = parsed.raw_host.decode("ascii").lower().removesuffix(".")
+    except Exception:
+        return False
+    if _cleartext_ok(host):
+        return not host.endswith(".")
+    return bool(_SINGLE_LABEL.fullmatch(host)) and not _NUMERIC_HOST.fullmatch(host)
 
 
 def _parse_entry(console_id: str, raw: object) -> AgentEntry:

@@ -122,6 +122,14 @@ echoing the URL; http without a `secret_file` is unchanged. Without
 it the env URLs and `field_core.authn.auth_headers()` apply (the GB10 stack). Structural garbage
 (invalid JSON, not an object) empties the whole map: nothing is touched, `/stats` says why.
 
+**The env URLs and the shared secret.** When `FIELD_SHARED_SECRET` is set, a request built from `FIELD_SENTINEL_URL`,
+`FIELD_KILLSWITCH_URL` or `FIELD_GOVERNOR_URL` is sent only over https, or over http to a loopback address,
+`localhost`, a `.test` / `.localhost` name, or a single-label host name (no dot, such as a compose service name).
+Any other http URL, including a number written in place of an address, is not called: the tool call is denied and the
+heartbeat and usage post are counted as failures, with fixed text that does not echo the URL. What stays open: a
+single-label name is resolved through the container's DNS search path, which the estate's operator controls, and an
+HTTP proxy set in the process environment receives plain-http requests unless `NO_PROXY` names the host.
+
 ## Running it on the GB10 (pilot S2; nothing armed by this change)
 
 1. Don places the key (never an agent): `install -d -m 0700 <home>/.field-local/claude-approver`,
