@@ -10,7 +10,7 @@ import logging
 import os
 from typing import Any
 
-from field_core.authn import auth_headers
+from field_core.guarded_operator import perimeter_headers
 from field_core.http import pooled_limits
 
 TOKEN_HEADER = "x-field-token"
@@ -38,7 +38,7 @@ class OwnTokenCheck:
         if not token_id or not agent_id or len(token_id) > TOKEN_MAX or not token_id.isprintable():
             return False
         try:
-            resp = self._http().post(f"{self._base}/introspect", json={"token_id": token_id}, headers=auth_headers())
+            resp = self._http().post(f"{self._base}/introspect", json={"token_id": token_id}, headers=perimeter_headers())
             body = resp.json() if resp.status_code == 200 else None
         except Exception as exc:
             # the type only: the text can carry the address or the token
