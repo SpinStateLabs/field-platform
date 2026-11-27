@@ -6,35 +6,62 @@ cannot drift from the others again: a good signature verifies; the same signatur
 inserted space, an inserted newline, a URL-safe spelling, a missing pad or a non-ASCII character does not, in all three."""
 
 import base64
+import hashlib
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from field_core.ledger import make_event
-from field_core.signing import (generate_keypair, sign_caller, sign_event, sign_manifest, verify_caller_signature,
-                                verify_event_signature, verify_manifest)
+from field_core.signing import (sign_caller, sign_event, sign_manifest, verify_caller_signature, verify_event_signature,
+                                verify_manifest)
 
 DATA = {"agent": {"name": "a", "scope": ["x"]}, "n": 1}
-PRIV, PUB = generate_keypair()
-OTHER_PRIV, OTHER_PUB = generate_keypair()
+
+
+def _keypair(label: str) -> tuple[str, str]:
+    """(private PEM, public PEM) of the key whose seed is the sha-256 of ``label``."""
+    private = Ed25519PrivateKey.from_private_bytes(hashlib.sha256(label.encode("ascii")).digest())
+    private_pem = private.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                        serialization.NoEncryption())
+    public_pem = private.public_key().public_bytes(serialization.Encoding.PEM,
+                                                   serialization.PublicFormat.SubjectPublicKeyInfo)
+    return private_pem.decode("ascii"), public_pem.decode("ascii")
+
+
+OTHER_PUB = _keypair("strict-b64 other key")[1]
+
+
+def _signed_with_both_url_unsafe_characters(sign) -> tuple[str, str]:
+    """(signature, public key) for the first key of a fixed list whose signature holds both '+' and '/'. The signed
+    record is fixed and Ed25519 signatures are deterministic, so every run takes the same signature."""
+    for n in range(64):
+        private_pem, public_pem = _keypair("strict-b64 signing key %d" % n)
+        sig = sign(private_pem)
+        if "+" in sig and "/" in sig:
+            return sig, public_pem
+    raise AssertionError("no key in the list gives a signature with both '+' and '/'")
 
 
 def _manifest():
-    sig = sign_manifest(DATA, PRIV)
-    return sig, lambda s, pub=PUB: verify_manifest(DATA, s, pub)
+    sig, own = _signed_with_both_url_unsafe_characters(lambda priv: sign_manifest(DATA, priv))
+    return sig, lambda s, pub=own: verify_manifest(DATA, s, pub)
 
 
 def _event():
-    ev = sign_event(make_event(event_type="action", payload={"n": 1}, agent_id="a1", prev_hash="0" * 64), PRIV)
+    base = make_event(event_type="action", payload={"n": 1}, agent_id="a1", prev_hash="0" * 64,
+                      ts="2026-11-07T00:00:00+00:00", event_id="strict-b64-event")
+    sig, own = _signed_with_both_url_unsafe_characters(lambda priv: sign_event(base, priv).signature)
 
-    def check(s, pub=PUB):
-        return verify_event_signature(ev.model_copy(update={"signature": s}), pub)
-    return ev.signature, check
+    def check(s, pub=own):
+        return verify_event_signature(base.model_copy(update={"signature": s}), pub)
+    return sig, check
 
 
 def _caller():
     rec = {"event_type": "action", "agent_id": "a1", "payload": {"n": 1}, "caller_id": "svc", "caller_ts": "2026-11-07T00:00:00+00:00"}
-    sig = sign_caller(PRIV, **rec)
-    return sig, lambda s, pub=PUB: verify_caller_signature({**rec, "caller_signature": s}, pub)
+    sig, own = _signed_with_both_url_unsafe_characters(lambda priv: sign_caller(priv, **rec))
+    return sig, lambda s, pub=own: verify_caller_signature({**rec, "caller_signature": s}, pub)
 
 
 FIXTURES = {"manifest": _manifest, "event": _event, "caller": _caller}
@@ -48,7 +75,7 @@ def mangled(sig: str) -> dict[str, str]:
         "inserted-space": sig[:10] + " " + sig[10:],
         "inserted-newline": sig[:20] + "\n" + sig[20:],
         "leading-space": " " + sig,
-        "urlsafe": base64.urlsafe_b64encode(raw).decode("ascii") if base64.urlsafe_b64encode(raw).decode() != sig else sig + "-",
+        "urlsafe": base64.urlsafe_b64encode(raw).decode("ascii"),
         "no-padding": sig.rstrip("="),
         "non-ascii": sig[:-1] + "é",
         "embedded-nul": sig[:5] + "\x00" + sig[5:],
@@ -58,6 +85,7 @@ def mangled(sig: str) -> dict[str, str]:
 @pytest.mark.parametrize("name", FIXTURES)
 def test_a_good_signature_verifies_and_a_wrong_key_does_not(name):
     sig, check = FIXTURES[name]()
+    assert "+" in sig and "/" in sig
     assert check(sig) is True
     assert check(sig, OTHER_PUB) is False
 
@@ -66,6 +94,7 @@ def test_a_good_signature_verifies_and_a_wrong_key_does_not(name):
 @pytest.mark.parametrize("spelling", list(mangled("A" * 86 + "==")))
 def test_every_mangled_spelling_is_refused_by_each_verifier(name, spelling):
     sig, check = FIXTURES[name]()
+    assert mangled(sig)[spelling] != sig
     assert check(mangled(sig)[spelling]) is False
 
 
