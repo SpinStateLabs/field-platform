@@ -157,7 +157,7 @@ def _declared(control: Control, manifest: dict[str, Any]) -> tuple[bool, str]:
         return False, f"{control.manifest_path} absent"
     if _has_placeholder(value):
         return False, f"{control.manifest_path} contains unresolved placeholder(s)"
-    return True, f"{control.manifest_path} = {value!r}"[:120]
+    return True, one_line(f"{control.manifest_path} = {value!r}", 120)     # a value that is cut ends in an ellipsis
 
 
 def _evidenced(
