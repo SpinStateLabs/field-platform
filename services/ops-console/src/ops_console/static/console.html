@@ -1120,6 +1120,14 @@ function renderEvents(sec) {
 }
 function renderIntegrity(sec) {
   const el = $("integrity");
+  el.title = "the chain is checked at most every 30 seconds";
+  if (!sec.available && sec.error === "busy, retrying") {
+    const last = sec.data;           // the last check that answered, if any
+    if (last && !last.ok) { el.textContent = "LEDGER: BROKEN — " + (last.reason || "") + " (busy, retrying)";
+      el.className = "BROKEN"; return; }
+    el.textContent = "LEDGER: busy, retrying" + (last ? ` (last: INTACT ${last.length})` : "");
+    el.className = "UNKNOWN"; return;
+  }
   if (!sec.available) { el.textContent = "LEDGER: UNREACHABLE";
     el.className = "UNKNOWN"; return; }
   if (sec.data.ok) { el.textContent = `LEDGER: INTACT (${sec.data.length})`;
@@ -1418,7 +1426,9 @@ async function runCheck(ev) {
 }
 
 /* ---- refresh: live push, polling fallback ---------------------------- */
+const pageHidden = () => document.visibilityState === "hidden";
 async function refresh() {
+  if (pageHidden()) return;         // a page nobody is looking at asks for nothing
   try { renderOverview(await api("/api/overview")); }
   catch (e) { /* 401 path shows the secret bar */ }
 }
@@ -1429,9 +1439,11 @@ function setMode(live) {
 }
 /* fetch() + ReadableStream instead of EventSource: EventSource cannot send
    the x-field-auth header, so it would 401 on a locked estate. */
-let streamBackoff = 5000, streamCtl = null;
+let streamBackoff = 5000, streamCtl = null, streamTimer = null;
 async function startStream() {
+  clearTimeout(streamTimer);
   if (streamCtl) streamCtl.abort();
+  if (pageHidden()) return;
   const ctl = streamCtl = new AbortController();
   try {
     const resp = await fetch("/api/stream", {headers: hdrs(), signal: ctl.signal});
@@ -1459,9 +1471,21 @@ async function startStream() {
   }
   if (streamCtl !== ctl) return;
   setMode(false);
-  setTimeout(startStream, streamBackoff);
+  streamTimer = setTimeout(startStream, streamBackoff);
   streamBackoff = Math.min(streamBackoff * 2, 60000);
 }
+
+document.addEventListener("visibilitychange", () => {
+  if (pageHidden()) {               // close the stream; the server stops building overviews for it
+    clearTimeout(streamTimer);
+    if (streamCtl) streamCtl.abort();
+    setMode(false);
+    return;
+  }
+  streamBackoff = 5000;
+  refresh();
+  startStream();
+});
 
 refresh();
 refreshPlatform();
