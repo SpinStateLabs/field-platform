@@ -104,6 +104,12 @@ def test_a_name_on_the_local_network_is_not_a_cleartext_host():
     assert config.env_url_secret_ok("http://" + name) is False
 
 
+def test_the_sender_reading_gives_the_host_in_lower_case():
+    """The sending parser keeps the case of an IPv6 literal. The made-up address is built from parts."""
+    literal = "FE80" + "::" + "A"
+    assert config._sender_read("http://[" + literal + "]/") == ("http", literal.lower())
+
+
 def test_the_readme_states_the_rule():
     from pathlib import Path
     text = " ".join((Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8").split())
