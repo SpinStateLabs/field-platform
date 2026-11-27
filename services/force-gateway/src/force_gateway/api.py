@@ -52,7 +52,6 @@ The upstream API key comes ONLY from the environment — never from the repo.
 from __future__ import annotations
 
 import base64
-import hmac
 import ipaddress
 import logging
 import math
@@ -72,7 +71,7 @@ from fastapi.responses import JSONResponse
 
 from field_core import posture_flag
 from field_core.startup import warn_open
-from field_core.authn import install as install_authn, shared_secret
+from field_core.authn import install as install_authn, secret_matches, shared_secret
 from field_core.guarded_operator import perimeter_headers
 from field_core.http_errors import install_validation_handler
 from field_core.buildinfo import build_sha
@@ -284,8 +283,8 @@ def passthrough_honoured(value: str | None, presented_auth: str | None) -> bool:
     secret = shared_secret()
     if secret is None:
         return True
-    return presented_auth is not None and hmac.compare_digest(
-        presented_auth.encode("utf-8"), secret.encode("utf-8"))
+    # the same rule as the authn middleware, so the two never disagree about one header
+    return presented_auth is not None and secret_matches(presented_auth, secret)
 
 
 # --- F1: the egress enforcement point --------------------------------------
