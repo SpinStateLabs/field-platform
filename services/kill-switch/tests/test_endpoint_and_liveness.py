@@ -761,7 +761,7 @@ def test_the_app_builds_its_endpoint_client_from_that_factory(
     built: list[object] = []
     sentinel = FakeEndpoint()
 
-    def fake_factory():
+    def fake_factory(deadline=None):
         built.append(sentinel)
         return sentinel
 
@@ -1252,3 +1252,147 @@ def test_the_domain_budget_never_skips_the_signal_of_an_agent_whose_registry_wri
     assert sorted(e["agent_id"] for e in failed) == ["alpha-agent", "beta-agent"]
     assert {e["payload"]["reason"] for e in failed} == {"timeout"}
     assert took >= 2 * kill_api.ENDPOINT_DEADLINE_S, took
+
+
+# --- an abandoned signal ends and holds nothing a later one needs -------------------------------------------------
+
+
+class BodyDripServer(DripServer):
+    """Answers the status line and headers at once, then drips a long body."""
+
+    def _drip(self, conn):
+        try:
+            conn.settimeout(5)
+            data = b""
+            while b"\r\n\r\n" not in data:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    return
+                data += chunk
+            conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 100000\r\n\r\n")
+            while not self.stop.wait(self.interval):
+                conn.sendall(b"x")
+        except OSError:
+            pass
+        finally:
+            conn.close()
+
+
+def signal_threads():
+    return [t for t in threading.enumerate() if t.name == "kill-endpoint-signal" and t.is_alive()]
+
+
+def gone_within(seconds, before):
+    """True when every signal thread started since ``before`` has ended (an earlier test's stand-in may linger)."""
+    end = time.monotonic() + seconds
+    while set(signal_threads()) - before and time.monotonic() < end:
+        time.sleep(0.05)
+    return not set(signal_threads()) - before
+
+
+def own_client_stack(tmp_path, monkeypatch, server, names):
+    monkeypatch.setenv("FIELD_KILL_ENDPOINT_ALLOWLIST", "127.0.0.1")
+    stack = Stack(tmp_path)
+    stack.kill.app.state.endpoint_client = None             # the production path: a client per signal
+    for name in names:
+        stack.with_endpoint(name, f"http://127.0.0.1:{server.port}/halt/{name}")
+    return stack
+
+
+def test_a_header_drip_ends_at_the_deadline_and_leaves_no_thread_behind(tmp_path, monkeypatch):
+    server = DripServer()
+    try:
+        stack = own_client_stack(tmp_path, monkeypatch, server, ["slow-agent"])
+        for _ in range(3):                                   # repeated kills do not pile anything up
+            before = set(signal_threads())
+            t0 = time.perf_counter()
+            result = stack.kill.post("/kill/slow-agent", json=OP).json()["endpoint_result"]
+            took = time.perf_counter() - t0
+            assert (result["outcome"], result["reason"]) == ("failed", "timeout")
+            assert took < kill_api.ENDPOINT_DEADLINE_S + 1.5, took
+            assert gone_within(1.5, before), signal_threads()  # the request itself ended, not only the wait for it
+        assert stack.registry.get("/agents/slow-agent").json()["status"] == "killed"
+        assert len(stack.events("kill.endpoint_failed")) == 3
+    finally:
+        server.close()
+
+
+def test_a_body_drip_is_never_read(tmp_path, monkeypatch):
+    server = BodyDripServer()
+    try:
+        stack = own_client_stack(tmp_path, monkeypatch, server, ["chatty-agent"])
+        before = set(signal_threads())
+        t0 = time.perf_counter()
+        result = stack.kill.post("/kill/chatty-agent", json=OP).json()["endpoint_result"]
+        assert (result["outcome"], result["http_status"]) == ("called", 200)
+        assert time.perf_counter() - t0 < kill_api.ENDPOINT_DEADLINE_S
+        assert gone_within(1.5, before), signal_threads()
+    finally:
+        server.close()
+
+
+def test_the_production_client_carries_the_deadline_under_its_pool():
+    from kill_switch.endpoint_deadline import DeadlineBackend
+
+    client = kill_api.new_endpoint_client(time.monotonic() + 1)
+    try:
+        assert isinstance(client._transport._pool._network_backend, DeadlineBackend)   # pins the library's shape
+        assert client.follow_redirects is False
+    finally:
+        client.close()
+
+
+def test_no_operation_starts_after_the_deadline():
+    import httpcore
+
+    from kill_switch.endpoint_deadline import DeadlineStream
+
+    class Inner:
+        def read(self, max_bytes, timeout=None):
+            return str(timeout).encode()
+
+    assert float(DeadlineStream(Inner(), time.monotonic() + 0.5).read(1, 2.0)) <= 0.5
+    with pytest.raises(httpcore.ReadTimeout):
+        DeadlineStream(Inner(), time.monotonic() - 0.01).read(1, 2.0)
+    with pytest.raises(httpcore.WriteTimeout):
+        DeadlineStream(Inner(), time.monotonic() - 0.01).write(b"x", 2.0)
+
+
+def test_the_deadline_hook_is_checked_against_exactly_the_pinned_library_versions():
+    """The hook relies on a private attribute of the HTTP library, so the shape test above must run on the versions the
+    images install: a constraints bump runs it on the new ones, and a changed shape fails it."""
+    from importlib.metadata import version
+    from pathlib import Path
+
+    pins = {}
+    for line in (Path(__file__).resolve().parents[3] / "integration" / "constraints.txt").read_text("utf-8").splitlines():
+        name, eq, pinned = line.split("#", 1)[0].strip().partition("==")
+        if eq:
+            pins[name] = pinned.strip()
+    assert {name: version(name) for name in ("httpx", "httpcore")} == {name: pins[name] for name in ("httpx", "httpcore")}
+    client = kill_api.new_endpoint_client(time.monotonic() + 1)
+    try:
+        assert getattr(client, "field_deadline_unbound", False) is False
+        assert client._transport._pool._network_backend.__class__.__name__ == "DeadlineBackend"
+    finally:
+        client.close()
+
+
+def test_a_client_that_cannot_take_the_deadline_is_counted_on_health(tmp_path, monkeypatch):
+    from kill_switch import endpoint_deadline
+
+    monkeypatch.setenv("FIELD_KILL_ENDPOINT_ALLOWLIST", "127.0.0.1")
+    stack = Stack(tmp_path)
+    stack.kill.app.state.endpoint_client = None
+    closed = socket.socket()
+    closed.bind(("127.0.0.1", 0))
+    port = closed.getsockname()[1]
+    closed.close()                                           # nothing listens: the signal fails at once
+    stack.with_endpoint("gone-agent", f"http://127.0.0.1:{port}/halt")
+    stack.kill.post("/kill/gone-agent", json=OP)
+    assert stack.kill.get("/health").json()["endpoint_deadline_unbound"] == 0
+    monkeypatch.setattr(endpoint_deadline, "bound_client", lambda client, deadline: False)
+    for n in (1, 2):
+        r = stack.kill.post("/kill/gone-agent", json=OP)
+        assert r.status_code == 200 and r.json()["endpoint_result"]["outcome"] == "failed"
+        assert stack.kill.get("/health").json()["endpoint_deadline_unbound"] == n

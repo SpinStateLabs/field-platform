@@ -346,8 +346,9 @@ def _default_store_path() -> Path:
     return root / "killswitch" / "heartbeats.sqlite3"
 
 
-def new_endpoint_client() -> Any:
-    """The outbound halt-signal client.
+def new_endpoint_client(deadline: float | None = None) -> Any:
+    """The outbound halt-signal client: one per signal, with its own pool, so a signal that hangs holds nothing a later
+    one needs. With ``deadline`` (``time.monotonic``), every socket operation is bounded by it (``endpoint_deadline``).
 
     ``follow_redirects=False`` is load-bearing, not decoration. The allowlist
     is checked against the URL in the manifest; if redirects were followed, an
@@ -361,7 +362,14 @@ def new_endpoint_client() -> Any:
 
     # trust_env=False (C-574 F-C525-4): the halt signal carries the manifest's endpoint and must not be sent through
     # a proxy named by HTTP_PROXY / ALL_PROXY in the process environment, nor have NO_PROXY decide who is reached.
-    return httpx.Client(timeout=ENDPOINT_TIMEOUT_S, follow_redirects=False, trust_env=False)
+    client = httpx.Client(timeout=ENDPOINT_TIMEOUT_S, follow_redirects=False, trust_env=False)
+    if deadline is not None:
+        from kill_switch.endpoint_deadline import bound_client
+
+        if not bound_client(client, deadline):
+            client.field_deadline_unbound = True     # counted per signal: /health endpoint_deadline_unbound
+            log.warning("halt-signal deadline could not be set on the HTTP client; only the caller's wait is bounded")
+    return client
 
 
 def _allowlist() -> set[str]:
@@ -600,13 +608,9 @@ def create_app(
                 store = app.state.heartbeats
         return store
 
-    def _endpoint_http() -> Any:
-        if app.state.endpoint_client is None:
-            app.state.endpoint_client = new_endpoint_client()
-        return app.state.endpoint_client
-
     app.state.ledger_note_failures = _GapCounter()    # rows whose first append failed
     app.state.ledger_rows_lost = _GapCounter()        # of those, the rows that were not written at all
+    app.state.endpoint_deadline_unbound = _GapCounter()  # halt signals whose client could not take the socket deadline
     # Per-agent bookkeeping of REAL kills that went through THIS process (R-PR1025 drill restore race): a generation
     # counter bumped when a kill begins and ends, and the number of kills in flight. It is the in-process FIRST line:
     # a drill refuses to start while a kill is in flight and skips its restore when the generation moved. The real
@@ -678,27 +682,43 @@ def create_app(
         """The halt signal did not finish inside ENDPOINT_DEADLINE_S."""
 
     def _request_within_deadline(method: str, endpoint: str, headers: dict):
-        """``_endpoint_http().request(...)`` under a WALL-CLOCK deadline. httpx's timeout is per phase and restarts on
-        every chunk, so it cannot bound a drip-fed answer; the call runs on a daemon thread that is abandoned when the
-        deadline passes (it ends when httpx gives up, and a daemon thread never blocks interpreter exit)."""
+        """Send one halt signal under a WALL-CLOCK deadline and return the response head. httpx's timeout is per phase
+        and restarts on every chunk, so it cannot bound a drip-fed answer. Only the status is needed: the body is never
+        read, the response is closed at once. Each signal has a client of its own whose socket operations end at the
+        deadline, so a hanging endpoint ends and holds nothing another signal needs. The call runs on a daemon thread,
+        which the caller stops waiting for at the deadline whatever the thread is blocked in (a name lookup, say)."""
         box: dict[str, Any] = {}
+        deadline = time.monotonic() + ENDPOINT_DEADLINE_S
 
         def run() -> None:
+            client, own = app.state.endpoint_client, False
             try:
-                box["resp"] = _endpoint_http().request(
-                    method, endpoint, headers=headers, timeout=ENDPOINT_TIMEOUT_S
-                )
+                if client is None:
+                    client, own = new_endpoint_client(deadline), True
+                    if getattr(client, "field_deadline_unbound", False):
+                        app.state.endpoint_deadline_unbound.add()
+                if hasattr(client, "stream"):
+                    with client.stream(method, endpoint, headers=headers, timeout=ENDPOINT_TIMEOUT_S) as resp:
+                        box["resp"] = resp
+                else:                                       # an injected stand-in with ``request`` only
+                    box["resp"] = client.request(method, endpoint, headers=headers, timeout=ENDPOINT_TIMEOUT_S)
             except BaseException as exc:  # carried to the caller; never lost on the worker
                 box["exc"] = exc
+            finally:
+                close = getattr(client, "close", None) if own else None
+                if close is not None:
+                    close()
 
         worker = threading.Thread(target=run, name="kill-endpoint-signal", daemon=True)
         worker.start()
         worker.join(ENDPOINT_DEADLINE_S)
+        if "resp" in box:                                    # the head arrived: closing may still be finishing
+            return box["resp"]
         if worker.is_alive():
             raise _EndpointDeadline()
-        if "exc" in box:
-            raise box["exc"]
-        return box["resp"]
+        if time.monotonic() >= deadline - 0.05:             # the worker gave up at the deadline itself
+            raise _EndpointDeadline()
+        raise box["exc"]
 
     def _signal_endpoint(
         agent_id: str, record: dict, origin: str | None, reason: str | None = None
@@ -971,6 +991,7 @@ def create_app(
                 "build_sha": build_sha(),
                 "ledger_note_failures": app.state.ledger_note_failures.value,
                 "ledger_rows_lost": app.state.ledger_rows_lost.value,
+                "endpoint_deadline_unbound": app.state.endpoint_deadline_unbound.value,
                 "heartbeats_refused": app.state.heartbeats_refused.value,
                 "heartbeat_ids_refused": app.state.heartbeat_ids_refused.value,
                 "allowlist_entries_unusable": _allowlist_unusable(),

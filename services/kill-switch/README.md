@@ -41,6 +41,10 @@ host names or IP literals (`::1`, not `[::1]`). The endpoint URL is **never** ec
 the report or the ledger — host only, because a manifest URL can carry
 credentials.
 
+`/health` field `endpoint_deadline_unbound` counts halt signals whose HTTP client could not take the socket
+deadline (the library changed shape): the kill-switch still stops waiting at the deadline, but the request itself
+is then not cut off. Anything above 0 needs attention.
+
 **Self-call guard (mandatory, two mechanisms).** Every manifest this service
 can resolve today points back at its own `/kill/{agent}`, so without a guard a
 kill recurses. Both are implemented: the outbound call carries
@@ -168,8 +172,14 @@ Agents check in through the SDK (`FieldAgent.checkin()`, `fieldagent checkin
   later `/kill/{agent_id}` sends the signal again). Both stay under
   the CLI's 30 s timeout. The budget never skips the signal of an agent whose
   registry write failed (the signal is then the only stop left), so a domain with
-  many failed writes can take longer: up to the deadline for each of them. An
-  abandoned request ends in its own background thread when httpx gives up.
+  many failed writes can take longer: up to the deadline for each of them. Only
+  the status line and headers are read, never the body. Each signal has its own
+  client, and every connect, handshake, read and write ends at the deadline, so
+  an endpoint that keeps sending is cut off and holds nothing a later signal
+  needs. Outside that bound: a name lookup, and a connect that tries several
+  addresses; the kill-switch stops waiting at the deadline either way, and such
+  a request ends in its own background thread. The registry write that stops the
+  agent never waits on the signal's outcome.
 - **The allowlist gates the HOST, not the path or the method.** Naming a
   host there permits any path and any method the manifest declares on it.
   It is an egress boundary for this service, not an authorization check on
