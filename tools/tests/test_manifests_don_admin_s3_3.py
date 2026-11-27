@@ -1,8 +1,8 @@
 """S3-3 (G21 decision, point 1b): every manifest with a non-empty ``enforcement.kill_switch.authorized_operators``
 lists ``don-admin``, so the registered manifest does not lock out the one identity the Stage 3 plan keeps for a
-kill. An explicit empty list puts no list restriction on an authenticated operator; it needs no name and passes for
-now. Every agent manifest declares the list: a missing block, a missing or misspelled key, or a value that is not a
-list fails. Repo files only; no estate value."""
+kill. An empty list puts no list restriction on an authenticated operator and needs no name; it is allowed only in the
+files named in EMPTY_LIST_ALLOWED. Every agent manifest declares the list: a missing block, a missing or misspelled
+key, or a value that is not a list fails. Repo files only; no estate value."""
 
 from pathlib import Path
 
@@ -11,6 +11,7 @@ import yaml
 
 MANIFEST_DIR = Path(__file__).resolve().parents[2] / "manifests"
 NOT_A_MANIFEST = {"doa-roster.example.yaml"}  # a delegation roster example that lives beside the manifests
+EMPTY_LIST_ALLOWED = {"compliance-crosswalk.yaml", "conformance-sentinel.yaml", "force-gateway.yaml"}
 MANIFESTS = sorted(p for p in MANIFEST_DIR.glob("*.yaml") if p.name not in NOT_A_MANIFEST)
 
 
@@ -28,15 +29,10 @@ def _operators(doc, name: str) -> list:
     return node
 
 
-def _check(doc, name: str) -> None:
-    """The rule: the list is declared, and one that names anybody names don-admin."""
-    ops = _operators(doc, name)
-    if ops:
-        assert "don-admin" in ops, f"{name}: authorized_operators lacks don-admin: {ops}"
-
-
 def test_the_walk_is_not_blind():
+    names = {p.name for p in MANIFESTS}
     assert len(MANIFESTS) >= 8, MANIFESTS
+    assert EMPTY_LIST_ALLOWED <= names, EMPTY_LIST_ALLOWED - names
     listed = [p.name for p in MANIFESTS if _operators(_load(p), p.name)]
     assert {"canary-fly.yaml", "canary-gb10.yaml", "deployment-agent.yaml"} <= set(listed), listed
 
@@ -49,7 +45,11 @@ def test_an_excluded_file_is_not_an_agent_manifest(name):
 
 @pytest.mark.parametrize("path", MANIFESTS, ids=lambda p: p.name)
 def test_a_non_empty_authorized_operators_list_names_don_admin(path):
-    _check(_load(path), path.name)
+    ops = _operators(_load(path), path.name)
+    if not ops:
+        assert path.name in EMPTY_LIST_ALLOWED, f"{path.name}: authorized_operators is empty"
+        return
+    assert "don-admin" in ops, f"{path.name}: authorized_operators lacks don-admin: {ops}"
 
 
 def _doc(kill_switch):
@@ -72,15 +72,6 @@ def _doc(kill_switch):
 def test_a_list_that_is_not_declared_is_refused_by_the_rule(doc):
     with pytest.raises(AssertionError):
         _operators(doc, "example.yaml")
-
-
-def test_an_explicit_empty_authorized_operators_list_still_passes_for_now():
-    _check(_doc({"authorized_operators": []}), "example.yaml")
-
-
-def test_a_list_that_names_somebody_without_don_admin_is_refused():
-    with pytest.raises(AssertionError):
-        _check(_doc({"authorized_operators": ["someone-else"]}), "example.yaml")
 
 
 def test_a_declared_list_is_read_as_written():
