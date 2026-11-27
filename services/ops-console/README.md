@@ -72,7 +72,8 @@ console serve [--port 8011]     # FIELD_*_URL env vars point at the services
   check per 30 s for the console, shared by every page and stream, so the
   integrity tile can be that old. A `503` with `Retry-After` shows `busy,
   retrying` beside the last result and is not asked again before that time
-  (followed up to 300 s). A hidden page closes its stream and stops polling,
+  (followed up to 300 s). While a check is running, overviews show the last
+  answer (before the first one they wait for it). A hidden page closes its stream and stops polling,
   the platform strip included; a page that becomes visible reads both again.
 - The stream cap is soft (a burst of simultaneous opens can pass it by a few).
 - Ledger paging: the ledger has no offset cursor, so "load older" re-queries

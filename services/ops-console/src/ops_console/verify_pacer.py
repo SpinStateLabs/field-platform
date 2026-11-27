@@ -42,8 +42,15 @@ class VerifyPacer:
     def answer(self, read: Callable[[], tuple[int, Any, str | None]],
                error_text: Callable[[int, Any], str]) -> dict[str, Any]:
         """``available``, ``data`` and ``error`` for the overview. ``read`` returns the status, the body and the
-        ``Retry-After`` value (None when absent); it is called only when a check is due, by one caller at a time."""
-        with self._lock:
+        ``Retry-After`` value (None when absent); it is called only when a check is due, by one caller at a time.
+        While that call is running, other callers get the last answer at once; only before there is any answer do
+        they wait for it."""
+        if not self._lock.acquire(blocking=False):
+            last = self._answer           # replaced whole, never changed in place: safe to read without the lock
+            if last:
+                return dict(last)
+            self._lock.acquire()
+        try:
             if self._due is None or self.clock() >= self._due:
                 status, data, retry_after = read()
                 wait = self.interval
@@ -58,3 +65,5 @@ class VerifyPacer:
                     self._answer = {"available": False, "data": None, "error": error_text(status, data)}
                 self._due = self.clock() + wait
             return dict(self._answer)
+        finally:
+            self._lock.release()
