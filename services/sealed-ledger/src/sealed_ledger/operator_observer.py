@@ -73,10 +73,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import socket
 import threading
 import time
+from pathlib import Path
 from typing import Any, Callable
 
 from field_core import alert_senders
@@ -109,6 +111,14 @@ BREAKGLASS_EVENT = "operator.breakglass_counters_changed"
 #: Alerts still pending when it is spent wait for the next tick. A started send is not interrupted, so a tick can overrun
 #: by the one send in flight.
 ALERT_BUDGET_SECONDS = 20.0
+#: An alert that could not be sent is kept and sent again: first after this long, then twice as long each time, up to
+#: the cap. It is removed only when a send is confirmed. The queue holds one entry per event type and service.
+ALERT_RETRY_FIRST_S = 30.0
+ALERT_RETRY_MAX_S = 900.0
+#: Where the waiting alerts are kept across a restart, under FIELD_DATA_DIR; entries read back are bounded.
+PENDING_ALERTS_FILE = ("ledger-observer", "pending-alerts.json")
+MAX_PENDING_ALERTS = 256
+MAX_PENDING_FILE_BYTES = 256 * 1024
 SLOTS_EVENT = "operator.registry_slots_changed"
 RETIRED_EVENT = "operator.retired_hash_seen_changed"
 ROTATION_WITNESS_EVENTS = frozenset({GENERATION_EVENT, BREAKGLASS_EVENT, SLOTS_EVENT,
@@ -368,7 +378,8 @@ class OperatorObserver:
                  self_counters: Callable[[], dict] | None = None,
                  alert: Callable[[str, dict], Any] | None = None,
                  alert_budget_seconds: float | None = None,
-                 clock: Callable[[], float] | None = None):
+                 clock: Callable[[], float] | None = None,
+                 pending_file: str | os.PathLike | None = None):
         self.append = append
         self.self_health = self_health
         self.targets = list(targets)
@@ -377,16 +388,20 @@ class OperatorObserver:
         # own process counters ({"retired_hash_seen": n}); None = not witnessed
         self.self_slots = self_slots
         self.self_counters = self_counters
-        # G23: ``alert(event_type, payload)`` is called once for each break-glass row written (never for a row
-        # that failed to write, so the retry next tick does not alert twice); it must not raise, and a raise
-        # here is caught and logged so it cannot stop the observer. None = no alerts.
+        # G23: ``alert(event_type, payload)`` is called for each break-glass row written (never for a row that
+        # failed to write, so the retry next tick does not alert twice). Its answer says whether the alert was sent:
+        # None or True, or a result whose ``ok`` is True, confirms it; anything else, and a raise (caught and logged,
+        # so it cannot stop the observer), keeps the alert for another attempt. None as the hook = no alerts.
         self.alert = alert
         self.alert_budget_seconds = ALERT_BUDGET_SECONDS if alert_budget_seconds is None else alert_budget_seconds
         self._clock = clock or time.monotonic
         # alerts waiting to be sent, one per (event type, service): a repeat for the same subject replaces the older
-        # payload, so a slow sender is told the latest reading once, not every reading that happened meanwhile
+        # payload, so a slow sender is told the latest reading once, not every reading that happened meanwhile. Each
+        # entry: {"payload", "tries" (failed sends), "not_before" (this clock), "sending" (a send is running)}
         self._pending_alerts: dict[tuple[str, Any], dict] = {}
         self._alert_lock = threading.Lock()
+        self.pending_file = Path(pending_file) if pending_file is not None else None
+        self._load_pending_alerts()
         self._mode: dict[str, str] = {}
         self._registry: dict[str, tuple[Any, Any]] = {}
         self._generation: dict[str, int] = {}
@@ -406,27 +421,110 @@ class OperatorObserver:
         return True
 
     def _raise_alert(self, event_type: str, payload: dict) -> None:
-        """Queue the alert (called under self._lock, so it must not block); observe_once sends the queue after the lock is
-        released. A newer payload for the same event type and service replaces the older one."""
+        """Queue the alert (called under self._lock, so it must not wait on a sender); observe_once sends the queue
+        after the lock is released. A newer payload for the same event type and service replaces the older one and
+        keeps its retry state, so a changing reading does not shorten the wait after a failed send."""
         if self.alert is None:
             return
+        key = (event_type, payload.get("service"))
         with self._alert_lock:
-            self._pending_alerts[(event_type, payload.get("service"))] = payload
+            entry = self._pending_alerts.get(key)
+            if entry is None:
+                self._pending_alerts[key] = {"payload": payload, "tries": 0, "not_before": 0.0, "sending": False}
+            else:
+                entry["payload"] = payload
+            self._save_pending_alerts()
+
+    def pending_alerts(self) -> int:
+        """How many alerts are waiting: not yet sent, or not confirmed sent."""
+        with self._alert_lock:
+            return len(self._pending_alerts)
 
     def _send_pending_alerts(self) -> None:
-        """Send queued alerts, oldest subject first, outside self._lock, stopping once the tick's budget is spent. A raising
-        sender is logged and the rest still go; what is left stays queued for the next tick."""
+        """Send the alerts that are due, oldest first, outside self._lock, at most once each per tick, stopping once
+        the tick's budget is spent. An alert leaves the queue only when its send is confirmed. One that fails goes to
+        the back and waits (ALERT_RETRY_FIRST_S, doubling to ALERT_RETRY_MAX_S); the others still go."""
+        if self.alert is None:
+            return
         started = self._clock()
-        while True:
+        with self._alert_lock:
+            due = [key for key, entry in self._pending_alerts.items() if entry["not_before"] <= started]
+        # an entry another tick is sending right now is left to that tick (checked again when it is taken)
+        for key in due:
+            if self._clock() - started >= self.alert_budget_seconds:
+                return
             with self._alert_lock:
-                if not self._pending_alerts or self._clock() - started >= self.alert_budget_seconds:
-                    return
-                key = next(iter(self._pending_alerts))
-                payload = self._pending_alerts.pop(key)
+                entry = self._pending_alerts.get(key)
+                if entry is None or entry["sending"] or entry["not_before"] > self._clock():
+                    continue
+                entry["sending"] = True
+                payload = entry["payload"]
             try:
-                self.alert(key[0], payload)
+                result = self.alert(key[0], payload)
+                sent = result is None or result is True or getattr(result, "ok", False) is True
             except Exception as exc:
                 log.warning("operator observer: alert for %s not sent (%s)", key[0], type(exc).__name__)
+                sent = False
+            with self._alert_lock:
+                entry = self._pending_alerts.get(key)
+                if entry is None:
+                    continue
+                entry["sending"] = False
+                if not sent:
+                    entry["tries"] += 1
+                    wait = min(ALERT_RETRY_FIRST_S * 2 ** min(entry["tries"] - 1, 16), ALERT_RETRY_MAX_S)
+                    entry["not_before"] = self._clock() + wait
+                    self._pending_alerts[key] = self._pending_alerts.pop(key)
+                    log.warning("operator observer: alert for %s kept after %d failed send(s)", key[0], entry["tries"])
+                elif entry["payload"] is payload:
+                    del self._pending_alerts[key]
+                else:                       # a newer reading arrived while this one was being sent: it is still to go
+                    entry["tries"], entry["not_before"] = 0, 0.0
+                self._save_pending_alerts()
+
+    def _save_pending_alerts(self) -> None:
+        """Write the waiting alerts (event type and payload: ids, counts and fixed words) under self._alert_lock. A
+        failure is logged by class name and changes nothing else: the queue in memory stays."""
+        if self.pending_file is None:
+            return
+        rows = [{"event_type": key[0], "payload": entry["payload"]} for key, entry in self._pending_alerts.items()]
+        try:
+            self.pending_file.parent.mkdir(parents=True, exist_ok=True)
+            temp = self.pending_file.with_name(self.pending_file.name + ".tmp")
+            temp.write_text(json.dumps(rows), encoding="utf-8")
+            os.replace(temp, self.pending_file)
+        except (OSError, TypeError, ValueError) as exc:
+            log.warning("operator observer: waiting alerts not saved (%s)", type(exc).__name__)
+
+    def _load_pending_alerts(self) -> None:
+        """Take back the alerts that were waiting when the process stopped; they are due at once. A file that cannot be
+        read or is not what this wrote is logged by class name and ignored."""
+        if self.pending_file is None or self.alert is None:
+            return
+        try:
+            with open(self.pending_file, "rb") as handle:
+                raw = handle.read(MAX_PENDING_FILE_BYTES + 1)
+            if len(raw) > MAX_PENDING_FILE_BYTES:
+                raise ValueError("too large")
+            rows = json.loads(raw.decode("utf-8"))
+            if not isinstance(rows, list):
+                raise ValueError("not a list")
+        except FileNotFoundError:
+            return
+        except (OSError, UnicodeError, ValueError, RecursionError) as exc:
+            log.warning("operator observer: waiting alerts not read back (%s)", type(exc).__name__)
+            return
+        for row in rows[:MAX_PENDING_ALERTS]:
+            if not isinstance(row, dict):
+                continue
+            event_type, payload = row.get("event_type"), row.get("payload")
+            if event_type not in alert_senders.EVENT_CLASS or not isinstance(payload, dict):
+                continue
+            service = payload.get("service")
+            if service is not None and not isinstance(service, str):
+                continue
+            self._pending_alerts[(event_type, service)] = {"payload": payload, "tries": 0, "not_before": 0.0,
+                                                           "sending": False}
 
     def _observe_rotation(self, name: str, health: Any) -> int:
         """Slice R2: generation decreases and break-glass counter changes seen
@@ -591,8 +689,10 @@ def from_env(environ: dict[str, str], append: Callable[[str, dict], Any],
     every = interval_from_env(environ.get(EVERY_ENV))
     if every is None:
         return None, None
+    data_dir = (environ.get("FIELD_DATA_DIR") or "").strip()
     return OperatorObserver(append, self_health, parse_targets(environ.get(HEALTH_ENV)),
                             fetch=fetch, self_slots=self_slots,
                             self_counters=self_counters,
+                            pending_file=Path(data_dir, *PENDING_ALERTS_FILE) if data_dir else None,
                             alert=lambda event_type, payload: alert_senders.alert_for_event(
                                 event_type, payload, env=environ)), every
