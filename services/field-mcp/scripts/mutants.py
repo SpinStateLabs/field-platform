@@ -36,9 +36,14 @@ MUTANTS = [
      "            value = token_ref(value)\n", "            pass\n"),
     ("T3", "the id is replaced before the length cut", PKG + "client.py",
      '        value = UUID_SHAPED.sub(lambda m: token_ref(m.group(0)), value)     # before the cut: never half an id\n'
+     '        value = CUT_ID.sub(lambda m: token_ref(m.group(0)), value)          # an id a service already shortened\n'
      '        return value if len(value) <= MAX_STRING else value[:MAX_STRING] + "...[truncated]"',
      '        value = value if len(value) <= MAX_STRING else value[:MAX_STRING] + "...[truncated]"\n'
-     '        return UUID_SHAPED.sub(lambda m: token_ref(m.group(0)), value)'),
+     '        value = UUID_SHAPED.sub(lambda m: token_ref(m.group(0)), value)\n'
+     '        return CUT_ID.sub(lambda m: token_ref(m.group(0)), value)'),
+    ("T4", "the start of a shortened id is replaced", PKG + "client.py",
+     "        value = CUT_ID.sub(lambda m: token_ref(m.group(0)), value)          # an id a service already shortened\n",
+     ""),
     ("K7", "path segment check", PKG + "client.py", "if not isinstance(v, str) or not SEGMENT.fullmatch(v):",
      "if not isinstance(v, str):"),
     ("K7c", "fullmatch, not match: a trailing newline is refused (C-790 F-1)", PKG + "client.py",

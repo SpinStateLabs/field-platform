@@ -31,6 +31,10 @@ SEGMENT = re.compile(r"^(?!\.{1,2}$)[A-Za-z0-9._:@+~-]{1,200}$")
 #: names and inside text (report lines, finding ids, notes), so EVERY UUID-shaped run in a result is replaced, not only
 #: the values of the known keys. Other UUIDs (event ids) are shortened the same way: equal ids stay equal.
 UUID_SHAPED = re.compile(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}")
+#: The start of one, where a service shortened a text through it: eight hex characters and a dash, then what is left,
+#: up to a character that cannot continue an id. A complete id never matches this (it is one character too long).
+#: Eight characters alone are not matched: the platform prints that prefix on purpose.
+CUT_ID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F-]{0,26}(?![0-9A-Za-z-])")
 #: Keys whose string values are token ids (compared lower-cased, ``-`` read as ``_``). Counts such as ``tokens`` or
 #: ``input_tokens`` are not here.
 TOKEN_KEYS = frozenset({"token_id", "token_ids", "token", "x_field_token", "delegation_token", "tokens_revoked", "jti"})
@@ -112,6 +116,7 @@ def _bound(value: Any, secrets: tuple[str, ...], credential: bool = False) -> An
         if credential and value and value != "[redacted]" and not ID_REF.fullmatch(value):
             value = token_ref(value)
         value = UUID_SHAPED.sub(lambda m: token_ref(m.group(0)), value)     # before the cut: never half an id
+        value = CUT_ID.sub(lambda m: token_ref(m.group(0)), value)          # an id a service already shortened
         return value if len(value) <= MAX_STRING else value[:MAX_STRING] + "...[truncated]"
     if isinstance(value, list):
         return [_bound(v, secrets, credential) for v in value]
