@@ -5,7 +5,9 @@
 - ``test_served_latency_100k_under_verify_readers_and_rotation`` (the full
   §6.5 run: a real ``ledger serve`` subprocess, ~2 minutes; runs only with
   FIELD_SLOW_TESTS=1): L1 ``/health`` < 2.0 s while ``/verify`` runs; L2
-  appends < 5.0 s with 4 ``/verify`` in flight; L3 the same plus a
+  appends < 5.0 s with 4 clients' ``/verify`` outstanding, and < 5.0 s while one is being served (the ledger
+  runs one whole-chain read at a time and answers the others 503 with ``Retry-After``; each client waits that long
+  and asks again, and every read must end in 200); L3 the same plus a
   ``POST /rotate`` of the 100k open segment; final ``/verify`` ok with
   ``length == /health.event_count == 100,000 + acked appends + rotations``.
   The build spec requires the pass on the 20-core Linux shape; a Windows
@@ -19,6 +21,7 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import re
 import shutil
 import socket
 import statistics
@@ -51,13 +54,22 @@ def fixture_100k(tmp_path_factory) -> Path:
     return p
 
 
-def _free_port() -> int:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
+#: The line uvicorn logs once it listens; with ``--port 0`` it carries the port the server itself bound.
+_LISTENING = re.compile(r"Uvicorn running on http://127\.0\.0\.1:(\d+) ")
 
 
-def _req(port: int, method: str, path: str, body=None, timeout: float = 5.0):
+def _port_the_server_took(log_path: Path, srv: subprocess.Popen, deadline: float) -> int:
+    while time.monotonic() < deadline:
+        found = _LISTENING.search(log_path.read_text(encoding="utf-8", errors="replace"))
+        if found and int(found.group(1)):
+            return int(found.group(1))
+        assert srv.poll() is None, log_path.read_text(encoding="utf-8", errors="replace")[-2000:]
+        time.sleep(0.2)
+    raise AssertionError("the server did not say which port it took:\n"
+                         + log_path.read_text(encoding="utf-8", errors="replace")[-2000:])
+
+
+def _req(port: int, method: str, path: str, body=None, timeout: float = 5.0, answer_headers: dict | None = None):
     t0 = time.monotonic()
     try:
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
@@ -65,10 +77,46 @@ def _req(port: int, method: str, path: str, body=None, timeout: float = 5.0):
         conn.request(method, path, body=json.dumps(body) if body is not None else None, headers=headers)
         resp = conn.getresponse()
         data = resp.read()
+        if answer_headers is not None:
+            answer_headers.update({k.lower(): v for k, v in resp.getheaders()})
         conn.close()
         return time.monotonic() - t0, resp.status, data
     except Exception as exc:  # noqa: BLE001
         return time.monotonic() - t0, type(exc).__name__, b""
+
+
+#: How long one client keeps asking for a read that is answered "busy" before it counts as not served.
+SERVED_WITHIN_S = 120.0
+
+#: The bound on a refused caller's real wait, from its first "busy" answer to the end of the read that succeeds:
+#: the 30 s phase plus three turns (the other readers) of one Retry-After (5 s) and one read (5 s allowed). It does
+#: not promise fairness: with four readers asking back to back, the one just served can take the slot again before a
+#: waiting reader's next try, so a refused reader may wait until the others stop asking.
+REFUSED_READ_SERVED_WITHIN_S = 60.0
+
+
+def _verify_as_a_client(port: int, attempts: list, waits: list) -> str:
+    """One ``/verify`` the way a client should ask for it: a 503 that names a wait in ``Retry-After`` is waited out and
+    asked again. Every attempt is recorded as (start, end, status, retry_after); a read that was refused and then
+    served adds its wait, from the first refusal to the success, to ``waits``. Returns "200", or what ended it."""
+    first = time.monotonic()
+    refused_at = None
+    while True:
+        headers: dict = {}
+        start = time.monotonic()
+        _, status, _ = _req(port, "GET", "/verify", timeout=300, answer_headers=headers)
+        wait = headers.get("retry-after")
+        attempts.append((start, time.monotonic(), status, wait))
+        if status != 503:
+            if status == 200 and refused_at is not None:
+                waits.append(time.monotonic() - refused_at)
+            return str(status)
+        refused_at = refused_at if refused_at is not None else time.monotonic()
+        if wait is None or not wait.isdecimal() or int(wait) < 1:
+            return "503 without a usable Retry-After"
+        if time.monotonic() - first > SERVED_WITHIN_S:
+            return "still busy"
+        time.sleep(int(wait))
 
 
 def test_health_is_o1_at_100k_events(fixture_100k, tmp_path):
@@ -221,15 +269,15 @@ def test_served_latency_100k_under_verify_readers_and_rotation(fixture_100k, tmp
     (work / "ledger").mkdir(parents=True)
     shutil.copyfile(fixture_100k, work / "ledger" / "events.jsonl")
     key = tmp_path / "keys" / "anchor.pem"  # written only after the first /rotate (see below)
-    port = _free_port()
     env = {k: v for k, v in os.environ.items() if k not in ("FIELD_SHARED_SECRET", "FIELD_LEDGER_URL")}
     env.update(FIELD_DATA_DIR=str(work), FIELD_LEDGER_ANCHOR_KEY=str(key), PYTHONIOENCODING="utf-8")
     log = open(tmp_path / "server.log", "w", encoding="utf-8")
-    srv = subprocess.Popen([sys.executable, "-m", "sealed_ledger.cli", "serve", "--port", str(port)],
+    srv = subprocess.Popen([sys.executable, "-m", "sealed_ledger.cli", "serve", "--port", "0"],
                            env=env, stdout=log, stderr=subprocess.STDOUT)
     out: dict = {"python": sys.version.split()[0], "os": os.name}
     try:
         deadline = time.monotonic() + 180
+        port = _port_the_server_took(tmp_path / "server.log", srv, deadline)
         while time.monotonic() < deadline:
             _, status, _ = _req(port, "GET", "/health", timeout=2.0)
             if status == 200:
@@ -280,18 +328,20 @@ def test_served_latency_100k_under_verify_readers_and_rotation(fixture_100k, tmp
             active = [0]
             lock = threading.Lock()
             marks: list = []
-            verifies: list = []
+            verifies: list = []      # how each client read ended
+            attempts: list = []      # every request those reads made
+            waits: list = []         # per refused-then-served read, seconds from the first refusal to the success
 
             def vloop():
                 while not stop.is_set():
                     with lock:
                         active[0] += 1
                         marks.append((time.monotonic(), active[0]))
-                    d2, s2, _ = _req(port, "GET", "/verify", timeout=300)
+                    ended = _verify_as_a_client(port, attempts, waits)
                     with lock:
                         active[0] -= 1
                         marks.append((time.monotonic(), active[0]))
-                    verifies.append((d2, s2))
+                    verifies.append(ended)
 
             threads = [threading.Thread(target=vloop, daemon=True) for _ in range(4)]
             for t in threads:
@@ -318,7 +368,7 @@ def test_served_latency_100k_under_verify_readers_and_rotation(fixture_100k, tmp
                                      {"event_type": "latency", "agent_id": "j", "payload": {}}, timeout=5.0)
                 with lock:
                     full = a0 == 4 and active[0] == 4 and all(m[1] >= 4 for m in marks if t0 <= m[0] <= t0 + dt)
-                appends.append((dt, status, full))
+                appends.append((dt, status, full, t0))
                 if status == 201:
                     acked += 1
                 if rotate:
@@ -333,12 +383,24 @@ def test_served_latency_100k_under_verify_readers_and_rotation(fixture_100k, tmp
             while rotate and "status" not in rot and time.monotonic() < deadline2:
                 time.sleep(0.1)
             in_flight = [a for a in appends if a[2]]
+            served = [x for x in attempts if x[2] == 200]
+            during = [a for a in appends if any(x[0] < a[3] + a[0] and a[3] < x[1] for x in served)]
             res = {
                 "appends": len(appends), "appends_with_4_verify_in_flight": len(in_flight),
                 "append_max_s_4_in_flight": round(max((a[0] for a in in_flight), default=0), 3),
                 "append_max_s_all": round(max((a[0] for a in appends), default=0), 3),
                 "append_failures": sum(1 for a in appends if a[1] != 201),
-                "verify_calls": len(verifies), "verify_non_200": sum(1 for v in verifies if v[1] != 200),
+                "verify_calls": len(verifies), "verify_not_served": sum(1 for v in verifies if v != "200"),
+                "verify_ends": sorted(set(verifies)),
+                "verify_codes": {str(c): sum(1 for x in attempts if x[2] == c) for c in {x[2] for x in attempts}},
+                "verify_refused": sum(1 for x in attempts if x[2] == 503),
+                "verify_503_without_retry_after": sum(1 for x in attempts if x[2] == 503 and not x[3]),
+                "refused_reads_served": len(waits),
+                "wait_after_refusal_max_s": round(max(waits, default=0), 3),
+                "wait_after_refusal_median_s": round(statistics.median(waits), 3) if waits else 0,
+                "served_read_max_s": round(max((x[1] - x[0] for x in served), default=0), 3),
+                "appends_during_a_served_read": len(during),
+                "append_max_s_during_a_served_read": round(max((a[0] for a in during), default=0), 3),
             }
             if rotate:
                 res["rotate"] = rot
@@ -365,9 +427,16 @@ def test_served_latency_100k_under_verify_readers_and_rotation(fixture_100k, tmp
     print("\n§6.5 latency at 100k:", json.dumps(out, indent=1))
     assert out["L1_health_max_s"] < 2.0
     for name in ("L2", "L3"):
-        assert out[name]["append_failures"] == 0 and out[name]["verify_non_200"] == 0, out[name]
+        assert out[name]["append_failures"] == 0 and out[name]["verify_not_served"] == 0, out[name]
+        assert set(out[name]["verify_codes"]) <= {"200", "503"}, out[name]
+        assert out[name]["verify_503_without_retry_after"] == 0, out[name]
+        assert out[name]["verify_refused"] > 0, out[name]          # the busy answer was really exercised
+        assert out[name]["refused_reads_served"] > 0, out[name]
+        assert out[name]["wait_after_refusal_max_s"] < REFUSED_READ_SERVED_WITHIN_S, out[name]
         assert out[name]["appends_with_4_verify_in_flight"] > 0, out[name]
         assert out[name]["append_max_s_4_in_flight"] < 5.0, out[name]
+        assert out[name]["appends_during_a_served_read"] > 0, out[name]
+        assert out[name]["append_max_s_during_a_served_read"] < 5.0, out[name]
     assert out["L3"]["rotate"].get("status") == 200, out["L3"]
     assert out["L3"]["health_max_s"] < 2.0 and out["L3"]["health_failures"] == 0
     assert final["ok"] and final["segments"] == 2
