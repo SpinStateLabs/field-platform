@@ -94,7 +94,7 @@ def test_a_refused_connection_on_the_kickoff_names_the_session(mod, monkeypatch,
     assert "sess_3" in str(e.value) and "was created but not started" in str(e.value) and "URLError" in str(e.value)
 
 
-@pytest.mark.parametrize("bad", ["", "a b", "a/b", "name;x", "é", "x" * 65, "a\nb", "a.b", "Jane Doe"])
+@pytest.mark.parametrize("bad", ["", "a b", "a/b", "name;x", "é", "x" * 65, "a\nb", "a.b", "Jane Doe", "name-1\n"])
 def test_a_bad_session_name_exits_2_before_any_request(mod, servers, monkeypatch, capsys, bad):  # noqa: F811
     srv = servers(lambda h: (200, {}, b'{"id": "s"}'))
     monkeypatch.setattr(mod, "API_BASE", srv.url)
@@ -110,3 +110,25 @@ def test_a_good_session_name_is_accepted(mod, servers, monkeypatch, good):  # no
     monkeypatch.setattr(mod, "API_BASE", srv.url)
     run(mod, monkeypatch, "architect", good, "A")
     assert json.loads(srv.requests[1]["body"])["events"][0]["content"][0]["text"].startswith(f"Session name: {good}\n")
+
+
+@pytest.mark.parametrize("sid", ["sess 1", "sess\r\n1", "sess_1\n", "\nsess_1", "sess\x1b[2J", "../x", "a/b", "a?b=1", "a#b",
+                                 "a%2fb", "s" * 129, "sess_\u00e9"])
+def test_an_id_of_another_shape_is_not_printed_or_put_into_a_url(mod, servers, monkeypatch, capsys, sid):  # noqa: F811
+    srv = servers(lambda h: (200, {}, json.dumps({"id": sid}).encode()))
+    monkeypatch.setattr(mod, "API_BASE", srv.url)
+    with pytest.raises(SystemExit) as e:
+        run(mod, monkeypatch, "architect", "name-1", "A")
+    assert str(e.value) == "unexpected reply: no session id; no event sent"
+    out = capsys.readouterr()
+    assert out.out == "" and "created" not in out.err
+    assert [r["path"] for r in srv.requests] == ["/v1/sessions"]
+
+
+@pytest.mark.parametrize("sid", ["s", "sess_Ab-9", "s" * 128])
+def test_an_id_of_the_expected_shape_is_used(mod, servers, monkeypatch, capsys, sid):  # noqa: F811
+    srv = servers(lambda h: (200, {}, json.dumps({"id": sid}).encode()))
+    monkeypatch.setattr(mod, "API_BASE", srv.url)
+    run(mod, monkeypatch, "architect", "name-1", "A")
+    assert capsys.readouterr().out.strip() == sid
+    assert [r["path"] for r in srv.requests] == ["/v1/sessions", f"/v1/sessions/{sid}/events"]

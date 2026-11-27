@@ -52,6 +52,8 @@ def _budget_cents(text: str) -> str:
 
 
 _SESSION_NAME = re.compile(r"[A-Za-z0-9_-]{1,64}")
+#: the shape a returned session id must have before it is printed or put into a URL
+_SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 
 
 def _session_name(text: str) -> str:
@@ -76,7 +78,7 @@ def main():
     text = (f"Session name: {a.session_name}\nLane: {a.lane}\n"
             "Run the ROLE LOOP from your system prompt now and keep running it.")
     sid = s.get("id") if isinstance(s, dict) else None
-    if not isinstance(sid, str) or not sid:
+    if not isinstance(sid, str) or not _SESSION_ID.fullmatch(sid):
         sys.exit("unexpected reply: no session id; no event sent")
     # the session exists and is billable from here: say its id BEFORE the kickoff, so a failed kickoff cannot lose it (S8-32)
     print(f"session {sid} created; sending the kickoff", file=sys.stderr)
