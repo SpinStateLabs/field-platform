@@ -84,6 +84,7 @@ from field_core.signing import (
     verify_caller_signature,
     verify_manifest,
 )
+from field_core.textcut import cut
 from sealed_ledger.bundle import ExportSummary, write_bundle
 from sealed_ledger.filters import EventFilter, InvalidTimeBound
 
@@ -2866,7 +2867,7 @@ class LedgerStore:
             if archived or completed:
                 try:
                     self._retention_event(older_than_days, adir, archived, completed, operator,
-                                          evidence, error=f"{type(exc).__name__}: {exc}"[:500])
+                                          evidence, error=cut(f"{type(exc).__name__}: {exc}", 500))
                 except Exception as event_exc:  # noqa: BLE001 - the refusal is what the caller sees
                     exc.add_note(f"its {RETENTION_EVENT_TYPE} event also failed: {event_exc}")
             raise

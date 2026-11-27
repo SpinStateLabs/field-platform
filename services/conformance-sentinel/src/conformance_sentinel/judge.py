@@ -27,6 +27,8 @@ import os
 import re
 from dataclasses import dataclass, field
 
+from field_core.textcut import cut
+
 _log = logging.getLogger(__name__)
 
 # Version-pinned default. Swapping models is a deliberate act (env override or
@@ -202,7 +204,7 @@ class AnthropicJudgeClient:  # pragma: no cover — Declared-untested without ke
             return JudgeVerdict(
                 conforming=conforming,
                 confidence=max(0.0, min(1.0, float(confidence))),
-                rationale=str(data.get("rationale", ""))[:300],
+                rationale=cut(str(data.get("rationale", "")), 300),
                 cited_scope=cited,
                 model=model,
                 input_tokens=int(usage.get("input_tokens", 0)),

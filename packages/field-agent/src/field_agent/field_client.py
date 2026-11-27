@@ -39,6 +39,7 @@ from __future__ import annotations
 import http.client
 import ipaddress
 import json
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -60,6 +61,25 @@ __all__ = [
 
 DECISIONS = {"ALLOW", "BLOCK", "ESCALATE"}
 DEFAULT_PREFIXES = {"sentinel": "/sentinel", "governor": "/governor", "killswitch": "/killswitch"}
+
+
+_ID_SHAPED = re.compile(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}")
+
+
+def _cut(text: str, limit: int) -> str:
+    """Copy of ``field_core.textcut.cut`` (this module is standard-library only; a test pins the two together): at most
+    ``limit`` characters, never ending inside a UUID-shaped run."""
+    if len(text) <= limit:
+        return text
+    end = limit
+    start = max(0, end - 35)
+    while start < end:
+        if _ID_SHAPED.match(text, start):
+            end = start
+            start = max(0, end - 35)
+        else:
+            start += 1
+    return text[:end]
 
 
 # -- an opener that never follows redirects (source: cost_optimizer/safe_http.py) --
@@ -223,7 +243,8 @@ class FieldClient:
         try:
             status, _ = self._call("POST", "governor", "/usage", {
                 "agent_id": self.agent_id, "model": model, "input_tokens": int(input_tokens),
-                "output_tokens": int(output_tokens), "cache_read_tokens": int(cache_read_tokens), "note": note[:200]})
+                "output_tokens": int(output_tokens), "cache_read_tokens": int(cache_read_tokens),
+                "note": _cut(note, 200)})
         except _Unreachable:
             raise Unmetered("spend-governor unreachable: spend is unmetered") from None
         if status not in (200, 201):

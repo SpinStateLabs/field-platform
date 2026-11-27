@@ -39,6 +39,7 @@ from field_core.http import get_retrying_once, pooled_limits
 from field_core.ids import REGISTRY_ID_RE, registry_id_ok
 from field_core.ledger_context import correlation_context
 from field_core.operator_health import NOT_SHOWN, shown_label
+from field_core.textcut import cut
 
 from conformance_sentinel.judge import injection_screen
 from conformance_sentinel.mode import SentinelMode
@@ -463,7 +464,7 @@ class SentinelEngine:
 
         # Model output is untrusted text: collapse whitespace + truncate
         # before it can reach reasons or the ledger.
-        rationale = " ".join((jv.rationale or "").split())[:300]
+        rationale = cut(" ".join((jv.rationale or "").split()), 300)
         try:
             self.ledger.append(
                 "sentinel.judge",
@@ -529,7 +530,7 @@ class SentinelEngine:
                 self.ledger.append(
                     "sentinel.metering_gap",
                     payload={"action": req.action, "shadowed": shadowed,
-                             "error": " ".join(str(exc).split())[:300],
+                             "error": cut(" ".join(str(exc).split()), 300),
                              **_caller_payload(req)},
                     agent_id=_row_agent_id(req.agent_id),
                 )

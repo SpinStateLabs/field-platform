@@ -52,6 +52,7 @@ from pydantic import (
 from field_core import operator_auth
 from field_core.conformance import ConformanceVerdict, Decision
 from field_core.validation import validate_manifest_data
+from field_core.textcut import cut
 
 HOME_ORG_ENV = "FIELD_ORG_NAME"
 DEFAULT_HOME_ORG = "Spin State Labs"
@@ -647,7 +648,10 @@ def _bounded_gaps(gaps: list[str]) -> list[str]:
     out = []
     for gap in gaps[:_GAPS_SHOWN]:
         gap = str(gap)
-        out.append(gap if len(gap) <= _GAP_SHOWN else f"{gap[:_GAP_SHOWN]}...[truncated {len(gap) - _GAP_SHOWN} chars]")
+        if len(gap) > _GAP_SHOWN:
+            shown = cut(gap, _GAP_SHOWN)                    # never ends inside an id
+            gap = f"{shown}...[truncated {len(gap) - len(shown)} chars]"
+        out.append(gap)
     return out
 
 def _key_fingerprint(pem: object) -> str | None:
