@@ -135,3 +135,15 @@ not appear in the scan (none exists today); the scan follows `os.environ`, its a
 | `FORCE_HYGIENE_WINDOW` | force-gateway | 5 | int, at least 1; blank = default; non-integer or below 1 raises ValueError (naming the variable, never the value) at app start | none (tunable) | force_gateway/api.py:1037 |
 | `FORCE_TELEMETRY_RETAIN` | force-gateway | 10000 | int clamped to >= 1; non-integer or blank falls back to 10000 | none (tunable) - telemetry rows kept. | force_gateway/store.py:71 |
 | `FORCE_TELEMETRY_WINDOW` | force-gateway | 50 | int clamped to >= 1; non-integer or blank falls back to 50 | none (tunable) - last_N window size. | force_gateway/api.py:266 |
+
+## Variables read by `tools/` (outside the table above)
+
+The deploy-gate tools read a few variables that are not in `packages/*/src` or `services/*/src`, so the table above does
+not list them and `tools/tests/test_environment_doc.py` does not check them.
+
+- `FIELD_COMPOSE_ALLOWED_ROOTS` (read in `tools/compose_bind_rules.py`, used by `tools/compose_resolved_check.py`; C-1196):
+  colon-separated absolute directories ADDED to the committed default root as allowed bind roots for the resolved-model
+  check. When the process does not set it, the check reads it from the compose project's `.env` (`--env-file` names
+  another file); a value set in the process wins. Unset or empty means the committed default only. An entry that is relative, not literal, has a dot segment, or
+  is a system or credential directory refuses the whole check (exit 2); the message names the entry's position, never its
+  text. The static pins ignore it.
