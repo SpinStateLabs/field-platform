@@ -57,6 +57,8 @@ def test_an_acceptable_url_with_a_secret_file_is_usable(url):
     "http://notlocalhost",
     "http://contest",
     "http://xtest",
+    "HTTP://fly.example.org",
+    "Http://203.0.113.5",
 ], ids=repr)
 def test_a_cleartext_remote_url_with_a_secret_file_is_unusable_with_fixed_text(url):
     e = parsed(url)
