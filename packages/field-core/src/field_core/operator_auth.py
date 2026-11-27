@@ -165,7 +165,7 @@ ACTIONS = frozenset(
      "mint_for_others", "decommission", "revoke", "retention", "sweep",
      "assert_operator", "registry_edit", "register", "caps", "federation",
      "escalation", "export", "ledger_attribute", "bypass_operator_list",
-     "sweep_kill"}
+     "sweep_kill", "crossing"}
 )
 
 #: Never implied by "*": each is an explicit, narrow grant.

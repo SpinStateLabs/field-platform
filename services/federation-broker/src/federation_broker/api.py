@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from field_core.startup import warn_open
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 from field_core.authn import install as install_authn
 from field_core.buildinfo import build_sha
@@ -29,6 +31,8 @@ from federation_broker.engine import (
     FederationContract,
     home_org,
 )
+from federation_broker.own_token import TOKEN_HEADER, OwnTokenCheck
+from federation_broker.registered_manifest import RegisteredManifest
 from field_core.clients import LedgerClient
 from field_core.conformance import ConformanceVerdict
 
@@ -136,12 +140,50 @@ def create_app(engine: BrokerEngine | None = None) -> FastAPI:
     def list_contracts() -> list[FederationContract]:
         return _engine().store.list()
 
+    app.state.own_token = OwnTokenCheck()
+    app.state.registered = RegisteredManifest()
+    guard_crossing = op_health.guard("crossing")
+
+    async def _guard(request: Request) -> None:
+        # named like the operator guards: guard_dependent_routes (the CLI drift test) finds guarded routes by it
+        """Who may ask: the named agent, with its own active token, for its outbound crossing; otherwise an operator
+        with the ``crossing`` scope. Follows the operator layer's mode (off: not checked; log-only: recorded)."""
+        if operator_auth.mode() == operator_auth.OFF:
+            return
+        token = request.headers.get(TOKEN_HEADER)
+        if token:
+            try:
+                body = json.loads(await request.body())  # a repeated key is refused before this (dependency order)
+            except (ValueError, RecursionError):
+                body = None
+            if (isinstance(body, dict) and body.get("direction") == "outbound"
+                    and isinstance(body.get("agent_id"), str)
+                    and await run_in_threadpool(app.state.own_token.bound, token, body["agent_id"])):
+                return
+        await guard_crossing(request)
+
     @app.post("/crossing", response_model=ConformanceVerdict)
     def crossing(req: CrossingRequest,
-                 _once: None = Depends(refuse_duplicate_json_keys)) -> ConformanceVerdict:
+                 _once: None = Depends(refuse_duplicate_json_keys),
+                 _caller: None = Depends(_guard)) -> ConformanceVerdict:
         # triage-t12 N1 on #1300: a crossing request that repeats a key (a second "scope" or "counterparty_org") is
         # refused like a contract write, never decided on its last value
-        return _engine().decide(req)
+        mode = operator_auth.mode()
+        if req.direction != "outbound" or mode == operator_auth.OFF:
+            return _engine().decide(req)
+        manifest, why = app.state.registered.read(req.agent_id)
+        if mode == operator_auth.ENFORCE:
+            # OUR manifest is the registry's; the one in the request is not read
+            if manifest is None:
+                return _engine().refuse_outbound(req, why)
+            return _engine().decide(req.model_copy(update={"manifest": manifest}))
+        # log-only: decided on the caller's as before; the answer says how the registry's compares
+        verdict = _engine().decide(req)
+        state = "unreadable" if manifest is None else "same" if manifest == req.manifest else "differs"
+        verdict.context["registry_manifest"] = state
+        if state != "same":
+            logging.getLogger(__name__).warning("outbound crossing: the registered manifest is %s", state)
+        return verdict
 
     warn_open("federation-broker", operator_layer=True)
     return app

@@ -43,6 +43,13 @@ def _bounded(text: str, limit: int = 300) -> str:
     return shown if len(shown) <= limit else shown[:limit] + "..."
 
 
+def _token_headers(token_id: object) -> dict[str, Any]:
+    """The ``headers`` argument that carries the token, or none: a value that cannot travel in a header is left out."""
+    if isinstance(token_id, str) and token_id and token_id.isascii() and token_id.isprintable():
+        return {"headers": {"x-field-token": token_id}}
+    return {}
+
+
 class CrossingBlocked(FieldAgentError):
     """The crossing may not proceed.
 
@@ -153,9 +160,11 @@ class FederationClient:
         counterparty_agent_id: str | None = None,
         manifest_signature: str | None = None,
         request_summary: str | None = None,
+        token_id: str | None = None,
     ) -> dict[str, Any]:
         """Ask the broker; return the verdict on ALLOW, raise ``CrossingBlocked``
-        otherwise (including when the broker cannot be asked)."""
+        otherwise (including when the broker cannot be asked). ``token_id``, the
+        agent's own delegation token, is sent as ``x-field-token``."""
         body = self.request_body(
             agent_id, counterparty_org, scope, data_class, manifest,
             direction=direction, counterparty_agent_id=counterparty_agent_id,
@@ -163,7 +172,7 @@ class FederationClient:
         )
         unreachable = None
         try:
-            resp = self._client.post(f"{self._base}/crossing", json=body)
+            resp = self._client.post(f"{self._base}/crossing", json=body, **_token_headers(token_id))
         except Exception as exc:
             # the exception TYPE only: its text can carry the URL, a proxy or an address (as liveness.py does, S9-6)
             unreachable = type(exc).__name__
@@ -240,6 +249,9 @@ def register_cli(app: Any) -> None:
         signature: str = typer.Option(
             None, "--signature", help="Inbound only: base64 manifest signature",
         ),
+        token_id: str = typer.Option(
+            None, "--token-id", help="Outbound: our agent's delegation token id",
+        ),
     ) -> None:
         """Ask the federation-broker. Exit 0 ALLOW / 1 BLOCK or broker unreachable."""
         try:
@@ -248,6 +260,7 @@ def register_cli(app: Any) -> None:
                 direction=direction,  # type: ignore[arg-type]
                 counterparty_agent_id=counterparty_agent_id,
                 manifest_signature=signature,
+                **({"token_id": token_id} if token_id else {}),
             )
         except CrossingBlocked as exc:
             if exc.verdict is not None:

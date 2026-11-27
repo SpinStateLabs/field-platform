@@ -28,9 +28,9 @@ from federation_broker import __version__
 app = typer.Typer(name="fedbroker", help="Federation broker.", no_args_is_help=True)
 
 #: The broker routes that carry an operator guard (the receiver's drift test compares this table with its
-#: ``op_health.guard`` routes). Only these requests carry this CLI's operator pair; every other request, reads and
-#: crossing decisions included, carries the perimeter secret alone (C-1181, Lane 7 C-1150 F2).
-FEDERATION_TEMPLATES = (("PUT", "/contracts/{contract_id}"),)
+#: guarded routes). Only these requests carry this CLI's operator pair; every other request, reads included, carries
+#: the perimeter secret alone (C-1181, Lane 7 C-1150 F2). A crossing asked from this CLI is an operator's request.
+FEDERATION_TEMPLATES = (("PUT", "/contracts/{contract_id}"), ("POST", "/crossing"))
 FEDERATION_GUARDED = compile_routes(FEDERATION_TEMPLATES)
 
 

@@ -195,6 +195,7 @@ class FieldAgent:
         closed). It ASKS — the SDK carries no traffic to the counterparty.
         Same opt-in liveness gate as :meth:`check`."""
         self._gate_liveness()
+        token = self._resolve_token()
         return self._federation.cross(
             self.agent_id,
             counterparty_org,
@@ -205,6 +206,7 @@ class FieldAgent:
             counterparty_agent_id=counterparty_agent_id,
             manifest_signature=manifest_signature,
             request_summary=request_summary,
+            **({"token_id": token} if token else {}),
         )
 
     # -- hook 3: LIVENESS ---------------------------------------------------
