@@ -1,9 +1,10 @@
-"""S8-15: PATCH /agents/{id} with no editable field is a 422, not a 200 that ledgers an empty update.
+"""S8-15: PATCH /agents/{id} that sends no field is a 422, not a 200 that ledgers an empty update.
 
-`{}` or only nulls built an empty column list, skipped the UPDATE (updated_at did not move) and still appended
-`registry.updated {"fields": []}` and answered 200: audit noise that looks like a change. AgentUpdate now refuses a patch with
-no non-None field (a named message, no echo). Per-field omission stays allowed, and a patch equal to the current values is a
-real write that still moves updated_at."""
+`{}` built an empty column list, skipped the UPDATE (updated_at did not move) and still appended
+`registry.updated {"fields": []}` and answered 200: audit noise that looks like a change. AgentUpdate now refuses a patch that
+sends no field other than the condition (a named message, no echo). A field sent as an explicit null counts as sent and is
+accepted as before; per-field omission stays allowed, and a patch equal to the current values is a real write that still
+moves updated_at."""
 
 import time
 
@@ -38,13 +39,10 @@ def registry(tmp_path, monkeypatch):
     return client, ledger
 
 
-@pytest.mark.parametrize("body", [{}, {"name": None}, {"owner": None, "domain": None},
-                                  {"name": None, "owner": None, "domain": None, "manifest_ref": None, "status": None}],
-                         ids=["empty", "one-null", "two-nulls", "all-null"])
-def test_a_patch_with_no_non_null_field_is_422_with_no_ledger_row_and_no_change(registry, body):
+def test_a_patch_that_sends_no_field_is_422_with_no_ledger_row_and_no_change(registry):
     client, ledger = registry
     before = client.get("/agents/invoicing-agent").json()
-    r = client.patch("/agents/invoicing-agent", json=body)
+    r = client.patch("/agents/invoicing-agent", json={})
     assert r.status_code == 422 and r.json()["detail"][0]["loc"] == ["body"]     # the handler drops the message text
     assert ledger.events == []
     assert client.get("/agents/invoicing-agent").json() == before
@@ -56,10 +54,22 @@ def test_the_refusal_does_not_echo_anything(registry):
     assert r.status_code == 422 and MARK not in r.text
 
 
+@pytest.mark.parametrize("body", [{"manifest_ref": None}, {"name": None},
+                                  {"name": None, "owner": None, "domain": None, "manifest_ref": None, "status": None}],
+                         ids=["ref-null", "name-null", "all-null"])
+def test_an_explicit_null_is_a_field_sent_accepted_and_changes_no_column(registry, body):
+    client, ledger = registry
+    before = client.get("/agents/invoicing-agent").json()
+    r = client.patch("/agents/invoicing-agent", json=body)
+    assert r.status_code == 200 and r.json() == before            # updated_at included
+    # as before this rule: the accepted patch is ledgered with no field named
+    assert ledger.events == [("registry.updated", {"fields": []}, "invoicing-agent")]
+
+
 def test_the_model_refuses_the_empty_patch_directly():
-    for kwargs in ({}, {"name": None}):
-        with pytest.raises(ValidationError, match="at least one field"):
-            AgentUpdate(**kwargs)
+    with pytest.raises(ValidationError, match="at least one field"):
+        AgentUpdate()
+    assert AgentUpdate(name=None).model_fields_set == {"name"}
     assert AgentUpdate(domain="x").domain == "x"
 
 
