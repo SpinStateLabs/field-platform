@@ -201,6 +201,11 @@ def _caller_asserted_coverage(
     return checked.model_copy(update={"controls": rows}), asserted
 
 
+def _anything_unread(coverage: Any) -> bool:
+    """One rule: did any source this run asked give no answer? The four listed sources, or the ledger's /verify."""
+    return bool(coverage.not_answered) or any(not_checked(c) for c in coverage.controls)
+
+
 def generate_pack(
     manifest: dict[str, Any],
     *,
@@ -244,14 +249,14 @@ def generate_pack(
             # B1: the outage is a fact of the LIVE collection alone; whatever the caller's body holds (even {})
             # cannot turn "the ledger was asked and nothing answered" into a clean-looking pack
             evidence_status = "unknown"
-        elif coverage.not_answered:
+        elif _anything_unread(coverage):
             # a live source did not answer: the pack is partial whatever the body holds; the rows the caller filled
             # keep their own caller-asserted marking and gaps
             evidence_status = "partial"
     else:
         coverage = evaluate(manifest, agent_id=agent_id, sources=sources)
         if _any_source(sources):
-            evidence_status = "partial" if coverage.not_answered else "collected"
+            evidence_status = "partial" if _anything_unread(coverage) else "collected"
         elif requested:
             evidence_status = "unknown"  # collection was requested (agent_id) and no service answered
         else:

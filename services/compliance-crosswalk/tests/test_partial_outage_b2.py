@@ -158,3 +158,16 @@ def test_body_sources_with_every_live_source_answering_still_read_caller_asserte
     _, pack = generate_pack(resolved_manifest(), signer=SIGNER, stale_store=_NoStale(), agent_id="a1",
                             sources=live, caller_sources=EvidenceSources(governor_cap={"cap": 5}))
     assert pack["evidence_status"] == "caller-asserted"
+
+
+@pytest.mark.parametrize("body", [None, EvidenceSources(governor_cap={"cap": 5})], ids=["no-body", "body-sources"])
+def test_an_unanswered_verify_alone_makes_the_pack_partial(monkeypatch, body):
+    """Every other source answers: the chain was not checked, so the pack is partial and FC-L-01 stays a
+    not-checked gap."""
+    live = collect(monkeypatch, down={"ledger verify"})
+    assert live.not_answered == [] and live.ledger_verify is None
+    md, pack = generate_pack(resolved_manifest(), signer=SIGNER, stale_store=_NoStale(), agent_id="a1",
+                             sources=live, caller_sources=body)
+    assert pack["evidence_status"] == "partial" and "- Evidence status: partial" in md
+    assert ("FC-L-01", "not-checked") in {(g["control_id"], g["kind"]) for g in pack["gaps"]}
+    assert "No gaps recorded" not in md
