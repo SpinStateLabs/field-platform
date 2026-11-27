@@ -1,12 +1,12 @@
 """Services shorten free text before it reaches this server. An id cut by that shortening is still replaced. The cuts
 are made here by the services' own functions, so each case ends exactly as that service ends it.
 
-Mutant T4: the rule for a shortened id removed. Mutant T5: every text treated as a cut one.
+Mutant T4: the rule for a shortened id removed. Mutant T5: every text treated as a cut one. Mutant T6: a start with
+three groups counts only before an ellipsis in a short text.
 """
 import pytest
 
-from compliance_crosswalk.engine import ONE_LINE_MAX, _declared, one_line
-from compliance_crosswalk.mapping import Control
+from compliance_crosswalk.engine import ONE_LINE_MAX, evaluate, one_line
 from incident_replay.engine import MD_FIELD_MAX, SUMMARY_MAX, _one_md_line, _summarize
 from lifecycle_manager.engine import _body
 from field_mcp import client as cl
@@ -44,10 +44,11 @@ def crosswalk_line(kept: int) -> str:
 
 
 def crosswalk_declared(kept: int) -> str:
-    control = Control(control_id="X-01", letter="F", manifest_path="a.b", statement="s", evidence_kind="none",
-                      citations={})
-    head = len("a.b = '")
-    return _declared(control, {"a": {"b": padded(cl.SHORTEST_CUT - kept - head)}})[1]
+    """The whole report path: the declared value is cut, then put on one line. The value holds a run of spaces."""
+    before = len("identity.principal = 'a b ")                       # as printed, with the run collapsed
+    value = "a  b " + padded(119 - kept - before)
+    report = evaluate({"identity": {"principal": value}})
+    return next(c.declared_detail for c in report.controls if c.manifest_path == "identity.principal")
 
 
 CUTS = [replay_summary, replay_markdown, lifecycle_refusal, crosswalk_line, crosswalk_declared]
@@ -113,6 +114,21 @@ def test_each_ending_counts_in_a_long_text_and_not_in_a_short_one(after):
     assert cl._bound(short, ()) == short
 
 
+@pytest.mark.parametrize("kept", [19, 23, 24, 35])
+@pytest.mark.parametrize("after", AFTER)
+def test_three_groups_count_at_an_ending_in_a_text_of_any_length(after, kept):
+    fragment = TID[:kept]
+    text = "z " + fragment + after
+    assert len(text) < cl.SHORTEST_CUT
+    assert cl._bound(text, ()) == text.replace(fragment, cl.token_ref(fragment))
+
+
+@pytest.mark.parametrize("kept", [9, 13, 18])
+def test_fewer_groups_in_a_short_text_need_an_ellipsis(kept):
+    text = "z " + TID[:kept]
+    assert cl._bound(text, ()) == text
+
+
 @pytest.mark.parametrize("mark", ["\u2026", "..."])
 def test_an_ellipsis_marks_a_cut_in_a_text_of_any_length(mark):
     fragment = TID[:11]
@@ -121,7 +137,7 @@ def test_an_ellipsis_marks_a_cut_in_a_text_of_any_length(mark):
 
 def test_a_whole_id_earlier_in_the_text_does_not_hide_a_cut_one():
     # replacing the whole id makes the text shorter than SHORTEST_CUT; it is judged as it arrived
-    fragment = TID[:20]
+    fragment = TID[:16]
     text = f"{TID} " + "z" * (cl.SHORTEST_CUT - len(TID) - len(fragment) - 2) + " " + fragment
     assert len(text) == cl.SHORTEST_CUT
     shown = cl._bound(text, ())

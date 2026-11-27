@@ -36,11 +36,17 @@ UUID_SHAPED = re.compile(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}"
 #: platform prints that prefix on purpose.
 _ID_START = (r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-(?:[0-9a-fA-F]{4}-(?:[0-9a-fA-F]{4}-[0-9a-fA-F]{0,11}"
              r"|[0-9a-fA-F]{0,4})|[0-9a-fA-F]{0,4})|[0-9a-fA-F]{0,4})")
-#: It is replaced only where a text was cut: before an ellipsis, in any text; and, in a text at least SHORTEST_CUT
-#: characters long, also where it ends the text or a line, or stands before a quote, ";", ")" or a table cell edge.
-CUT_MARKED = re.compile(_ID_START + r"(?=\u2026|\.\.\.)")
-CUT_ENDING = re.compile(_ID_START + r"(?=\u2026|\.\.\.|\Z|[\r\n\"';)]| ?\|)")
-#: no service shortens text that can carry an id to fewer characters than this
+#: the same start once its first three groups and their dashes are there (19 characters or more): no date, range or
+#: short word has that shape
+_ID_DEEP = r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){2}(?:[0-9a-fA-F]{4}-[0-9a-fA-F]{0,11}|[0-9a-fA-F]{0,4})"
+_MARK = r"(?=\u2026|\.\.\.)"
+#: where a cut text ends: an ellipsis, the end of the text or of a line, a quote, ";", ")" or a table cell edge
+_END = r"(?=\u2026|\.\.\.|\Z|[\r\n\"';)]| ?\|)"
+#: It is replaced only where a text was cut. In a text at least SHORTEST_CUT characters long (CUT_ENDING): at any such
+#: end. In a shorter one (CUT_MARKED): before an ellipsis, and at any such end once the first three groups are there.
+CUT_MARKED = re.compile(f"{_ID_START}{_MARK}|{_ID_DEEP}{_END}")
+CUT_ENDING = re.compile(_ID_START + _END)
+#: no service's cut limit for text that can carry an id is lower than this
 SHORTEST_CUT = 120
 #: Keys whose string values are token ids (compared lower-cased, ``-`` read as ``_``). Counts such as ``tokens`` or
 #: ``input_tokens`` are not here.
