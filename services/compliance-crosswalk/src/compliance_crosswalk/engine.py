@@ -146,6 +146,9 @@ GATE_NOTE_UNDECLARED = ("not declared in the manifest, so the Claude Code gate e
 DECLARED_ONLY_CONTROL_IDS = ("FC-E-03", "FC-F-01", "FC-L-02")
 DECLARED_ONLY_DETAIL = "declared only: no evidence artifact is read for this control"
 DECLARED_ONLY_UNDECLARED = "not declared in the manifest; no evidence artifact is read for this control"
+#: A control id that no rule in ``_evidenced`` names: nothing was evaluated for it. Every control in ``CONTROLS`` has a
+#: rule (pinned by a test), so this detail appears only for a control added without one, and never as "declared only".
+NO_EVIDENCE_RULE = "no evidence rule exists for this control id: nothing was evaluated"
 
 
 def _gate_declared(control: Control, manifest: dict[str, Any]) -> tuple[bool, str] | None:
@@ -261,8 +264,8 @@ def _evidenced(
         if unread := [name for name in _READS["FC-D-02"] if name in sources.not_answered]:
             detail += f" ({' and '.join(unread)}{UNREAD_SUFFIX})"
         return _revocation_seen(sources), detail
-    # a control with no rule above has nothing to read: never evidenced by default
-    return None, DECLARED_ONLY_DETAIL
+    # a control id with no rule above: nothing was evaluated, so never evidenced, and not called declared only
+    return None, NO_EVIDENCE_RULE
 
 
 def _revocation_seen(sources: EvidenceSources) -> bool:

@@ -135,3 +135,26 @@ def test_a_full_outage_is_still_unknown(monkeypatch):
 def test_an_unknown_source_name_is_refused():
     with pytest.raises(ValueError):
         EvidenceSources(not_answered=["anything else"])
+
+
+def test_a_partial_outage_reads_partial_even_with_body_sources():
+    """Partial wins over caller-asserted: a live source that did not answer is a fact of this run, whatever the body
+    asserts, and the body cannot fill the row that source would have decided."""
+    live = EvidenceSources(ledger_verify={"ok": True}, ledger_event_types={"kill.agent": 1}, tokens=[],
+                           governor_cap={"cap": 1}, not_answered=["registry"])
+    body = EvidenceSources(registry_record={"owner": "someone"})
+    md, pack = generate_pack(resolved_manifest(), signer=SIGNER, stale_store=_NoStale(), agent_id="a1",
+                             sources=live, caller_sources=body)
+    assert pack["evidence_status"] == "partial"
+    assert "- Evidence status: partial" in md
+    assert pack["not_answered"] == ["registry"]
+    kinds = {(g["control_id"], g["kind"]) for g in pack["gaps"]}
+    assert ("FC-R-01", "not-checked") in kinds and ("FC-R-01", "caller-asserted") not in kinds
+
+
+def test_body_sources_with_every_live_source_answering_still_read_caller_asserted():
+    live = EvidenceSources(registry_record={"owner": "x"}, ledger_verify={"ok": True}, ledger_event_types={},
+                           tokens=[], governor_cap=None)
+    _, pack = generate_pack(resolved_manifest(), signer=SIGNER, stale_store=_NoStale(), agent_id="a1",
+                            sources=live, caller_sources=EvidenceSources(governor_cap={"cap": 5}))
+    assert pack["evidence_status"] == "caller-asserted"
