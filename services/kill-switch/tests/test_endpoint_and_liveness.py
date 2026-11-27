@@ -1348,14 +1348,31 @@ def test_no_operation_starts_after_the_deadline():
     from kill_switch.endpoint_deadline import DeadlineStream
 
     class Inner:
+        """The two stream operations under test, each recording that it was started."""
+
+        def __init__(self):
+            self.started = []
+
         def read(self, max_bytes, timeout=None):
+            self.started.append(("read", timeout))
             return str(timeout).encode()
 
-    assert float(DeadlineStream(Inner(), time.monotonic() + 0.5).read(1, 2.0)) <= 0.5
+        def write(self, buffer, timeout=None):
+            self.started.append(("write", timeout))
+
+    live = Inner()
+    stream = DeadlineStream(live, time.monotonic() + 0.5)
+    assert float(stream.read(1, 2.0)) <= 0.5
+    stream.write(b"x", 2.0)
+    assert [name for name, _ in live.started] == ["read", "write"]
+    assert all(0 < timeout <= 0.5 for _, timeout in live.started)
+
+    late = Inner()
     with pytest.raises(httpcore.ReadTimeout):
-        DeadlineStream(Inner(), time.monotonic() - 0.01).read(1, 2.0)
+        DeadlineStream(late, time.monotonic() - 0.01).read(1, 2.0)
     with pytest.raises(httpcore.WriteTimeout):
-        DeadlineStream(Inner(), time.monotonic() - 0.01).write(b"x", 2.0)
+        DeadlineStream(late, time.monotonic() - 0.01).write(b"x", 2.0)
+    assert late.started == []
 
 
 def test_the_deadline_hook_is_checked_against_exactly_the_pinned_library_versions():
