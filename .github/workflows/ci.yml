@@ -54,7 +54,8 @@ jobs:
             pip install $C --no-deps -e "services/$s"
           done
           # field-mcp: its third-party closure (the MCP SDK and what it needs) is hash-checked (--require-hashes, ruled by Don 2026-10-30), this suite only.
-          pip install $C --require-hashes --no-deps -r integration/field-mcp-hashes.txt
+          # The file is passed as constraints (versions and hashes); the names to install are listed on the line.
+          pip install $C --require-hashes --no-deps -c integration/field-mcp-hashes.txt annotated-types anyio attrs click h11 httpcore2 httpx2 idna jsonschema jsonschema-specifications mcp mcp-types opentelemetry-api pydantic pydantic-core pyjwt python-multipart referencing rpds-py sse-starlette starlette truststore typing-extensions typing-inspection uvicorn
           pip install $C --no-deps -e services/field-mcp
           # --no-deps: field-agent depends on conformance-sentinel, which is
           # not on PyPI — everything it needs is already installed above.
