@@ -49,6 +49,15 @@ Whole-ledger readers also build the attestation pack, run and render a lifecycle
 
 After the table the tool prints, for each row and reader, **the line the old release shows** (the rows are synthetic). Read these: a reader can answer `OK` and still show less than before. A reader that requires a key the new shape dropped answers `CRASH`, which fails the run.
 
+## A shape change is caught only if its author lists it
+
+The tool finds new event types by itself. It cannot see that an existing type's payload changed. **A change of shape is checked only when the author of that change adds the type to `CHANGED`** in `tools/rollback_read_check.py`, with a synthetic payload in the new shape. If it is not listed, the run can end `PASS`, or find nothing to check, while the old release has never read the new shape.
+
+**Reviewer checklist, for any pull request that adds, removes, renames or retypes a field of a ledger payload:**
+
+- [ ] `CHANGED` entry added for every event type whose payload shape changes, in the new shape.
+- [ ] The line each old reader shows for that row has been read in a run of this check.
+
 ## What it does not cover
 
 - It uses synthetic events, not a copy of a live ledger.
