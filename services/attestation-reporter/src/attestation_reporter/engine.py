@@ -421,8 +421,17 @@ class PackEngine:
         if not ok or not isinstance(data, dict):
             return unavailable(policy_name, "days", UNREACHABLE), unavailable(count_name, "manifests", UNREACHABLE)
         estate = data.get("estate_retention_days")
-        if data.get("status") == "no_estate_policy" or not isinstance(estate, int) or isinstance(estate, bool):
-            note = "no estate policy (FIELD_LEDGER_RETENTION_DAYS unset)"
+        status = data.get("status")
+        if status == "no_estate_policy" or not isinstance(estate, int) or isinstance(estate, bool):
+            # B2: only the ledger's own "no_estate_policy" is a configured absence. Anything else with no usable
+            # figure was not read, and must reach the pack's not_read list.
+            if status == "no_estate_policy":
+                note = f"{NO_ESTATE_POLICY} (FIELD_LEDGER_RETENTION_DAYS unset)"
+            elif status == "unavailable":
+                note = "the ledger reports its retention check as unavailable and gives no policy figure"
+            else:
+                note = ("the ledger's /retention/check answer carries no whole number of days for the estate policy "
+                        "— figure not published")
             return unavailable(policy_name, "days", note), unavailable(count_name, "manifests", note)
         policy = Metric(
             name=policy_name, value=estate, unit="days", source_query=query,
