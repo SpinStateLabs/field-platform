@@ -1,4 +1,4 @@
-"""No tool result shows a token id: it is a bearer credential. Each tool's service answers with a made-up id in every
+"""No tool result shows a token id. Each tool's service answers with a made-up id in every
 place one can travel (known keys at depth, other keys, dict keys, free text, a text reply); the result never holds it.
 
 Mutants: T1 the UUID-shaped replacement removed; T2 the token-key rule removed; T3 the cut made before the replacement.

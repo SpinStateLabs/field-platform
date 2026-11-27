@@ -93,7 +93,7 @@ def test_no_tier2_or_tier3_route_is_a_tool_whatever_the_catalog_says():
 
 
 def test_the_token_reads_are_not_tools():
-    """A token id is a credential: neither delegation token read reaches a model as a tool."""
+    """Neither delegation token read is a tool."""
     reads = {("delegation-authority", "GET", "/tokens"), ("delegation-authority", "GET", "/tokens/{token_id}")}
     assert reads <= set(catalog.EXCLUDED)
     assert not {("delegation-authority", "/tokens"), ("delegation-authority", "/tokens/{token_id}")} & tool_keys_get()

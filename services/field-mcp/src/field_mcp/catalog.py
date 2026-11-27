@@ -92,8 +92,7 @@ FORM_BODIES = {("delegation-authority", "/oauth/introspect"): {"token_id": "toke
 _CONSOLE = "ops-console fronts the services; the owning service's tool is the one path (Don, 2026-10-30)"
 _T2 = "Tier 2 (state-changing); lands in the Tier 2 PR, off by default (Don's build order)"
 _T3 = "Tier 3 (destructive or irreversible); never in this server, CLI and console only (Don, 2026-10-30)"
-_TOKEN_READ = ("the answer carries token ids, which are credentials: not a tool until the platform stops showing them "
-               "to a plain reader")
+_TOKEN_READ = "no token read is a tool in this server"
 _OPERATOR = ("key-rotation internals (hash oracle and key fingerprints): not an operator API, loopback-only by design "
              "(field_core/operator_health.py), found by the coverage test, not in Don's route list")
 
