@@ -36,22 +36,27 @@ MUTANTS = [
      "            value = token_ref(value)\n", "            pass\n"),
     ("T3", "the id is replaced before the length cut", PKG + "client.py",
      '        value = UUID_SHAPED.sub(lambda m: token_ref(m.group(0)), value)     # before the cut: never half an id\n'
-     '        value = CUT_ID.sub(lambda m: token_ref(m.group(0)), value)          # an id something already shortened\n'
+     '        value = cut.sub(lambda m: token_ref(m.group(0)), value)             # an id a service already shortened\n'
+     '        value = CUT_ID.sub(lambda m: token_ref(m.group(0)), value)          # and one that stands anywhere\n'
      '        return value if len(value) <= MAX_STRING else value[:MAX_STRING] + "...[truncated]"',
      '        value = value if len(value) <= MAX_STRING else value[:MAX_STRING] + "...[truncated]"\n'
      '        value = UUID_SHAPED.sub(lambda m: token_ref(m.group(0)), value)\n'
+     '        value = cut.sub(lambda m: token_ref(m.group(0)), value)\n'
      '        return CUT_ID.sub(lambda m: token_ref(m.group(0)), value)'),
     ("T4", "the start of a shortened id is replaced", PKG + "client.py",
-     "        value = CUT_ID.sub(lambda m: token_ref(m.group(0)), value)          # an id something already shortened\n",
+     "        value = cut.sub(lambda m: token_ref(m.group(0)), value)             # an id a service already shortened\n",
      ""),
-    ("T5", "two groups and two dashes are needed", PKG + "client.py",
-     'CUT_ID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-"', 'CUT_ID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-?"'),
-    ("T6", "fourteen characters are enough", PKG + "client.py",
-     'CUT_ID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-"',
-     'CUT_ID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-(?=[0-9a-fA-F])"'),
-    ("T7", "what follows a shortened id does not matter", PKG + "client.py",
-     "        value = CUT_ID.sub(lambda m: token_ref(m.group(0)), value)",
-     '        value = re.sub(CUT_ID.pattern + r"(?=\\u2026|\\Z)", lambda m: token_ref(m.group(0)), value)'),
+    ("T5", "a short text counts as cut only at an ellipsis", PKG + "client.py",
+     "cut = CUT_ENDING if len(value) >= SHORTEST_CUT else CUT_MARKED", "cut = CUT_ENDING"),
+    ("T6", "three groups count at any length", PKG + "client.py",
+     'CUT_MARKED = re.compile(f"{_ID_START}{_MARK}|{_ID_DEEP}{_END}")',
+     'CUT_MARKED = re.compile(f"{_ID_START}{_MARK}")'),
+    ("T7", "the version-4 start is replaced wherever it stands", PKG + "client.py",
+     "        value = CUT_ID.sub(lambda m: token_ref(m.group(0)), value)          # and one that stands anywhere\n",
+     ""),
+    ("T8", "the rule without conditions needs the version digit", PKG + "client.py",
+     'CUT_ID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4"',
+     'CUT_ID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]"'),
     ("K7", "path segment check", PKG + "client.py", "if not isinstance(v, str) or not SEGMENT.fullmatch(v):",
      "if not isinstance(v, str):"),
     ("K7c", "fullmatch, not match: a trailing newline is refused (C-790 F-1)", PKG + "client.py",

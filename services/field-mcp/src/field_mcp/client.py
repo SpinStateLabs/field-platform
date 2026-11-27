@@ -31,11 +31,28 @@ SEGMENT = re.compile(r"^(?!\.{1,2}$)[A-Za-z0-9._:@+~-]{1,200}$")
 #: names and inside text (report lines, finding ids, notes), so EVERY UUID-shaped run in a result is replaced, not only
 #: the values of the known keys. Other UUIDs (event ids) are shortened the same way: equal ids stay equal.
 UUID_SHAPED = re.compile(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}")
-#: The start of one that something shortened: eight hex characters, a dash, four hex characters, a dash, then the id's
-#: own groups as far as the text goes. It is replaced wherever it stands, whatever follows. A complete id is replaced
-#: first (above). Thirteen characters or fewer are not matched; the platform prints an eight-character prefix.
-CUT_ID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-"
-                    r"(?:[0-9a-fA-F]{4}-(?:[0-9a-fA-F]{4}-[0-9a-fA-F]{0,11}|[0-9a-fA-F]{0,4})|[0-9a-fA-F]{0,4})")
+#: The start of one: eight hex characters, a dash, then the id's own groups (4-4-4-12) as far as the text goes. A
+#: complete id never matches (the last group stops one character short). Eight characters alone are not matched: the
+#: platform prints that prefix on purpose.
+_ID_START = (r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-(?:[0-9a-fA-F]{4}-(?:[0-9a-fA-F]{4}-[0-9a-fA-F]{0,11}"
+             r"|[0-9a-fA-F]{0,4})|[0-9a-fA-F]{0,4})|[0-9a-fA-F]{0,4})")
+#: the same start once its first three groups and their dashes are there (19 characters or more): no date, range or
+#: short word has that shape
+_ID_DEEP = r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){2}(?:[0-9a-fA-F]{4}-[0-9a-fA-F]{0,11}|[0-9a-fA-F]{0,4})"
+_MARK = r"(?=\u2026|\.\.\.)"
+#: where a cut text ends: an ellipsis, the end of the text or of a line, a quote, ";", ")" or a table cell edge
+_END = r"(?=\u2026|\.\.\.|\Z|[\r\n\"';)]| ?\|)"
+#: It is replaced only where a text was cut. In a text at least SHORTEST_CUT characters long (CUT_ENDING): at any such
+#: end. In a shorter one (CUT_MARKED): before an ellipsis, and at any such end once the first three groups are there.
+CUT_MARKED = re.compile(f"{_ID_START}{_MARK}|{_ID_DEEP}{_END}")
+CUT_ENDING = re.compile(_ID_START + _END)
+#: no service's cut limit for text that can carry an id is lower than this
+SHORTEST_CUT = 120
+#: In ADDITION to those, with no condition on where it stands or what follows: eight hex characters, a dash, four hex
+#: characters, a dash and a "4" (the version digit of the ids the platform mints: ``field_core.delegation``, uuid4),
+#: then the following groups as far as they go. A date-stamped name such as ``20261127-0249-final`` has no "4" there.
+CUT_ID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4"
+                    r"(?:[0-9a-fA-F]{3}-(?:[0-9a-fA-F]{4}-[0-9a-fA-F]{0,11}|[0-9a-fA-F]{0,4})|[0-9a-fA-F]{0,3})")
 #: Keys whose string values are token ids (compared lower-cased, ``-`` read as ``_``). Counts such as ``tokens`` or
 #: ``input_tokens`` are not here.
 TOKEN_KEYS = frozenset({"token_id", "token_ids", "token", "x_field_token", "delegation_token", "tokens_revoked", "jti"})
@@ -112,12 +129,14 @@ def _is_token_key(key: str) -> bool:
 def _bound(value: Any, secrets: tuple[str, ...], credential: bool = False) -> Any:
     """``credential``: the value sits under a token key, so the whole string is replaced, whatever its shape."""
     if isinstance(value, str):
+        cut = CUT_ENDING if len(value) >= SHORTEST_CUT else CUT_MARKED     # judged on the text as it arrived
         for s in secrets:
             value = value.replace(s, "[redacted]")
         if credential and value and value != "[redacted]" and not ID_REF.fullmatch(value):
             value = token_ref(value)
         value = UUID_SHAPED.sub(lambda m: token_ref(m.group(0)), value)     # before the cut: never half an id
-        value = CUT_ID.sub(lambda m: token_ref(m.group(0)), value)          # an id something already shortened
+        value = cut.sub(lambda m: token_ref(m.group(0)), value)             # an id a service already shortened
+        value = CUT_ID.sub(lambda m: token_ref(m.group(0)), value)          # and one that stands anywhere
         return value if len(value) <= MAX_STRING else value[:MAX_STRING] + "...[truncated]"
     if isinstance(value, list):
         return [_bound(v, secrets, credential) for v in value]

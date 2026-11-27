@@ -1,10 +1,12 @@
-"""Services shorten free text before it reaches this server. The start of an id left by that shortening is replaced
-once it holds eight hex characters, a dash, four hex characters and a dash. The cuts are made here by the services' own
-functions, so each case ends exactly as that service ends it.
+"""Services shorten free text before it reaches this server. An id cut by that shortening is still replaced. The cuts
+are made here by the services' own functions, so each case ends exactly as that service ends it.
 
-Mutants: T4 the rule removed; T5 the second dash optional; T6 something required after the second dash; T7 the rule
-applied only before an ellipsis or the end of a text.
+Mutant T4: the rule for a shortened id removed. Mutant T5: every text treated as a cut one. Mutant T6: a start with
+three groups counts only before an ellipsis in a short text. Mutants T7 and T8: the rule without conditions removed,
+or no longer asking for the version digit.
 """
+import re
+
 import pytest
 
 from compliance_crosswalk.engine import ONE_LINE_MAX, evaluate, one_line
@@ -16,8 +18,6 @@ TID = "7d3f9a1c-52be-4c08-9e6a-1b2c3d4e5f60"          # made up, the shape field
 LIFECYCLE_MAX = 500
 #: how many characters of the id are left before the cut: from "eight and a dash" to all but the last
 KEPT = range(9, len(TID))
-#: the shortest start that is replaced: "xxxxxxxx-xxxx-"
-SHORTEST = 14
 
 
 def padded(start: int) -> str:
@@ -65,11 +65,8 @@ def test_the_start_of_an_id_left_by_a_services_cut_is_replaced(cut, kept):
     shown = cl._bound({"detail": text, text: 1}, ())
     shown_key = next(k for k in shown if k != "detail")
     for value in (shown["detail"], shown_key):
-        if kept >= SHORTEST:
-            assert TID[:9] not in value
-            assert cl.token_ref(TID[:kept]) in value
-        else:
-            assert value == text                                  # thirteen characters or fewer: left as it is
+        assert TID[:9] not in value
+        assert cl.token_ref(TID[:kept]) in value
 
 
 def test_a_whole_id_keeps_its_own_reference():
@@ -97,36 +94,126 @@ def test_dates_ranges_and_short_hex_in_a_short_text_are_left_alone(text):
 
 @pytest.mark.parametrize("text", LOOK_ALIKE)
 def test_dates_ranges_and_short_hex_inside_a_long_text_are_left_alone(text):
-    for long in ("z" * 300 + " " + text + " z", "z" * 300 + " " + text, text + "\u2026"):
-        assert cl._bound(long, ()) == long
+    long = "z" * cl.SHORTEST_CUT + " " + text + " z"
+    assert cl._bound(long, ()) == long
 
 
-#: what may stand after a shortened id: nothing, a mark, punctuation, white space, a letter
-AFTER = ["", "\u2026", "...", " next", "\n next", "' }", '"', "; next", ")", " |", ",", "]", "}", "<", "&", "`", ".", ":",
-         "\\", "zz", "-agent"]
+@pytest.mark.parametrize("text", ["10000000-20000000", "events-20261127-000001.jsonl", "deadbeef-0000-agent"])
+def test_a_longer_run_at_the_end_of_a_long_text_is_not_an_id(text):
+    long = "z" * cl.SHORTEST_CUT + " " + text
+    assert cl._bound(long, ()) == long
+
+
+#: what may follow the start of an id where a service embeds a text it has cut
+AFTER = ["", "\n next", "\r\nnext", "' }", '"', "; next", ") next", "|", " | next"]
 
 
 @pytest.mark.parametrize("after", AFTER)
-@pytest.mark.parametrize("kept", [14, 18, 19, 23, 24, 35])
-@pytest.mark.parametrize("before", ["", "id ", "z" * 300], ids=["start", "short", "long"])
-def test_the_start_is_replaced_wherever_it_stands(before, kept, after):
+def test_each_ending_counts_in_a_long_text_and_not_in_a_short_one(after):
+    fragment = TID[:13]
+    long = "z" * cl.SHORTEST_CUT + " " + fragment + after
+    assert cl._bound(long, ()) == long.replace(fragment, cl.token_ref(fragment))
+    short = "z " + fragment + after
+    assert cl._bound(short, ()) == short
+
+
+@pytest.mark.parametrize("kept", [19, 23, 24, 35])
+@pytest.mark.parametrize("after", AFTER)
+def test_three_groups_count_at_an_ending_in_a_text_of_any_length(after, kept):
     fragment = TID[:kept]
-    shown = cl._bound(before + fragment + after, ())
-    # after a start that ends in a full group, a dash and a hex letter continue the id's grouping and go with it
-    taken = fragment + "-a" if after == "-agent" and kept in (18, 23) else fragment
-    assert shown == (before + fragment + after).replace(taken, cl.token_ref(taken))
+    text = "z " + fragment + after
+    assert len(text) < cl.SHORTEST_CUT
+    assert cl._bound(text, ()) == text.replace(fragment, cl.token_ref(fragment))
 
 
-@pytest.mark.parametrize("kept", range(9, SHORTEST))
-def test_thirteen_characters_or_fewer_are_left_alone(kept):
-    for text in ("z " + TID[:kept], "z " + TID[:kept] + "\u2026", "z" * 300 + " " + TID[:kept]):
+@pytest.mark.parametrize("kept", [9, 13, 14])
+def test_fewer_groups_in_a_short_text_need_an_ellipsis(kept):
+    text = "z " + TID[:kept]
+    assert cl._bound(text, ()) == text
+
+
+@pytest.mark.parametrize("mark", ["\u2026", "..."])
+def test_an_ellipsis_marks_a_cut_in_a_text_of_any_length(mark):
+    fragment = TID[:11]
+    assert cl._bound(f"id {fragment}{mark} more", ()) == f"id {cl.token_ref(fragment)}{mark} more"
+
+
+def test_a_whole_id_earlier_in_the_text_does_not_hide_a_cut_one():
+    # replacing the whole id makes the text shorter than SHORTEST_CUT; it is judged as it arrived
+    fragment = TID[:13]
+    text = f"{TID} " + "z" * (cl.SHORTEST_CUT - len(TID) - len(fragment) - 2) + " " + fragment
+    assert len(text) == cl.SHORTEST_CUT
+    shown = cl._bound(text, ())
+    assert TID[:9] not in shown and shown.endswith(cl.token_ref(fragment))
+
+
+#: the same id with another version digit: only the conditional rules know its starts
+OTHER = TID[:14] + "1" + TID[15:]
+
+
+@pytest.mark.parametrize("kept", [19, 23, 24, 35])
+@pytest.mark.parametrize("after", AFTER)
+def test_three_groups_without_the_version_digit_still_count_at_an_ending(after, kept):
+    fragment = OTHER[:kept]
+    text = "z " + fragment + after
+    assert cl._bound(text, ()) == text.replace(fragment, cl.token_ref(fragment))
+
+
+#: what may stand after a start that a condition-free rule finds: nothing, punctuation, white space, a letter
+ANY_AFTER = ["", " next", ",", "]", "}", "<", "&", "`", ".", ":", "\\", "zz", " UTC"]
+
+
+@pytest.mark.parametrize("after", ANY_AFTER)
+@pytest.mark.parametrize("kept", [15, 18, 19, 23, 24, 35])
+@pytest.mark.parametrize("before", ["", "id ", "z" * 300], ids=["start", "short", "long"])
+def test_a_version_4_start_is_replaced_wherever_it_stands(before, kept, after):
+    fragment = TID[:kept]
+    assert cl._bound(before + fragment + after, ()) == before + cl.token_ref(fragment) + after
+
+
+@pytest.mark.parametrize("kept", range(9, 15))
+def test_a_shorter_start_with_nothing_to_show_a_cut_is_left_alone(kept):
+    text = "z " + TID[:kept] + " next"
+    assert cl._bound(text, ()) == text
+
+
+DATE_STAMPED = ["20261127-0249-final", "20261127-0249-controller-note.md",
+                "20261127-1706-teammate-don-PR1411-ac75a1e5-PWC.md", "run 20261127-0249-final done"]
+
+
+@pytest.mark.parametrize("name", DATE_STAMPED)
+def test_date_stamped_names_are_left_alone(name):
+    for text in (name, name + " next", "z" * 300 + " " + name, "z" * 300 + " " + name + " z"):
         assert cl._bound(text, ()) == text
 
 
-def test_other_text_of_the_shape_is_replaced_too():
-    assert cl._bound("agent deadbeef-0000-agent", ()) == f"agent {cl.token_ref('deadbeef-0000-')}agent"
+def test_other_text_with_the_version_digit_in_that_place_is_replaced():
+    # deliberate: this is the shape of an id's start, whatever it was meant to be
+    assert cl._bound("run 20261127-0249-4th", ()) == f"run {cl.token_ref('20261127-0249-4')}th"
 
 
-def test_a_whole_id_followed_by_a_shortened_one():
-    shown = cl._bound(f"{TID} {TID[:20]}", ())
-    assert shown == f"{cl.token_ref(TID)} {cl.token_ref(TID[:20])}"
+#: the two patterns as they were before the rule without conditions was added, written out so that removing or
+#: narrowing one of them in the module is seen here
+_BEFORE_START = (r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-(?:[0-9a-fA-F]{4}-(?:[0-9a-fA-F]{4}-[0-9a-fA-F]{0,11}"
+                 r"|[0-9a-fA-F]{0,4})|[0-9a-fA-F]{0,4})|[0-9a-fA-F]{0,4})")
+_BEFORE_DEEP = r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){2}(?:[0-9a-fA-F]{4}-[0-9a-fA-F]{0,11}|[0-9a-fA-F]{0,4})"
+_BEFORE_END = r"(?=\u2026|\.\.\.|\Z|[\r\n\"';)]| ?\|)"
+BEFORE_SHORT = re.compile(_BEFORE_START + r"(?=\u2026|\.\.\.)|" + _BEFORE_DEEP + _BEFORE_END)
+BEFORE_LONG = re.compile(_BEFORE_START + _BEFORE_END)
+
+
+@pytest.mark.parametrize("uid", [TID, OTHER], ids=["version-4", "other"])
+def test_nothing_that_was_replaced_before_shows_now(uid):
+    seen = 0
+    for before in ("", "id ", "z" * 300 + " "):
+        for kept in range(9, len(uid)):
+            for after in AFTER + ["\u2026", "...", "\u2026 more", " next", ",", "-agent"]:
+                text = before + uid[:kept] + after
+                rule = BEFORE_LONG if len(text) >= 120 else BEFORE_SHORT
+                found = rule.search(text)
+                if found is None:
+                    continue
+                seen += 1
+                shown = cl._bound(text, ())
+                assert found.group(0) not in shown and uid[:9] not in shown, (before[:3], kept, after)
+    assert seen > 500
