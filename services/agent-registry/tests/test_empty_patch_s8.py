@@ -117,3 +117,14 @@ def test_the_condition_with_one_field_still_applies_and_a_stale_one_is_412(regis
     r = client.patch("/agents/invoicing-agent", json={"domain": "legal", "if_updated_at": seen})
     assert r.status_code == 412
     assert client.get("/agents/invoicing-agent").json()["domain"] == "ops"
+
+
+@pytest.mark.parametrize("stale", [False, True], ids=["current", "stale"])
+def test_an_explicit_null_with_a_condition_is_a_patch_200_when_it_matches_412_when_stale(registry, stale):
+    client, ledger = registry
+    before = client.get("/agents/invoicing-agent").json()
+    seen = "2000-01-01T00:00:00+00:00" if stale else before["updated_at"]
+    r = client.patch("/agents/invoicing-agent", json={"manifest_ref": None, "if_updated_at": seen})
+    assert r.status_code == (412 if stale else 200)
+    assert client.get("/agents/invoicing-agent").json() == before   # a null changes no column, updated_at included
+    assert ledger.events == ([] if stale else [("registry.updated", {"fields": []}, "invoicing-agent")])
