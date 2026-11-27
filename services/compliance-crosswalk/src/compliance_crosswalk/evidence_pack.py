@@ -244,6 +244,10 @@ def generate_pack(
             # B1: the outage is a fact of the LIVE collection alone; whatever the caller's body holds (even {})
             # cannot turn "the ledger was asked and nothing answered" into a clean-looking pack
             evidence_status = "unknown"
+        elif coverage.not_answered:
+            # a live source did not answer: the pack is partial whatever the body holds; the rows the caller filled
+            # keep their own caller-asserted marking and gaps
+            evidence_status = "partial"
     else:
         coverage = evaluate(manifest, agent_id=agent_id, sources=sources)
         if _any_source(sources):
