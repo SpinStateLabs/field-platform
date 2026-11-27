@@ -556,7 +556,7 @@ apart from one the observer wrote. Read these events from an armed ledger.
 and it is removed only when a send is confirmed. There is one waiting alert per event type and service (a newer reading
 replaces the waiting one). Waiting alerts are kept in `ledger-observer/pending-alerts.json` under `FIELD_DATA_DIR`
 across a restart; without `FIELD_DATA_DIR` they are held in memory only. `/health` shows `alerts_pending`; failed
-attempts are counted in `alerts_failed`. Delivery is at least once: a send whose confirmation is lost is repeated.
+attempts are counted in `alerts_failed`, and a failed save of the waiting alerts in `alerts_pending_save_failures`. Delivery is at least once: a send whose confirmation is lost is repeated.
 
 ## Enforced vs. Declared
 

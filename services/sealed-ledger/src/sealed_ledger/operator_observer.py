@@ -401,6 +401,7 @@ class OperatorObserver:
         self._pending_alerts: dict[tuple[str, Any], dict] = {}
         self._alert_lock = threading.Lock()
         self.pending_file = Path(pending_file) if pending_file is not None else None
+        self._save_failures = 0              # saves of the waiting alerts that failed, in this process
         self._load_pending_alerts()
         self._mode: dict[str, str] = {}
         self._registry: dict[str, tuple[Any, Any]] = {}
@@ -426,7 +427,7 @@ class OperatorObserver:
         keeps its retry state, so a changing reading does not shorten the wait after a failed send."""
         if self.alert is None:
             return
-        key = (event_type, payload.get("service"))
+        key = self._alert_key(event_type, payload)
         with self._alert_lock:
             entry = self._pending_alerts.get(key)
             if entry is None:
@@ -434,6 +435,16 @@ class OperatorObserver:
             else:
                 entry["payload"] = payload
             self._save_pending_alerts()
+
+    @staticmethod
+    def _alert_key(event_type: str, payload: dict) -> tuple[str, Any]:
+        """What one waiting alert stands for. The queue and the file read back use the same rule."""
+        return (event_type, payload.get("service"))
+
+    def pending_save_failures(self) -> int:
+        """Saves of the waiting alerts that failed: while this grows, a restart may lose alerts that are waiting."""
+        with self._alert_lock:
+            return self._save_failures
 
     def pending_alerts(self) -> int:
         """How many alerts are waiting: not yet sent, or not confirmed sent."""
@@ -484,7 +495,8 @@ class OperatorObserver:
 
     def _save_pending_alerts(self) -> None:
         """Write the waiting alerts (event type and payload: ids, counts and fixed words) under self._alert_lock. A
-        failure is logged by class name and changes nothing else: the queue in memory stays."""
+        failure is counted (``pending_save_failures``, in /health) and logged by class name; the queue in memory
+        stays."""
         if self.pending_file is None:
             return
         rows = [{"event_type": key[0], "payload": entry["payload"]} for key, entry in self._pending_alerts.items()]
@@ -494,6 +506,7 @@ class OperatorObserver:
             temp.write_text(json.dumps(rows), encoding="utf-8")
             os.replace(temp, self.pending_file)
         except (OSError, TypeError, ValueError) as exc:
+            self._save_failures += 1
             log.warning("operator observer: waiting alerts not saved (%s)", type(exc).__name__)
 
     def _load_pending_alerts(self) -> None:
@@ -523,8 +536,8 @@ class OperatorObserver:
             service = payload.get("service")
             if service is not None and not isinstance(service, str):
                 continue
-            self._pending_alerts[(event_type, service)] = {"payload": payload, "tries": 0, "not_before": 0.0,
-                                                           "sending": False}
+            self._pending_alerts[self._alert_key(event_type, payload)] = {
+                "payload": payload, "tries": 0, "not_before": 0.0, "sending": False}
 
     def _observe_rotation(self, name: str, health: Any) -> int:
         """Slice R2: generation decreases and break-glass counter changes seen

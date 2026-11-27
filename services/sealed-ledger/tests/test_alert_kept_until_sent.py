@@ -201,6 +201,25 @@ def test_a_file_that_cannot_be_written_does_not_stop_the_observer(tmp_path):
     o = _observer({"a": _health(0, 1)}, sender, Clock(), pending_file=blocker / "pending-alerts.json")
     o.observe_once()
     assert sender.sent == [("a", 1)] and o.pending_alerts() == 1
+    assert o.pending_save_failures() == 2                     # once when queued, once after the failed send
+
+
+def test_saves_that_work_count_no_failure(tmp_path):
+    o = _observer({"a": _health(0, 1)}, Sender(FAILED), Clock(), pending_file=tmp_path / "pending-alerts.json")
+    o.observe_once()
+    assert o.pending_alerts() == 1 and o.pending_save_failures() == 0
+
+
+def test_ledger_health_shows_failed_saves(tmp_path):
+    app = create_app(store=LedgerStore(tmp_path / "events.jsonl"))
+    client = TestClient(app)
+    assert client.get("/health").json()["alerts_pending_save_failures"] == 0
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("x", encoding="utf-8")
+    o = _observer({"a": _health(0, 1)}, Sender(FAILED), Clock(), pending_file=blocker / "pending-alerts.json")
+    o.observe_once()
+    app.state.operator_observer = o
+    assert client.get("/health").json()["alerts_pending_save_failures"] == 2
 
 
 def test_from_env_keeps_the_file_under_the_data_directory(tmp_path):

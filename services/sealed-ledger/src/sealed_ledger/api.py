@@ -232,6 +232,8 @@ class HealthResponse(operator_health.OperatorHealthFields):
     alerts_last_success_at: str | None = None
     # alerts the operator observer holds because no send has been confirmed (0 when the observer is not armed)
     alerts_pending: int = 0
+    # saves of those waiting alerts to disk that failed since start (a restart may then lose some)
+    alerts_pending_save_failures: int = 0
     # S11-20: the served read-lane width and whether FIELD_LEDGER_READ_CONCURRENCY was refused (never the value):
     read_concurrency: int = 1
     read_concurrency_invalid: bool = False
@@ -517,6 +519,8 @@ def create_app(store: LedgerStore | None = None, registry: Any = _UNSET,
                               **_store().caller_policy.health_fields(), **alerts.health_fields(),
                               alerts_pending=(app.state.operator_observer.pending_alerts()
                                               if app.state.operator_observer is not None else 0),
+                              alerts_pending_save_failures=(app.state.operator_observer.pending_save_failures()
+                                                            if app.state.operator_observer is not None else 0),
                               **operator)
 
     @app.post("/events", response_model=LedgerEvent, status_code=201)
