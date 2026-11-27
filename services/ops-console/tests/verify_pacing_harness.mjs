@@ -15,6 +15,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const none = () => ({ available: false, source: "s", error: "x", data: null });
 const overview = { generated_at: "2026-01-01T10:11:12+00:00", agents: none(), tokens: none(), escalations: none(),
                    ledger_verify: none(), recent_events: none(), token_usage: none() };
+// the page reads /api/platform as it loads and takes its shape for granted
+const platform = { health: {}, lifecycle: none(), attest: none(), crosswalk: none(), federation: none() };
 
 async function page(initial) {
   const state = { visibility: initial, overview: 0, streams: [], intervals: [] };
@@ -36,7 +38,7 @@ async function page(initial) {
           return { status: 200, ok: true, body: { getReader: () => ({ read }) }, headers: { get: () => null } };
         }
         if (p === "/api/overview") state.overview += 1;
-        const j = p === "/api/overview" ? overview : {};
+        const j = p === "/api/overview" ? overview : p === "/api/platform" ? platform : {};
         return { status: 200, ok: true, headers: { get: () => null }, json: async () => j,
                  text: async () => JSON.stringify(j) };
       };
