@@ -74,12 +74,6 @@ KEY = "VT_FIELD_TOKEN_ID"
 # --- plumbing ---------------------------------------------------------------------------
 
 
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
 def _http(method: str, url: str, body: object | None = None, secret: str | None = SECRET) -> tuple[int, object]:
     headers = {"Content-Type": "application/json"}
     if secret:
@@ -350,8 +344,6 @@ class Estate:
         self.manifest.write_bytes(CANARY_MANIFEST.read_bytes())
         self.roster = tmp / "doa-roster.yaml"
         self.arm_roster()
-        self.port = _free_port()
-        self.base = f"http://127.0.0.1:{self.port}"
         env = {k: v for k, v in os.environ.items() if not k.startswith("FIELD_")}
         env.update(FIELD_SHARED_SECRET=SECRET, FIELD_DOA_ROSTER=str(self.roster))
         #: the GB10 ledger configuration (caller keyring, REQUIRE_CALLER_SIGNATURE=1) with FAKE keys; the
@@ -361,9 +353,12 @@ class Estate:
         if caller_signed:
             self.caller_pub, self.caller_env = _require_caller_signatures(tmp / "caller-keys", env)
         wait = harness_wait.harness_wait(90)
-        self.proc = subprocess.Popen([sys.executable, str(HARNESS), str(self.port), str(data), "--secret"],
-                                     env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        port_file = harness_wait.new_port_file(tmp)
+        self.proc = subprocess.Popen([sys.executable, str(HARNESS), "0", str(data), "--secret", "--port-file",
+                                      str(port_file)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         deadline = time.time() + wait
+        self.port = harness_wait.port_the_process_took(port_file, self.proc, deadline)
+        self.base = f"http://127.0.0.1:{self.port}"
         while time.time() < deadline:
             if self.proc.poll() is not None:
                 raise RuntimeError(f"harness exited early: {self.proc.returncode}")

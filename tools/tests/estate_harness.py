@@ -6,7 +6,10 @@ the path without its prefix). Faults can be switched on at runtime with
 POST /__fault {"on": [...]}, so each estate_probe check is run against the
 exact broken estate it exists to catch. Faults are off by default.
 
-    python estate_harness.py PORT DATA_DIR [--secret]
+    python estate_harness.py PORT DATA_DIR [--secret] [--port-file PATH]
+
+PORT 0: the harness binds a port itself, keeps that socket for its server and writes the number to PATH (required
+then), so nothing else can take the port between the choice and the listen.
 
 With --secret, FIELD_SHARED_SECRET must be set in the environment. Test-only:
 never point it at, or run it on, a real estate.
@@ -17,10 +20,22 @@ import asyncio
 import contextlib
 import json
 import os
+import socket
 import sys
 
 port = int(sys.argv[1])
 data_dir = sys.argv[2]
+_listener = None
+if port == 0:
+    if "--port-file" not in sys.argv[3:]:
+        raise SystemExit("PORT 0 needs --port-file PATH")
+    _port_file = sys.argv[sys.argv.index("--port-file") + 1]
+    _listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    _listener.bind(("127.0.0.1", 0))        # held until the server takes it over
+    port = _listener.getsockname()[1]
+    with open(_port_file + ".tmp", "w", encoding="ascii") as _f:
+        _f.write(str(port))
+    os.replace(_port_file + ".tmp", _port_file)     # a reader sees the whole number or no file
 secret = "--secret" in sys.argv
 SECRET = os.environ.get("FIELD_SHARED_SECRET", "") if secret else ""
 if secret and not SECRET:
@@ -716,5 +731,9 @@ routes = [
 #: registered and active (main 7e14f136, test_renew_token, CI "tests (3.13)"). A test module's idle gaps are
 #: seconds, so the server never closes an idle connection while the harness lives.
 KEEP_ALIVE_S = 3600
-uvicorn.run(Starlette(routes=routes), host="127.0.0.1", port=port, log_level="warning",
-            timeout_keep_alive=KEEP_ALIVE_S)
+if _listener is None:
+    uvicorn.run(Starlette(routes=routes), host="127.0.0.1", port=port, log_level="warning",
+                timeout_keep_alive=KEEP_ALIVE_S)
+else:
+    uvicorn.Server(uvicorn.Config(Starlette(routes=routes), host="127.0.0.1", port=port, log_level="warning",
+                                  timeout_keep_alive=KEEP_ALIVE_S)).run(sockets=[_listener])

@@ -175,19 +175,19 @@ def test_service_client_returns_status_0_and_the_exception_class_name_never_none
         assert st == 0 and data == "RuntimeError"
 
 
-def _closed_port() -> int:
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
+@pytest.fixture
+def closed_port():
+    """A port with no server: bound, without listen(), until the test ends, so no other server can take it."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        yield s.getsockname()[1]
 
 
-def test_an_unreachable_upstream_shows_the_browser_a_502_with_no_header_secret_or_key(monkeypatch):
+def test_an_unreachable_upstream_shows_the_browser_a_502_with_no_header_secret_or_key(monkeypatch, closed_port):
     """A real httpx client (so the perimeter secret really is in its headers) against a closed port; the
     operator pair rides on the request. Neither value, nor a header name, may be in what the page gets."""
     monkeypatch.setenv("FIELD_SHARED_SECRET", PERIMETER)
-    dead = ServiceClient(base_url=f"http://127.0.0.1:{_closed_port()}")
+    dead = ServiceClient(base_url=f"http://127.0.0.1:{closed_port}")
     assert PERIMETER in dead._client.headers.get("x-field-auth", ""), "the test must hold the secret in headers"
     c = console(killswitch=dead)
     r = c.post("/api/agents/a1/kill", json={"operator": "Don", "reason": "r"},

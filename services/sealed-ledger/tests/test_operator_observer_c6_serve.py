@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import json
 import os
-import socket
+import re
 import subprocess
 import sys
 import threading
@@ -82,12 +82,16 @@ class Stub:
             self.health[name] = {**self.health[name], **fields}
 
 
-def _free_port() -> int:
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
+def _port_the_server_took(log_path, proc, deadline: float) -> int:
+    """The port ``ledger serve --port 0`` bound, read from the line uvicorn logs once it listens."""
+    while time.monotonic() < deadline:
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+        found = re.search(r"Uvicorn running on http://127\.0\.0\.1:(\d+) ", text)
+        if found and int(found.group(1)):
+            return int(found.group(1))
+        assert proc.poll() is None, text[-2000:]
+        time.sleep(0.2)
+    raise AssertionError("the server did not say which port it took: " + text[-2000:])
 
 
 def _get(url: str):
@@ -99,16 +103,16 @@ def _get(url: str):
 def estate(tmp_path):
     names = _compose_targets()
     stub = Stub(names)
-    port = _free_port()
     env = {k: v for k, v in os.environ.items() if not k.startswith("FIELD_")}
     env.update(FIELD_DATA_DIR=str(tmp_path / "data"), FIELD_LEDGER_OBSERVE_EVERY="5",
                FIELD_LEDGER_OBSERVE_HEALTH=",".join(f"{n}={stub.base}/{n}" for n in names))
-    proc = subprocess.Popen([sys.executable, "-m", "sealed_ledger.cli", "serve", "--host", "127.0.0.1",
-                             "--port", str(port)], env=env, cwd=str(tmp_path),
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    base = f"http://127.0.0.1:{port}"
+    log_path = tmp_path / "serve.log"
+    with open(log_path, "w", encoding="utf-8") as log:
+        proc = subprocess.Popen([sys.executable, "-m", "sealed_ledger.cli", "serve", "--host", "127.0.0.1",
+                                 "--port", "0"], env=env, cwd=str(tmp_path), stdout=log, stderr=subprocess.STDOUT)
     try:
         deadline = time.monotonic() + WAIT_S
+        base = f"http://127.0.0.1:{_port_the_server_took(log_path, proc, deadline)}"
         while True:
             if proc.poll() is not None:
                 raise RuntimeError(f"ledger serve exited early: {proc.returncode}")

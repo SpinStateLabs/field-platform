@@ -37,12 +37,6 @@ MARKER = "field-estate-kill-watcher v1"
 _N = [0]
 
 
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
 def _http(method, url, body=None, secret=None):
     headers = {"Content-Type": "application/json"}
     if secret:
@@ -62,18 +56,19 @@ class Estate:
     def __init__(self, tmp_path: Path, secret: bool):
         data = tmp_path / "data"
         (data / "manifests").mkdir(parents=True)
-        self.port = _free_port()
-        self.base = f"http://127.0.0.1:{self.port}"
         self.secret = SECRET if secret else None
         env = dict(os.environ)
         env.pop("FIELD_SHARED_SECRET", None)
-        argv = [sys.executable, str(HARNESS), str(self.port), str(data)]
+        port_file = harness_wait.new_port_file(tmp_path)
+        argv = [sys.executable, str(HARNESS), "0", str(data), "--port-file", str(port_file)]
         if secret:
             argv.append("--secret")
             env["FIELD_SHARED_SECRET"] = SECRET
         wait = harness_wait.harness_wait(60)
         self.proc = subprocess.Popen(argv, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         deadline = time.time() + wait
+        self.port = harness_wait.port_the_process_took(port_file, self.proc, deadline)
+        self.base = f"http://127.0.0.1:{self.port}"
         while time.time() < deadline:
             if self.proc.poll() is not None:
                 raise RuntimeError(f"harness exited early: {self.proc.returncode}")
@@ -188,7 +183,13 @@ def test_a_killed_agent_with_an_existing_sentinel_is_left_as_is(estate, tmp_path
     assert s.read_text() == "halted by hand\n"
 
 
-def test_no_answer_keeps_the_kill_and_does_not_refresh_the_stamp(estate, tmp_path):
+@pytest.fixture
+def dead_url():
+    with harness_wait.nothing_listens() as url:
+        yield url
+
+
+def test_no_answer_keeps_the_kill_and_does_not_refresh_the_stamp(estate, tmp_path, dead_url):
     """An outage must never drop a kill, and must not make a dead estate look alive."""
     a, s = estate.agent(), tmp_path / "ESTATE_KILL"
     estate.kill(a)
@@ -196,7 +197,7 @@ def test_no_answer_keeps_the_kill_and_does_not_refresh_the_stamp(estate, tmp_pat
     stamp = tmp_path / "ESTATE_KILL.alive"
     old = time.time() - 600
     os.utime(stamp, (old, old))
-    code, out = run(["--agent", a, "--base", f"http://127.0.0.1:{_free_port()}", "--sentinel", str(s), "--once"])
+    code, out = run(["--agent", a, "--base", dead_url, "--sentinel", str(s), "--once"])
     assert code == 3, out
     assert s.exists(), "the sentinel is untouched by an outage"
     assert abs(stamp.stat().st_mtime - old) < 2, "the stamp is not refreshed without an answer"
@@ -496,8 +497,8 @@ def test_the_environment_proxy_is_never_used(tmp_path):
         proxy.close()
 
 
-def test_a_transport_error_does_not_print_the_secret(tmp_path):
-    code, out = run(["--agent", "a1", "--base", f"http://127.0.0.1:{_free_port()}", "--sentinel", str(tmp_path / "K"),
+def test_a_transport_error_does_not_print_the_secret(tmp_path, dead_url):
+    code, out = run(["--agent", "a1", "--base", dead_url, "--sentinel", str(tmp_path / "K"),
                      "--once"], secret=SECRET)
     assert code == 3 and "transport error" in out and SECRET not in out, out
 
