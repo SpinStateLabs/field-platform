@@ -199,6 +199,15 @@ class AgentUpdate(BaseModel):
     def _domain_shape(cls, v: str | None) -> str | None:
         return _new_domain(v)
 
+    @model_validator(mode="after")
+    def _at_least_one_field(self) -> "AgentUpdate":
+        """S8-15: a patch that sends no field wrote no row yet was ledgered as ``registry.updated`` with no fields.
+        ``if_updated_at`` is a condition on the write, not a field, so alone it is empty too. A field sent as an
+        explicit null counts as sent: such a patch is accepted; it changes nothing and the API ledgers nothing."""
+        if not self.model_fields_set - {"if_updated_at"}:
+            raise ValueError("a patch must carry at least one field to change")
+        return self
+
 
 def parse_updated_at(value: str) -> datetime:
     """An ISO 8601 timestamp as an aware UTC datetime (``Z`` accepted, naive taken as UTC); ValueError otherwise."""

@@ -375,11 +375,9 @@ def create_app(store: RegistryStore | None = None, ledger=None) -> FastAPI:
                 agent_id,
             )
         else:
-            _ledger_note(
-                "registry.updated",
-                {"fields": sorted(patch.model_dump(exclude_none=True, exclude={"if_updated_at"}))},
-                agent_id,
-            )
+            changed = sorted(patch.model_dump(exclude_none=True, exclude={"if_updated_at"}))
+            if changed:     # S8-15: a patch of nulls only changes nothing (the row is not written): no ledger row either
+                _ledger_note("registry.updated", {"fields": changed}, agent_id)
         return record
 
     @app.post("/agents/{agent_id}/attest", response_model=AgentRecord)
