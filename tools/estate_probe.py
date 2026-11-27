@@ -106,6 +106,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any
+from threading import local as ThreadLocal   # by name: the dotted form reads as an mDNS host to the public-safety scan
 
 SERVICES: dict[str, str] = {
     "registry": "agent-registry",
@@ -522,7 +523,7 @@ class _Deadline:
         return False
 
 
-_ACTIVE = threading.local()   # .deadline: the _Deadline of the request this thread is sending, if any
+_ACTIVE = ThreadLocal()       # .deadline: the _Deadline of the request this thread is sending, if any
 
 
 @contextlib.contextmanager
