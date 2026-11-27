@@ -1,11 +1,12 @@
 """Services shorten free text before it reaches this server. An id cut by that shortening is still replaced. The cuts
 are made here by the services' own functions, so each case ends exactly as that service ends it.
 
-Mutant T4: the rule for a shortened id removed.
+Mutant T4: the rule for a shortened id removed. Mutant T5: every text treated as a cut one.
 """
 import pytest
 
-from compliance_crosswalk.engine import ONE_LINE_MAX, one_line
+from compliance_crosswalk.engine import ONE_LINE_MAX, _declared, one_line
+from compliance_crosswalk.mapping import Control
 from incident_replay.engine import MD_FIELD_MAX, SUMMARY_MAX, _one_md_line, _summarize
 from lifecycle_manager.engine import _body
 from field_mcp import client as cl
@@ -42,7 +43,14 @@ def crosswalk_line(kept: int) -> str:
     return one_line(padded(ONE_LINE_MAX - 1 - kept))
 
 
-CUTS = [replay_summary, replay_markdown, lifecycle_refusal, crosswalk_line]
+def crosswalk_declared(kept: int) -> str:
+    control = Control(control_id="X-01", letter="F", manifest_path="a.b", statement="s", evidence_kind="none",
+                      citations={})
+    head = len("a.b = '")
+    return _declared(control, {"a": {"b": padded(cl.SHORTEST_CUT - kept - head)}})[1]
+
+
+CUTS = [replay_summary, replay_markdown, lifecycle_refusal, crosswalk_line, crosswalk_declared]
 
 
 @pytest.mark.parametrize("kept", KEPT)
@@ -69,3 +77,52 @@ def test_a_whole_id_keeps_its_own_reference():
 ], ids=["printed-prefix", "words", "time", "reference"])
 def test_text_that_is_not_a_shortened_id_is_left_alone(text):
     assert cl._bound(text, ()) == text
+
+
+LOOK_ALIKE = ["20261127-0249 UTC", "events-20261127-000001.jsonl", "10000000-20000000", "cafebabe-fed",
+              "build 7e04c055-1", "agent cafebabe-fed is active", "from 20261127-0249 to 20261128-0100"]
+
+
+@pytest.mark.parametrize("text", LOOK_ALIKE)
+def test_dates_ranges_and_short_hex_in_a_short_text_are_left_alone(text):
+    assert cl._bound({"detail": text, text: 1}, ()) == {"detail": text, text: 1}
+
+
+@pytest.mark.parametrize("text", LOOK_ALIKE)
+def test_dates_ranges_and_short_hex_inside_a_long_text_are_left_alone(text):
+    long = "z" * cl.SHORTEST_CUT + " " + text + " z"
+    assert cl._bound(long, ()) == long
+
+
+@pytest.mark.parametrize("text", ["10000000-20000000", "events-20261127-000001.jsonl", "deadbeef-0000-agent"])
+def test_a_longer_run_at_the_end_of_a_long_text_is_not_an_id(text):
+    long = "z" * cl.SHORTEST_CUT + " " + text
+    assert cl._bound(long, ()) == long
+
+
+#: what may follow the start of an id where a service embeds a text it has cut
+AFTER = ["", "\n next", "\r\nnext", "' }", '"', "; next", ") next", "|", " | next"]
+
+
+@pytest.mark.parametrize("after", AFTER)
+def test_each_ending_counts_in_a_long_text_and_not_in_a_short_one(after):
+    fragment = TID[:16]
+    long = "z" * cl.SHORTEST_CUT + " " + fragment + after
+    assert cl._bound(long, ()) == long.replace(fragment, cl.token_ref(fragment))
+    short = "z " + fragment + after
+    assert cl._bound(short, ()) == short
+
+
+@pytest.mark.parametrize("mark", ["\u2026", "..."])
+def test_an_ellipsis_marks_a_cut_in_a_text_of_any_length(mark):
+    fragment = TID[:11]
+    assert cl._bound(f"id {fragment}{mark} more", ()) == f"id {cl.token_ref(fragment)}{mark} more"
+
+
+def test_a_whole_id_earlier_in_the_text_does_not_hide_a_cut_one():
+    # replacing the whole id makes the text shorter than SHORTEST_CUT; it is judged as it arrived
+    fragment = TID[:20]
+    text = f"{TID} " + "z" * (cl.SHORTEST_CUT - len(TID) - len(fragment) - 2) + " " + fragment
+    assert len(text) == cl.SHORTEST_CUT
+    shown = cl._bound(text, ())
+    assert TID[:9] not in shown and shown.endswith(cl.token_ref(fragment))

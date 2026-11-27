@@ -31,10 +31,17 @@ SEGMENT = re.compile(r"^(?!\.{1,2}$)[A-Za-z0-9._:@+~-]{1,200}$")
 #: names and inside text (report lines, finding ids, notes), so EVERY UUID-shaped run in a result is replaced, not only
 #: the values of the known keys. Other UUIDs (event ids) are shortened the same way: equal ids stay equal.
 UUID_SHAPED = re.compile(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}")
-#: The start of one, where a service shortened a text through it: eight hex characters and a dash, then what is left,
-#: up to a character that cannot continue an id. A complete id never matches this (it is one character too long).
-#: Eight characters alone are not matched: the platform prints that prefix on purpose.
-CUT_ID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F-]{0,26}(?![0-9A-Za-z-])")
+#: The start of one: eight hex characters, a dash, then the id's own groups (4-4-4-12) as far as the text goes. A
+#: complete id never matches (the last group stops one character short). Eight characters alone are not matched: the
+#: platform prints that prefix on purpose.
+_ID_START = (r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-(?:[0-9a-fA-F]{4}-(?:[0-9a-fA-F]{4}-[0-9a-fA-F]{0,11}"
+             r"|[0-9a-fA-F]{0,4})|[0-9a-fA-F]{0,4})|[0-9a-fA-F]{0,4})")
+#: It is replaced only where a text was cut: before an ellipsis, in any text; and, in a text at least SHORTEST_CUT
+#: characters long, also where it ends the text or a line, or stands before a quote, ";", ")" or a table cell edge.
+CUT_MARKED = re.compile(_ID_START + r"(?=\u2026|\.\.\.)")
+CUT_ENDING = re.compile(_ID_START + r"(?=\u2026|\.\.\.|\Z|[\r\n\"';)]| ?\|)")
+#: no service shortens text that can carry an id to fewer characters than this
+SHORTEST_CUT = 120
 #: Keys whose string values are token ids (compared lower-cased, ``-`` read as ``_``). Counts such as ``tokens`` or
 #: ``input_tokens`` are not here.
 TOKEN_KEYS = frozenset({"token_id", "token_ids", "token", "x_field_token", "delegation_token", "tokens_revoked", "jti"})
@@ -111,12 +118,13 @@ def _is_token_key(key: str) -> bool:
 def _bound(value: Any, secrets: tuple[str, ...], credential: bool = False) -> Any:
     """``credential``: the value sits under a token key, so the whole string is replaced, whatever its shape."""
     if isinstance(value, str):
+        cut = CUT_ENDING if len(value) >= SHORTEST_CUT else CUT_MARKED     # judged on the text as it arrived
         for s in secrets:
             value = value.replace(s, "[redacted]")
         if credential and value and value != "[redacted]" and not ID_REF.fullmatch(value):
             value = token_ref(value)
         value = UUID_SHAPED.sub(lambda m: token_ref(m.group(0)), value)     # before the cut: never half an id
-        value = CUT_ID.sub(lambda m: token_ref(m.group(0)), value)          # an id a service already shortened
+        value = cut.sub(lambda m: token_ref(m.group(0)), value)             # an id a service already shortened
         return value if len(value) <= MAX_STRING else value[:MAX_STRING] + "...[truncated]"
     if isinstance(value, list):
         return [_bound(v, secrets, credential) for v in value]
