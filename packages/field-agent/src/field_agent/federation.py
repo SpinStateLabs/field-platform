@@ -249,6 +249,9 @@ def register_cli(app: Any) -> None:
         signature: str = typer.Option(
             None, "--signature", help="Inbound only: base64 manifest signature",
         ),
+        token_id: str = typer.Option(
+            None, "--token-id", help="Outbound: our agent's delegation token id",
+        ),
     ) -> None:
         """Ask the federation-broker. Exit 0 ALLOW / 1 BLOCK or broker unreachable."""
         try:
@@ -257,6 +260,7 @@ def register_cli(app: Any) -> None:
                 direction=direction,  # type: ignore[arg-type]
                 counterparty_agent_id=counterparty_agent_id,
                 manifest_signature=signature,
+                **({"token_id": token_id} if token_id else {}),
             )
         except CrossingBlocked as exc:
             if exc.verdict is not None:

@@ -84,10 +84,16 @@ def roster(tmp_path, monkeypatch, require=True):
         monkeypatch.setenv(oa.ENV_REQUIRE, "1")
 
 
+class NoRecord:
+    def read(self, agent_id):
+        return None, "no record in this test"
+
+
 def broker(tmp_path):
     ledger, authority = Ledger(), Authority(TOKENS)
     app = create_app(BrokerEngine(store=ContractStore(tmp_path / "contracts.sqlite3"), ledger=ledger))
     app.state.own_token = OwnTokenCheck(client=authority, base_url="http://delegation.test")
+    app.state.registered = NoRecord()          # these tests are about who may ask; the manifest has its own file
     return TestClient(app), ledger, authority
 
 

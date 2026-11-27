@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 
@@ -31,6 +32,7 @@ from federation_broker.engine import (
     home_org,
 )
 from federation_broker.own_token import TOKEN_HEADER, OwnTokenCheck
+from federation_broker.registered_manifest import RegisteredManifest
 from field_core.clients import LedgerClient
 from field_core.conformance import ConformanceVerdict
 
@@ -139,6 +141,7 @@ def create_app(engine: BrokerEngine | None = None) -> FastAPI:
         return _engine().store.list()
 
     app.state.own_token = OwnTokenCheck()
+    app.state.registered = RegisteredManifest()
     guard_crossing = op_health.guard("crossing")
 
     async def _guard(request: Request) -> None:
@@ -165,7 +168,22 @@ def create_app(engine: BrokerEngine | None = None) -> FastAPI:
                  _caller: None = Depends(_guard)) -> ConformanceVerdict:
         # triage-t12 N1 on #1300: a crossing request that repeats a key (a second "scope" or "counterparty_org") is
         # refused like a contract write, never decided on its last value
-        return _engine().decide(req)
+        mode = operator_auth.mode()
+        if req.direction != "outbound" or mode == operator_auth.OFF:
+            return _engine().decide(req)
+        manifest, why = app.state.registered.read(req.agent_id)
+        if mode == operator_auth.ENFORCE:
+            # OUR manifest is the registry's; the one in the request is not read
+            if manifest is None:
+                return _engine().refuse_outbound(req, why)
+            return _engine().decide(req.model_copy(update={"manifest": manifest}))
+        # log-only: decided on the caller's as before; the answer says how the registry's compares
+        verdict = _engine().decide(req)
+        state = "unreadable" if manifest is None else "same" if manifest == req.manifest else "differs"
+        verdict.context["registry_manifest"] = state
+        if state != "same":
+            logging.getLogger(__name__).warning("outbound crossing: the registered manifest is %s", state)
+        return verdict
 
     warn_open("federation-broker", operator_layer=True)
     return app

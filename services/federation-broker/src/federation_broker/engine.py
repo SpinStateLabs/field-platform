@@ -789,6 +789,10 @@ class BrokerEngine:
             return self._decide_outbound(req)
         return self._decide_inbound(req)
 
+    def refuse_outbound(self, req: CrossingRequest, reason: str) -> ConformanceVerdict:
+        """An outbound crossing for which OUR manifest could not be established: blocked, and recorded."""
+        return self._verdict(req, Decision.BLOCK, "I.manifest", [reason])
+
     def _outside_contract(
         self, req: CrossingRequest, contract: FederationContract
     ) -> ConformanceVerdict | None:
