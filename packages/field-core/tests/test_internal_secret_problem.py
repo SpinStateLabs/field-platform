@@ -147,3 +147,34 @@ def test_the_request_time_check_still_refuses_a_pair_set_after_install(_env):
     assert oh.internal_request_allowed(SECRET) is True
     _env.setenv(oh.ENV_INTERNAL_SECRET, OTHER)
     assert oh.internal_request_allowed(SECRET) is False and oh.internal_request_allowed(OTHER) is False
+
+
+# -- the whole hash is compared ----------------------------------------------------------------------------------------
+def shares_only_a_start_with(full: str, keep: int) -> str:
+    """A well-formed hash equal to ``full`` in its first ``keep`` characters and different in every one after them."""
+    return full[:keep] + "".join("1" if c == "0" else "0" for c in full[keep:])
+
+
+@pytest.mark.parametrize("keep", [8, 32, 63])
+def test_a_hash_that_only_starts_like_the_values_sha256_is_a_problem(_env, keep):
+    near = shares_only_a_start_with(HASH, keep)
+    assert near != HASH and near[:keep] == HASH[:keep]
+    _env.setenv(oh.ENV_INTERNAL_SECRET_SHA256, near)
+    _env.setenv(oh.ENV_INTERNAL_SECRET, SECRET)
+    text = oh.internal_secret_problem()
+    assert text and "not the sha256 of" in text
+    never_carries(text, SECRET, near, HASH)
+
+
+@pytest.mark.parametrize("keep", [8, 32, 63])
+def test_a_request_is_refused_when_the_hash_only_starts_like_the_secrets(_env, keep):
+    _env.setenv(oh.ENV_INTERNAL_SECRET_SHA256, shares_only_a_start_with(HASH, keep))
+    assert oh.internal_request_allowed(SECRET) is False
+
+
+@pytest.mark.parametrize("keep", [8, 32, 63])
+def test_a_hash_that_only_starts_like_the_perimeter_secrets_is_no_problem(_env, keep):
+    full = hashlib.sha256(PERIMETER.encode()).hexdigest()
+    _env.setenv(authn.ENV_VAR, PERIMETER)
+    _env.setenv(oh.ENV_INTERNAL_SECRET_SHA256, shares_only_a_start_with(full, keep))
+    assert oh.internal_secret_problem() is None
