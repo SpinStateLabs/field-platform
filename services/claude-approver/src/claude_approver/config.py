@@ -180,7 +180,9 @@ _PLAIN_PREFIX = re.compile(r"(/[A-Za-z0-9._~-]+)*")
 
 def _cleartext_ok(host: str) -> bool:
     """May the perimeter secret travel over plain http to ``host``? Only a loopback address, ``localhost`` or a
-    reserved ``.test`` / ``.localhost`` name: nothing that leaves the machine (or that could resolve publicly)."""
+    reserved ``.test`` / ``.localhost`` name: nothing that leaves the machine (or that could resolve publicly).
+    Trailing dots are stripped here, so a map entry may write one; the env rule decides about a trailing dot itself,
+    before it calls this."""
     host = host.lower().rstrip(".")
     try:
         return ipaddress.ip_address(host).is_loopback
@@ -193,20 +195,29 @@ _SINGLE_LABEL = re.compile(r"[a-z0-9_][a-z0-9_-]*")
 _NUMERIC_HOST = re.compile(r"[0-9]+|0x[0-9a-f]*")
 
 
+def _sender_read(url: str) -> tuple[str, str] | None:
+    """(scheme, host in lower case) of ``url`` as read by the parser that sends the request; None when it cannot.
+    Both cleartext rules judge this reading, so neither can disagree with what is actually sent."""
+    try:
+        parsed = httpx.URL(url)
+        return parsed.scheme, parsed.raw_host.decode("ascii").lower()
+    except Exception:
+        return None
+
+
 def env_url_secret_ok(url: str) -> bool:
     """May the shared secret travel to ``url``, built from a ``FIELD_*_URL`` value? https, or http to what
     ``_cleartext_ok`` accepts, or to a single-label host name (a service name on the stack's own network). A trailing
     dot is accepted on ``localhost`` only: written that way a name is absolute, skips the network's search path and may
     be looked up publicly, and an address has no such spelling. The URL is read with the parser that sends the request;
     one it cannot read is refused."""
-    try:
-        parsed = httpx.URL(url)
-        if parsed.scheme == "https":
-            return True
-        if parsed.scheme != "http":
-            return False
-        host = parsed.raw_host.decode("ascii").lower()
-    except Exception:
+    read = _sender_read(url)
+    if read is None:
+        return False
+    scheme, host = read
+    if scheme == "https":
+        return True
+    if scheme != "http":
         return False
     if host.endswith("."):
         return host == "localhost."
@@ -264,8 +275,8 @@ def _parse_entry(console_id: str, raw: object) -> AgentEntry:
             return bad("secret_file is not a string")
         secret_file = secret_file.strip() or None
     if secret_file is not None and base is not None:
-        parts = urlsplit(base)
-        if parts.scheme == "http" and not _cleartext_ok(parts.hostname or ""):
+        scheme, host = _sender_read(base) or ("", "")    # unreadable by the sender: refused
+        if not (scheme == "https" or (scheme == "http" and _cleartext_ok(host))):
             # fixed text: the URL is not echoed. The secret is sent as x-field-auth on every call.
             return bad("estate_base_url must be https when secret_file is set (http only to a loopback or .test host)")
     return AgentEntry(

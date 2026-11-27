@@ -77,6 +77,12 @@ def test_a_blank_secret_file_counts_as_none():
     assert e.problem is None
 
 
+def test_a_url_the_sending_parser_cannot_read_is_unusable_with_a_secret_file():
+    """The rule judges the sender's own reading of the URL: one it cannot read is refused, https or not."""
+    assert parsed("https://999.999.999.999").problem == FIXED
+    assert parsed("https://999.999.999.999", secret_file=None).problem is None
+
+
 def test_the_readme_states_the_rule():
     from pathlib import Path
     text = " ".join((Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8").split())
