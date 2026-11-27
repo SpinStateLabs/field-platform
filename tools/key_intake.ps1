@@ -13,7 +13,9 @@
 #   4. clears the clipboard (Windows clipboard history, if enabled, may still hold it: see NOTES);
 #   5. verifies the key with one read-only API call and prints status, fingerprint (first 8 hex of
 #      SHA-256) and file path only.
-# Refuses to overwrite a non-empty file unless -Replace (the old file is kept as <name>.key.prev).
+# Refuses to overwrite a non-empty file unless -Replace. The old key is then held in <name>.key.prev, owner-only
+# from before anything is written into it, and that copy is removed once the new key verifies (HTTP 200). It is
+# kept when the check fails or is skipped, so the old key can be put back.
 #
 # NOTES: the secret is never an argument, never in an environment variable of a child process, never
 # logged. Fingerprint is a hash prefix, not reversible. Windows "clipboard history" (Win+V) can retain
@@ -65,13 +67,15 @@ while ((Get-Date) -lt $deadline) {
 if (-not $key) { throw "timed out: no new $Kind-shaped key reached the clipboard. Nothing written." }
 
 # destination: empty file, owner-only ACL first, then the secret
-# The previous key is kept as .prev and gets the same owner-only ACL as the new file BEFORE anything is truncated, so the old
-# key never sits in a weaker file than the new one; if that ACL fails the copy is removed and nothing has changed.
+# The previous key is kept as .prev: an empty file is made and given the same owner-only ACL FIRST, the old key is written
+# into it only then, and the destination is truncated only after that; if the ACL fails nothing has changed.
 $hadOld = (Test-Path $dest) -and ((Get-Item $dest).Length -gt 0)
 if ($hadOld) {
-    Copy-Item $dest "$dest.prev" -Force
+    if (Test-Path -LiteralPath "$dest.prev") { Remove-Item -LiteralPath "$dest.prev" -Force }
+    New-Item -ItemType File -Path "$dest.prev" | Out-Null      # empty
     & icacls.exe "$dest.prev" /inheritance:r /grant:r "$($env:USERNAME):(R,W)" | Out-Null
-    if ($LASTEXITCODE -ne 0) { Remove-Item "$dest.prev" -Force; throw 'icacls failed on the previous-key copy; copy removed, nothing changed.' }
+    if ($LASTEXITCODE -ne 0) { Remove-Item -LiteralPath "$dest.prev" -Force; throw 'icacls failed on the previous-key copy; copy removed, nothing changed.' }
+    [IO.File]::WriteAllBytes("$dest.prev", [IO.File]::ReadAllBytes($dest))
 }
 Set-Content -Path $dest -Value '' -NoNewline
 & icacls.exe $dest /inheritance:r /grant:r "$($env:USERNAME):(R,W)" | Out-Null
@@ -106,6 +110,14 @@ if (-not $SkipVerify) {
     }
 }
 $key = $null
+# the previous key is needed only while the new one is unproven
+$prevNote = ''
+if ($hadOld) {
+    if ($status -like 'verified:*') {
+        try { Remove-Item -LiteralPath "$dest.prev" -Force; $prevNote = '; previous-key copy removed' }
+        catch { Write-Warning "the previous-key copy could not be removed: $dest.prev"; $prevNote = '; previous-key copy KEPT' }
+    } else { $prevNote = "; previous key kept in $dest.prev (new key not verified)" }
+}
 $ch = (Get-ItemProperty 'HKCU:\Software\Microsoft\Clipboard' -ErrorAction SilentlyContinue).EnableClipboardHistory
 if ($ch -eq 1) { Write-Warning 'Windows clipboard history is ON: the key may remain in Win+V history until it is cleared.' }
-Write-Output "stored: $dest ($len bytes, owner-only ACL); fingerprint $fp; $status; clipboard cleared"
+Write-Output "stored: $dest ($len bytes, owner-only ACL); fingerprint $fp; $status; clipboard cleared$prevNote"
