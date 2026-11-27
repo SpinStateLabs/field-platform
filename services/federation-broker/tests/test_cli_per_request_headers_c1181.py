@@ -1,8 +1,8 @@
-"""C-1181 (Lane 7 C-1150 F2, slice C): the federation-broker CLI puts the operator pair only on the one guarded write.
+"""C-1181 (Lane 7 C-1150 F2, slice C): the federation-broker CLI puts the operator pair only on the guarded routes.
 
 Before this change every CLI request used ``auth_headers()``, so the env operator pair rode the contract list and the
 crossing decision too. Now each request asks field-core's ``request_headers`` for its own headers: the perimeter secret
-always, the pair only on ``PUT /contracts/{id}``. Values are made up; nothing leaves the process.
+always, the pair only on ``PUT /contracts/{id}`` and ``POST /crossing``. Values are made up; nothing leaves the process.
 """
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ def _pair(headers: dict) -> bool:
     return oa.HEADER_OPERATOR in headers or oa.HEADER_KEY in headers
 
 
-def test_the_contract_write_carries_the_pair_and_nothing_else_does(sent, tmp_path):
+def test_the_guarded_routes_carry_the_pair_and_nothing_else_does(sent, tmp_path):
     manifest = tmp_path / "m.yaml"
     manifest.write_text("agent_id: a\n", encoding="utf-8")
     RUNNER.invoke(cli.app, ["add-contract", "c-1", "--org", "o", "--scope", "s", "--data-class", "d"])
@@ -54,7 +54,7 @@ def test_the_contract_write_carries_the_pair_and_nothing_else_does(sent, tmp_pat
     assert set(by) == {("PUT", "/contracts/c-1"), ("GET", "/contracts"), ("POST", "/crossing")}, sorted(by)
     for (m, p), h in by.items():
         assert h.get(authn.HEADER) == SECRET, (m, p)                           # the perimeter secret always
-        assert _pair(h) is (m == "PUT"), (m, p, sorted(h))                     # the pair only on the guarded write
+        assert _pair(h) is (m in ("PUT", "POST")), (m, p, sorted(h))           # the pair only on the guarded routes
     assert by[("PUT", "/contracts/c-1")][oa.HEADER_OPERATOR] == OP
 
 
