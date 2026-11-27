@@ -89,6 +89,12 @@ def test_a_url_the_sending_parser_cannot_read_is_unusable_with_a_secret_file():
     assert parsed("https://999.999.999.999", secret_file=None).problem is None
 
 
+@pytest.mark.parametrize("host", ["LOCALHOST", "LocalHost.", "A.TEST", "Svc.LocalHost"])
+def test_the_host_rule_itself_ignores_case(host):
+    """Both callers hand it a lower-cased host today; the rule must not depend on that."""
+    assert config._cleartext_ok(host) is True
+
+
 def test_the_readme_states_the_rule():
     from pathlib import Path
     text = " ".join((Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8").split())
