@@ -240,20 +240,25 @@ def collect_evidence(agent_id: str) -> EvidenceSources:
 
     import httpx
 
-    from field_core.clients import RegistryClient
+    from field_core.clients import AgentNotRegisteredError, RegistryClient
 
+    # B2: "answered none" and "did not answer" are different facts; only the second is listed in not_answered
+    not_answered: list[str] = []
     registry_record = None
     try:
         registry_record = RegistryClient().get_agent(agent_id)
+    except AgentNotRegisteredError:
+        pass                                    # an answer: no record
     except Exception:
-        pass
+        not_answered.append("registry")
 
-    def _get(url: str) -> Any:
+    def _ask(url: str) -> tuple[int | None, Any]:
+        """(HTTP status, JSON body of a 200); (None, None) for no answer or a body that is not JSON."""
         try:
             resp = httpx.get(url, timeout=5.0, headers=perimeter_headers())
-            return resp.json() if resp.status_code == 200 else None
+            return resp.status_code, (resp.json() if resp.status_code == 200 else None)
         except Exception:
-            return None
+            return None, None
 
     def _is_tls_failure(exc: BaseException) -> bool:
         import ssl
@@ -306,25 +311,33 @@ def collect_evidence(agent_id: str) -> EvidenceSources:
     # The id is caller input: one encoded path segment / query value, never a
     # second parameter, a fragment or a path step.
     aid = quote(agent_id, safe="")
-    events = _get(f"{ledger_base}/events?agent_id={aid}")
+    _, events = _ask(f"{ledger_base}/events?agent_id={aid}")
     event_types: dict[str, int] = {}
     for e in events if isinstance(events, list) else []:
         etype = e.get("event_type") if isinstance(e, dict) else None
         if isinstance(etype, str):
             event_types[etype] = event_types.get(etype, 0) + 1
 
-    def _dict(v: Any) -> dict[str, Any] | None:
-        # a reply of the wrong shape is "not collected", not an exception (a 500)
-        return v if isinstance(v, dict) else None
+    if not isinstance(events, list) or (events and not event_types):
+        not_answered.append("ledger events")
 
-    tokens = _get(f"{delegation_base}/tokens?agent_id={aid}")
+    # a reply of the wrong shape is "not collected", not an exception (a 500)
+    _, tokens = _ask(f"{delegation_base}/tokens?agent_id={aid}")
     if not (isinstance(tokens, list) and all(isinstance(t, dict) for t in tokens)):
         tokens = None
+        not_answered.append("delegation")
+
+    cap_status, cap = _ask(f"{governor_base}/caps/{aid}")
+    if not isinstance(cap, dict):
+        cap = None
+        if cap_status != 404:                   # 404 is the governor's "no cap configured"
+            not_answered.append("spend governor")
 
     return EvidenceSources(
         registry_record=registry_record,
         ledger_verify=_get_verify(f"{ledger_base}/verify"),
         ledger_event_types=event_types or None,
         tokens=tokens,
-        governor_cap=_dict(_get(f"{governor_base}/caps/{aid}")),
+        governor_cap=cap,
+        not_answered=not_answered,
     )
