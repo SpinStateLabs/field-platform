@@ -3,9 +3,8 @@
 httpx's timeout is per phase and restarts on every chunk received, so an endpoint that keeps sending a byte inside it
 holds the connection for as long as it likes. Here no connect, TLS handshake, read or write starts after the deadline,
 and each is given at most the time left until it as its timeout, so an endpoint that keeps sending is cut off at the
-deadline. Not bounded by this: a write already started (the library sends it in pieces and gives every piece the same
-timeout, so a peer that takes a little at a time can hold it past the deadline); the name lookup; and a connect that
-tries several addresses (each gets what was left when it began)."""
+deadline. Not bounded by this: an operation already started; the name lookup; and a connect that tries several
+addresses (each gets what was left when it began)."""
 from __future__ import annotations
 
 import time

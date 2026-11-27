@@ -173,8 +173,8 @@ Agents check in through the SDK (`FieldAgent.checkin()`, `fieldagent checkin
   the status line and headers are read, never the body. Each signal has its own
   client; no connect, handshake, read or write starts after the deadline, and
   each is given at most the time left, so an endpoint that keeps sending is cut
-  off and holds nothing a later signal needs. Outside that bound: a write already
-  started (it is sent in pieces, each with the same timeout), a name lookup, and a
+  off and holds nothing a later signal needs. Outside that bound: an operation already
+  started, a name lookup, and a
   connect that tries several addresses; the kill-switch stops waiting at the
   deadline either way, and such a request ends in its own background thread. The registry write that stops the
   agent never waits on the signal's outcome.
