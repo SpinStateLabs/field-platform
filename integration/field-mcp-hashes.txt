@@ -1,7 +1,7 @@
 # field-mcp install, hash-checked (Don's ruling 2026-10-30: --require-hashes for this suite only).
 # The full closure of mcp==2.3.0 (resolved in a clean venv under integration/constraints.txt), every distribution file's sha256
 # from the package index. Used as constraints, with the names to install on the command line (see .github/workflows/ci.yml):
-#   pip install --require-hashes --no-deps -c integration/field-mcp-hashes.txt <names>
+#   pip install --require-hashes --no-deps --force-reinstall -c integration/field-mcp-hashes.txt <names>
 # Only name==version lines with sha256 hashes may stand here (tools/tests/test_field_mcp_hashed_install.py).
 # Refresh together with integration/constraints.txt.
 annotated-types==0.8.0 \

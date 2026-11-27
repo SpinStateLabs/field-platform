@@ -1,7 +1,8 @@
 """The hash-checked install of field-mcp's third-party closure.
 
 The CI step passes ``integration/field-mcp-hashes.txt`` as a constraints file, with ``--require-hashes``, and lists the
-names to install on the line. ``test_ci_pip_pins_c23.py`` does not read what a constraints file holds, so this does:
+names to install on the line; ``--force-reinstall``
+makes pip check each of them even when an earlier line already installed it. ``test_ci_pip_pins_c23.py`` does not read what a constraints file holds, so this does:
 the file is exact, hashed pins and nothing else, they agree with ``integration/constraints.txt``, and the line installs
 exactly the names the file pins.
 """
@@ -17,7 +18,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 HASHES = "integration/field-mcp-hashes.txt"
 ENTRY = re.compile(r"([A-Za-z0-9_.-]+)==([A-Za-z0-9_.!+-]+)(?: --hash=sha256:[0-9a-f]{64})+")
-BEFORE_NAMES = ["pip", "install", "$C", "--require-hashes", "--no-deps", "-c", HASHES]
+BEFORE_NAMES = ["pip", "install", "$C", "--require-hashes", "--no-deps", "--force-reinstall", "-c", HASHES]
 
 
 def _read(relative: str) -> str:
@@ -105,11 +106,13 @@ def test_an_empty_file_is_caught():
 
 @pytest.mark.parametrize("old,new", [
     (" --require-hashes", ""),
-    (" --no-deps -c " + HASHES, " -c " + HASHES),
+    (" --no-deps --force-reinstall", " --force-reinstall"),
+    (" --no-deps --force-reinstall", " --no-deps"),
     ("pip install $C --require-hashes", "pip install --require-hashes"),
     ("-c " + HASHES + " ", "-c " + HASHES + " requests "),
     ("-c " + HASHES + " annotated-types ", "-c " + HASHES + " "),
-], ids=["no-hash-check", "with-dependencies", "no-constraints-variable", "extra-name", "missing-name"])
+], ids=["no-hash-check", "with-dependencies", "no-reinstall", "no-constraints-variable", "extra-name",
+        "missing-name"])
 def test_any_other_form_of_the_line_is_caught(old, new):
     workflow = _read(".github/workflows/ci.yml")
     assert workflow.count(old) == 1, old
