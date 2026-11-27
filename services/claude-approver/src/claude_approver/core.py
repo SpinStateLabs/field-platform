@@ -80,6 +80,10 @@ ORIGIN_HEADER = "x-field-kill-origin"
 ORIGIN_VALUE = "kill-switch"
 REASON_HEADER = "x-field-kill-reason"
 
+#: fixed text, no URL: an env FIELD URL that the shared secret may not be sent to
+ENV_URL_REFUSED = ("env service URL must be https to carry the shared secret "
+                   "(http only to a loopback, .test, .localhost or single-label host)")
+
 REASON_CLASSES = (
     "sentinel_block", "sentinel_escalate", "sentinel_error", "unmapped", "config_error",
 )
@@ -222,6 +226,13 @@ class Estate:
             return {}
         secret = config.read_secret_file(self.secret_file)
         return {AUTH_HEADER: secret} if secret is not None else None
+
+    def refusal(self, url: str, headers: dict[str, str]) -> str | None:
+        """Why ``headers`` may not be sent to ``url``, or None. Only the env route is judged here: a map entry's
+        URL was judged when the map was read."""
+        if self.routed or AUTH_HEADER not in headers or config.env_url_secret_ok(url):
+            return None
+        return ENV_URL_REFUSED
 
 
 def estate_for(entry: AgentEntry) -> Estate:
@@ -478,6 +489,10 @@ class Approver:
         headers = estate.headers()  # read per request (a rotated secret_file is honoured)
         if headers is None:
             return Verdict("deny", "config_error", "claude-approver: estate secret unreadable")
+        url = f"{estate.sentinel}/check"
+        refused = estate.refusal(url, headers)
+        if refused is not None:
+            return Verdict("deny", "config_error", f"claude-approver: {refused}")
         body = {
             "agent_id": entry.field_agent_id,
             "action": action,
@@ -488,7 +503,7 @@ class Approver:
         t0 = time.perf_counter()
         try:
             resp = self.http.post(
-                f"{estate.sentinel}/check", json=body, headers=headers,
+                url, json=body, headers=headers,
                 timeout=SENTINEL_TIMEOUT_S,
             )
         except httpx.TimeoutException:
@@ -537,9 +552,15 @@ class Approver:
         if headers is None:
             self._count("heartbeat_failures")
             return
+        url = f"{estate.killswitch}/heartbeat/{quote(entry.field_agent_id or '', safe='')}"
+        refused = estate.refusal(url, headers)
+        if refused is not None:
+            self._count("heartbeat_failures")
+            self._note_error(f"heartbeat skipped ({refused})")
+            return
         try:
             resp = self.http.post(
-                f"{estate.killswitch}/heartbeat/{quote(entry.field_agent_id or '', safe='')}",
+                url,
                 headers=headers, timeout=HEARTBEAT_TIMEOUT_S,
             )
             ok = 200 <= resp.status_code < 300
@@ -939,8 +960,14 @@ class Approver:
             self._count("usage_failures")
             self._note_error("usage post skipped (estate secret unreadable)")
             return False
+        url = f"{estate.governor}/usage"
+        refused = estate.refusal(url, headers)
+        if refused is not None:
+            self._count("usage_failures")
+            self._note_error(f"usage post skipped ({refused})")
+            return False
         try:
-            resp = self.http.post(f"{estate.governor}/usage", json=body, headers=headers,
+            resp = self.http.post(url, json=body, headers=headers,
                                   timeout=GOVERNOR_TIMEOUT_S)
         except Exception as exc:
             self._count("usage_failures")

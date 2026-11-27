@@ -8,6 +8,7 @@ the variable, never the value.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import math
 import os
@@ -17,6 +18,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
+
+import httpx
 
 DEFAULT_KEY_FILE = "/run/claude-approver/api-key"
 DEFAULT_POLL_SECONDS = 2.0
@@ -175,6 +178,53 @@ def _str_map(value: object) -> dict[str, str] | None:
 _PLAIN_PREFIX = re.compile(r"(/[A-Za-z0-9._~-]+)*")
 
 
+def _cleartext_ok(host: str) -> bool:
+    """May the perimeter secret travel over plain http to ``host``? Only a loopback address, ``localhost`` or a
+    reserved ``.test`` / ``.localhost`` name: nothing that leaves the machine (or that could resolve publicly).
+    A trailing dot is accepted on ``localhost`` only (``localhost.``): written that way a name is absolute, skips the
+    network's search path and may be looked up publicly, and an address has no such spelling."""
+    host = host.lower()
+    if host.endswith("."):
+        return host == "localhost."
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return host == "localhost" or host.endswith((".test", ".localhost"))
+
+
+#: a host with no dot, as raw ASCII: an in-network service name. A number (decimal, octal or hex) is an address.
+_SINGLE_LABEL = re.compile(r"[a-z0-9_][a-z0-9_-]*")
+_NUMERIC_HOST = re.compile(r"[0-9]+|0x[0-9a-f]*")
+
+
+def _sender_read(url: str) -> tuple[str, str] | None:
+    """(scheme, host in lower case) of ``url`` as read by the parser that sends the request; None when it cannot.
+    Both cleartext rules judge this reading, so neither can disagree with what is actually sent."""
+    try:
+        parsed = httpx.URL(url)
+        return parsed.scheme, parsed.raw_host.decode("ascii").lower()
+    except Exception:
+        return None
+
+
+def env_url_secret_ok(url: str) -> bool:
+    """May the shared secret travel to ``url``, built from a ``FIELD_*_URL`` value? https, or http to what
+    ``_cleartext_ok`` accepts (a trailing dot on ``localhost`` only), or to a single-label host name (a service name
+    on the stack's own network). The URL is read with the parser that sends the request; one it cannot read is
+    refused."""
+    read = _sender_read(url)
+    if read is None:
+        return False
+    scheme, host = read
+    if scheme == "https":
+        return True
+    if scheme != "http":
+        return False
+    if _cleartext_ok(host):
+        return True
+    return bool(_SINGLE_LABEL.fullmatch(host)) and not _NUMERIC_HOST.fullmatch(host)
+
+
 def _parse_entry(console_id: str, raw: object) -> AgentEntry:
     def bad(problem: str) -> AgentEntry:
         return AgentEntry(console_agent_id=console_id, field_agent_id=None, problem=problem)
@@ -223,6 +273,11 @@ def _parse_entry(console_id: str, raw: object) -> AgentEntry:
         if not isinstance(secret_file, str):
             return bad("secret_file is not a string")
         secret_file = secret_file.strip() or None
+    if secret_file is not None and base is not None:
+        scheme, host = _sender_read(base) or ("", "")    # unreadable by the sender: refused
+        if not (scheme == "https" or (scheme == "http" and _cleartext_ok(host))):
+            # fixed text: the URL is not echoed. The secret is sent as x-field-auth on every call.
+            return bad("estate_base_url must be https when secret_file is set (http only to a loopback or .test host)")
     return AgentEntry(
         console_agent_id=console_id,
         field_agent_id=fid.strip(),
