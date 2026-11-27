@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Rollback-read check: can the OLD release read a ledger written by the NEW release?
 
-A rollback keeps the ledger. If the new release wrote event types the old one never wrote, the old readers must still
-boot, verify, serve and replay that ledger. This tool builds a throwaway ledger with the NEW code holding every event
-type added between the two commits, then runs the OLD code's readers on a copy and reports, per event type and reader:
-OK, SKIPPED (the reader does not show this event, safely), REFUSED or CRASH.
+A rollback keeps the ledger. If the new release wrote event types the old one never wrote, or changed the payload of
+a type it already wrote, the old readers must still boot, verify, serve and replay that ledger. This tool builds a
+throwaway ledger with the NEW code holding every event type added between the two commits and every type listed in
+CHANGED (its new payload shape), then runs the OLD code's readers on a copy and reports, per event type and reader:
+OK, SKIPPED (the reader does not show this event, safely), REFUSED or CRASH, and the line each reader shows for it.
 
 It reads no estate: child processes get a scrubbed environment (no FIELD_* value from the caller), all upstreams are
 in-process stubs, and everything is written under a temporary directory. See tools/rollback_read_check.md.
@@ -25,8 +26,10 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import unquote
 
 LEDGER_REL = Path("ledger") / "events.jsonl"
 SINCE, UNTIL = "2000-01-01T00:00:00Z", "2100-01-01T00:00:00Z"
@@ -66,6 +69,10 @@ FIXTURES: dict[str, tuple[str | None, dict[str, Any]]] = {
     "federation.contract.refused": (None, {**_CONTRACT, "reason": "one_active_contract_per_org",
                                            "other_contract_id": "rollback-other"}),
 }
+#: Event types whose payload SHAPE changes between the two releases: event type -> (agent_id, payload in the NEW shape).
+#: The inventory cannot see such a change, so the release that makes one lists it here. A listed type is written and read
+#: on every run. A reader of the old release that requires a key the new shape no longer has fails the run (CRASH).
+CHANGED: dict[str, tuple[str | None, dict[str, Any]]] = {}
 #: An f-string event family found by the inventory -> the concrete types its writer produces.
 FAMILIES = {"federation.contract.{}": ("federation.contract.registered", "federation.contract.replaced",
                                        "federation.contract.deactivated", "federation.contract.refused")}
@@ -74,7 +81,9 @@ BASELINE: list[tuple[str, str | None, dict[str, Any]]] = [
     ("kill.agent", AGENT, {"operator": "rollback-check", "reason": "baseline"}),
     ("kill.revive", AGENT, {"operator": "rollback-check", "reason": "baseline"}),
 ]
-READERS = ("parse", "ledger_filter", "replay", "ops_console", "status_pairing")
+READERS = ("parse", "ledger_filter", "replay", "ops_console", "status_pairing", "attest", "ops_overview")
+#: A shown line is cut at this many characters.
+LINE_MAX = 400
 
 
 # ---- orchestrator ----------------------------------------------------------------------------------------------------
@@ -118,6 +127,17 @@ def event_literals(tree: Path) -> set[str]:
     return found
 
 
+def select(added: set[str]) -> tuple[list[str], list[str], list[str]]:
+    """(added types with a fixture, added types without one, changed-shape types to exercise as well)."""
+    covered = sorted(t for t in added if t in FIXTURES or t in CHANGED)
+    uncovered = sorted(t for t in added if t not in FIXTURES and t not in CHANGED)
+    return covered, uncovered, sorted(t for t in CHANGED if t not in added)
+
+
+def fixture(event_type: str) -> tuple[str | None, dict[str, Any]]:
+    return CHANGED[event_type] if event_type in CHANGED else FIXTURES[event_type]
+
+
 def child(python: str, role: str, tree: Path, work: Path, types: list[str]) -> subprocess.CompletedProcess:
     keep = {k: os.environ[k] for k in ("PATH", "SYSTEMROOT", "TEMP", "TMP", "LANG") if k in os.environ}
     roots = [str(p) for p in source_roots(tree)] + [str(tree / "tools")]
@@ -144,11 +164,12 @@ def run(args: argparse.Namespace) -> int:
         types: set[str] = set()
         for name in added:
             types.update(FAMILIES.get(name, (name,)))
-        uncovered = sorted(t for t in types if t not in FIXTURES)
-        covered = sorted(t for t in types if t in FIXTURES)
+        covered, uncovered, changed = select(types)
         print(f"event types added: {len(types)} ({len(covered)} with a fixture, {len(uncovered)} without)")
+        print(f"event types with a changed payload shape: {len(changed)}")
+        covered = sorted(covered + changed)
         if not covered:
-            print("RESULT: ERROR (no added event type found: wrong commits?)")
+            print("RESULT: ERROR (no added or changed event type found: wrong commits?)")
             return 2
 
         write_dir = base / "write"
@@ -186,6 +207,12 @@ def summarise(report: dict, covered: list[str], uncovered: list[str], out: str |
             counts[cells[r]["status"]] += 1
             if cells[r]["status"] in ("REFUSED", "CRASH"):
                 bad.append(f"{t} / {r}: {cells[r]['status']} {cells[r].get('detail', '')}")
+    shown = [(t, r, report["types"][t][r]["detail"]) for t in covered for r in READERS
+             if report["types"][t][r]["status"] == "OK" and report["types"][t][r].get("detail")]
+    if shown:
+        print("\nwhat the old release shows for these rows (synthetic fixtures, verbatim)")
+        for t, r, line in shown:
+            print(f"  {t} / {r}: {line}")
     print("\nwhole-ledger readers")
     for name, cell in report["whole"].items():
         print(f"  {name:<24} {cell['status']} {cell.get('detail', '')}")
@@ -226,7 +253,7 @@ def role_write(tree: str, work: Path, types: list[str]) -> int:
     for event_type, agent, payload in BASELINE:
         store.append(event_type, payload, agent)
     for event_type in types:
-        agent, payload = FIXTURES[event_type]
+        agent, payload = fixture(event_type)
         store.append(event_type, payload, agent)
     store.append(BASELINE[0][0], BASELINE[0][2], AGENT)
     verified = store.verify()
@@ -236,7 +263,8 @@ def role_write(tree: str, work: Path, types: list[str]) -> int:
 
 
 def _cell(fn: Callable[[], Any]) -> dict[str, str]:
-    """Run one reader. Texts are class names or fixed strings, so no event value is printed."""
+    """Run one reader. A failure is reported as a class name or a fixed string. A reader that answers ``("OK", line)``
+    hands back the line the old release shows for the row; the rows are this tool's synthetic fixtures."""
     from pydantic import ValidationError
 
     try:
@@ -251,8 +279,12 @@ def _cell(fn: Callable[[], Any]) -> dict[str, str]:
 
 
 def role_read(tree: str, work: Path, types: list[str]) -> int:
-    check_provenance(tree, ("field_core", "sealed_ledger", "incident_replay", "ops_console", "estate_probe"))
+    check_provenance(tree, ("field_core", "sealed_ledger", "incident_replay", "ops_console", "estate_probe",
+                            "attestation_reporter", "lifecycle_manager"))
     import estate_probe
+    from attestation_reporter.engine import PackEngine
+    from lifecycle_manager.engine import LifecycleEngine
+    from lifecycle_manager.engine import render_markdown as render_sweep
     from fastapi.testclient import TestClient
     from field_core.clients import AgentNotRegisteredError
     from field_core.ledger import LedgerEvent
@@ -293,7 +325,17 @@ def role_read(tree: str, work: Path, types: list[str]) -> int:
                 answer = ledger.get(route, params=params)
                 return answer.status_code, answer.json()
 
-        ops = TestClient(ops_app(ledger=OpsLedger()))
+        class Absent:
+            """Every other upstream of the console: answers "not available", never touches a network."""
+
+            def get(self, route: str, params: dict | None = None, **_: Any) -> tuple[int, Any]:
+                return 503, {"detail": "not part of this check"}
+
+            post = get
+
+        ops = TestClient(ops_app(ledger=OpsLedger(), **{name: Absent() for name in (
+            "registry", "delegation", "governor", "killswitch", "sentinel", "lifecycle", "attest", "crosswalk",
+            "federation", "replay", "gateway")}))
         engine = ReplayEngine(LedgerQueryClient(client=ledger, base_url="http://testserver"), Registry(), Delegation())
 
         def expect_200(route: str, **params: Any) -> Any:
@@ -316,6 +358,40 @@ def role_read(tree: str, work: Path, types: list[str]) -> int:
         whole["events_unfiltered"] = _cell(unfiltered)
         whole["retention_check"] = _cell(lambda: (expect_200("/retention/check"), None)[1])
 
+        def pack():
+            return PackEngine(ledger=ledger, ledger_base="http://testserver").build()
+
+        def attestation_pack() -> None:
+            if not pack().sections:
+                raise ValueError("the pack has no section")
+
+        def lifecycle_sweep() -> tuple[str, str] | None:
+            soon = (datetime.now(timezone.utc) + timedelta(days=5)).isoformat()
+
+            class Agents:
+                def list_agents(self) -> list:
+                    return []
+
+            class Tokens:
+                def get(self, route: str, **_: Any) -> list:
+                    return [{"token_id": "rollback-check-token", "agent_id": AGENT, "granted_by": "rollback check",
+                             "scope": ["read"], "expires_at": soon, "revoked": False}]
+
+            report = LifecycleEngine(Agents(), Tokens()).sweep("owner\nRollback Check\n")
+            render_sweep(report)
+            return "OK", f"{len(report.expiring)} expiring finding(s) from the token list; the sweep reads no ledger row of these types"
+
+        def ops_ledger_sections() -> tuple[str, str] | None:
+            body = ops.get("/api/overview")
+            if body.status_code != 200:
+                return "REFUSED", f"console answered {body.status_code}"
+            sections = [body.json()[name] for name in ("ledger_verify", "recent_events")]
+            return None if all(s.get("available") for s in sections) else ("REFUSED", "a ledger section is unavailable")
+
+        whole["attestation_pack"] = _cell(attestation_pack)
+        whole["lifecycle_sweep"] = _cell(lifecycle_sweep)
+        whole["ops_ledger_sections"] = _cell(ops_ledger_sections)
+
         for event_type in types:
             record = by_type[event_type]
             agent = record.get("agent_id")
@@ -328,19 +404,23 @@ def role_read(tree: str, work: Path, types: list[str]) -> int:
                 return None if len(rows) == 1 and rows[0]["hash"] == record["hash"] else ("REFUSED", "event not returned")
 
             def replay() -> tuple[str, str] | None:
-                _summarize(record)
+                summary = _summarize(record)
                 if agent is None:
                     return "SKIPPED", "no agent_id: an agent replay does not show it"
                 pm = engine.replay(ReplayRequest(agent_id=agent, since=SINCE, until=UNTIL))
-                render_markdown(pm)
-                return None if event_type in {t.event_type for t in pm.timeline} else ("REFUSED", "not in the timeline")
+                text = render_markdown(pm)
+                if event_type not in {t.event_type for t in pm.timeline}:
+                    return "REFUSED", "not in the timeline"
+                in_markdown = next((line for line in text.splitlines() if f"**{event_type}**" in line.replace("\\", "")), "")
+                return "OK", f"{summary} || markdown: {in_markdown}"[:LINE_MAX]
 
             def ops_console() -> tuple[str, str] | None:
                 listed = ops.get("/api/events", params={"event_type": event_type})
                 exported = ops.get("/api/events/export", params={"event_type": event_type, "format": "csv"})
                 if listed.status_code != 200 or exported.status_code != 200:
                     return "REFUSED", f"console answered {listed.status_code}/{exported.status_code}"
-                return None if event_type in exported.text else ("REFUSED", "event not in the export")
+                row = next((line for line in exported.text.splitlines() if event_type in line), None)
+                return ("REFUSED", "event not in the export") if row is None else ("OK", row[:LINE_MAX])
 
             def status_pairing() -> tuple[str, str] | None:
                 # A new kill.* type must never count as the kill that explains a registry status change.
@@ -350,8 +430,23 @@ def role_read(tree: str, work: Path, types: list[str]) -> int:
                     estate_probe.check_status_pairing([record, change], "rollback check")
                 return None if "NOT paired" in shown.getvalue() else ("REFUSED", "paired a status change")
 
+            def attest() -> tuple[str, str] | None:
+                asked = re.compile(rf"event_type={re.escape(event_type)}(&|$)")
+                lines = [f"{m.name} = {m.value!r} ({m.note})" for section in pack().sections for m in section.metrics
+                         if asked.search(unquote(m.source_query))]
+                return "OK", (" | ".join(lines) or "no pack metric queries this event type")[:LINE_MAX]
+
+            def ops_overview() -> tuple[str, str] | None:
+                body = ops.get("/api/overview")
+                if body.status_code != 200 or not body.json()["recent_events"].get("available"):
+                    return "REFUSED", "the overview's recent events are unavailable"
+                row = next((e for e in body.json()["recent_events"]["data"] if e.get("hash") == record["hash"]), None)
+                if row is None:
+                    return "SKIPPED", "not among the overview's recent events"
+                return "OK", json.dumps(row.get("payload"), sort_keys=True)[:LINE_MAX]
+
             results[event_type] = {name: _cell(fn) for name, fn in zip(
-                READERS, (parse, ledger_filter, replay, ops_console, status_pairing))}
+                READERS, (parse, ledger_filter, replay, ops_console, status_pairing, attest, ops_overview))}
 
     # The old release must also keep writing after a rollback: one more append, then a fresh process-style open.
     def append_then_verify() -> tuple[str, str] | None:
