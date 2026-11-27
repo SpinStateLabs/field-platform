@@ -47,6 +47,13 @@ def test_the_readers_run_on_this_tree_and_hand_back_the_shown_lines(tmp_path):
         assert report["whole"][name]["status"] == "OK", (name, report["whole"][name])
 
 
+def test_the_two_lines_a_deploy_record_quotes_keep_their_text():
+    """A "not applicable" record is built from, and checked against, these lines word for word."""
+    source = (REPO / "tools" / "rollback_read_check.py").read_text(encoding="utf-8")
+    assert 'print("RESULT: ERROR (no added event type found: wrong commits?)")' in source
+    assert 'print(f"event types added: {len(types)} ({len(covered)} with a fixture, {len(uncovered)} without)")' in source
+
+
 def test_the_shown_lines_are_printed(capsys):
     cells = {r: {"status": "OK"} for r in rrc.READERS}
     cells["replay"] = {"status": "OK", "detail": "made up line 123"}

@@ -169,7 +169,8 @@ def run(args: argparse.Namespace) -> int:
         print(f"event types with a changed payload shape: {len(changed)}")
         covered = sorted(covered + changed)
         if not covered:
-            print("RESULT: ERROR (no added or changed event type found: wrong commits?)")
+            # a deploy record quotes this line and the "event types added" line exactly: keep their text
+            print("RESULT: ERROR (no added event type found: wrong commits?)")
             return 2
 
         write_dir = base / "write"
