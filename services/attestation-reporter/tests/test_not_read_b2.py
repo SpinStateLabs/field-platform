@@ -11,6 +11,7 @@ from attestation_reporter.engine import (
     Metric,
     PackEngine,
     Section,
+    ledger_reason,
     unread,
 )
 from attestation_reporter.render import INCOMPLETE_HEADLINE, render_html
@@ -125,6 +126,28 @@ def test_a_malformed_retention_answer_is_unread_not_a_missing_policy(body):
 
 def test_a_ledger_that_says_it_has_no_estate_policy_is_not_listed_as_unread():
     assert retention_lines({"status": "no_estate_policy", "estate_retention_days": None}) == []
+
+
+@pytest.mark.parametrize("detail, reason", [
+    ("FIELD_LEDGER_RETENTION_DAYS='made-up-value' is not an integer", "FIELD_LEDGER_RETENTION_DAYS=<value> is not an integer"),
+    ("FIELD_LEDGER_RETENTION_DAYS=0 must be >= 1", "FIELD_LEDGER_RETENTION_DAYS=<value> must be >= 1"),
+    (["odd"], "no readable reason given"),
+], ids=["not-an-integer", "below-one", "unreadable"])
+def test_an_invalid_estate_policy_is_unread_with_the_ledgers_reason_and_no_value(detail, reason):
+    lines = retention_lines({"status": "no_estate_policy", "estate_retention_days": None, "detail": detail})
+    assert len(lines) == 2, lines
+    assert all(reason in line and "made-up-value" not in line for line in lines)
+
+
+def test_the_plain_unset_detail_is_still_a_configured_absence():
+    body = {"status": "no_estate_policy", "estate_retention_days": None,
+            "detail": "no estate policy (FIELD_LEDGER_RETENTION_DAYS unset)"}
+    assert retention_lines(body) == []
+
+
+def test_a_long_or_multi_line_reason_stays_one_short_line():
+    assert ledger_reason("a\nb\r\nc") == "a b c"
+    assert len(ledger_reason("x" * 900)) == 200
 
 
 def test_the_list_is_escaped_in_the_page():

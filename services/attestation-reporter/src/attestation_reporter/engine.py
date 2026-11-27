@@ -50,6 +50,18 @@ _PERIOD_MARKERS = ("window starts before the earliest live event", "earliest-liv
 PERIOD_NOT_CHECKED = ("Period not checked: the ledger integrity check gave no result, so whether every event of the "
                       "period is in the live ledger is unknown")
 _LOWER_BOUND = re.compile(r"a lower bound: [0-9]+ manifest ref\(s\) could not be read")
+#: the ledger's detail when the estate simply sets no retention policy; any other detail with no_estate_policy is a fault
+_POLICY_UNSET = f"{NO_ESTATE_POLICY} (FIELD_LEDGER_RETENTION_DAYS unset)"
+#: a value the ledger quotes after "=" in its detail (a setting's content): not repeated in a pack
+_QUOTED_VALUE = re.compile(r"""=('(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|-?[0-9]+)""")
+
+
+def ledger_reason(detail: object) -> str:
+    """The ledger's detail as one printable line without any quoted setting value, at most 200 characters."""
+    if not isinstance(detail, str):
+        return "no readable reason given"
+    line = " ".join("".join(c if c.isprintable() else " " for c in detail).split())
+    return _QUOTED_VALUE.sub("=<value>", line)[:200]
 UNREACHABLE = "service not configured/reachable at generation time"
 
 
@@ -425,8 +437,12 @@ class PackEngine:
         if status == "no_estate_policy" or not isinstance(estate, int) or isinstance(estate, bool):
             # B2: only the ledger's own "no_estate_policy" is a configured absence. Anything else with no usable
             # figure was not read, and must reach the pack's not_read list.
-            if status == "no_estate_policy":
-                note = f"{NO_ESTATE_POLICY} (FIELD_LEDGER_RETENTION_DAYS unset)"
+            if status == "no_estate_policy" and data.get("detail") in (None, "", _POLICY_UNSET):
+                note = _POLICY_UNSET
+            elif status == "no_estate_policy":
+                # a policy that is set but unusable: not a configured absence, so it must reach not_read
+                note = ("the estate retention policy is not usable; the ledger says: "
+                        f"{ledger_reason(data.get('detail'))}")
             elif status == "unavailable":
                 note = "the ledger reports its retention check as unavailable and gives no policy figure"
             else:
