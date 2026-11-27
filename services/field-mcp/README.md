@@ -12,7 +12,7 @@ One tool per route, named `<service>_<action>` (for example `sealed_ledger_verif
 | 2 write | state-changing routes (sentinel `/check`, registry writes, federation crossing, ledger export, regwatch check) | not in this build; excluded with a reason |
 | 3 destructive | kill, kill/domain, revive, drill, heartbeat post, token issue and revoke, ledger events/rotate/hold/retention, spend caps, policies, rate-limits, spend and usage posts, escalation resolve, federation contract change, lifecycle sweep | **never in this server** (CLI and console only) |
 
-Excluded because the answer carries token ids (credentials): `delegation-authority GET /tokens` and `GET /tokens/{id}`. Other reads (ledger events, replay, lifecycle findings, attestation packs) can still show a token id inside their data.
+Not tools: `delegation-authority GET /tokens` and `GET /tokens/{id}` (written exclusions).
 
 Excluded as not operator APIs: `claude-approver POST /halt/{id}` (open path by design), `force-gateway POST /v1/messages` (a paid model call), the 16 `/operator/*` key-rotation routes, and the whole of `ops-console` (it fronts the services above; they are exposed directly, never both).
 
@@ -46,6 +46,6 @@ Every result is `{"status", "service", "untrusted_data": true, "notice", "data"}
 
 ## What it does NOT claim
 
-- Not a security boundary. The platform has one shared secret today (`x-field-auth`) and the operator guard is not armed anywhere, so a leaked key authorises writes on the services directly. Per-tier keys need a platform change (a separate card).
+- Not a security boundary: this server decides which routes are tools; what a configured key may do is decided by each service.
 - Not a confirmation that any Tier 1 POST is free of side effects beyond the code read for this build (`introspect`, `crosswalk`, `pack`, `replay` handlers were read; no live service was called).
 - Not verified against any real service, estate or MCP client.
