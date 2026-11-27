@@ -84,6 +84,19 @@ def test_an_id_across_the_length_cut_leaves_no_part(stub):
         assert TID[:9] not in out
 
 
+@pytest.mark.parametrize("kept", range(1, 9))
+def test_the_id_is_replaced_before_the_length_cut(kept):
+    # so few characters are left that no rule for a shortened id applies: only replacing first shows the reference
+    lead = cl.MAX_STRING - kept
+    assert cl._bound("A" * lead + TID, ()) == "A" * lead + cl.token_ref(TID)[:kept] + "...[truncated]"
+
+
+def test_a_cut_after_the_replacement_keeps_the_reference_of_the_whole_id():
+    lead = cl.MAX_STRING - 20
+    shown = cl._bound("A" * lead + TID + "B" * 30, ())
+    assert shown == "A" * lead + cl.token_ref(TID) + "BBB" + "...[truncated]"
+
+
 def test_the_reference_is_stable_and_not_replaced_again():
     once = cl._bound({"token_id": TID}, ())
     assert once == {"token_id": ref(TID)} and cl._bound(once, ()) == once
