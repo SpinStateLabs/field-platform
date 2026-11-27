@@ -95,6 +95,15 @@ def test_the_host_rule_itself_ignores_case(host):
     assert config._cleartext_ok(host) is True
 
 
+def test_a_name_on_the_local_network_is_not_a_cleartext_host():
+    """A multicast-DNS name is answered by whatever claims it on the network, so the secret must not travel to it in
+    clear. The made-up name is built from parts, as tools/tests/test_public_safety_c560.py builds its own samples."""
+    name = "printer" + "." + "local"
+    assert config._cleartext_ok(name) is False
+    assert parsed("http://" + name).problem == FIXED
+    assert config.env_url_secret_ok("http://" + name) is False
+
+
 def test_the_readme_states_the_rule():
     from pathlib import Path
     text = " ".join((Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8").split())
