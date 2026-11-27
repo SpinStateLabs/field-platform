@@ -139,6 +139,17 @@ def test_an_invalid_estate_policy_is_unread_with_the_ledgers_reason_and_no_value
     assert all(reason in line and "made-up-value" not in line for line in lines)
 
 
+def test_a_value_with_both_quote_types_and_an_equals_sign_is_removed_whole():
+    """The ledger quotes the value with ``repr``: with both quote types inside, the inner single quote is escaped."""
+    value = "head-part'mid\"=made-up-value"
+    lines = retention_lines({"status": "no_estate_policy", "estate_retention_days": None,
+                             "detail": f"FIELD_LEDGER_RETENTION_DAYS={value!r} is not an integer"})
+    assert len(lines) == 2, lines
+    for line in lines:
+        assert "FIELD_LEDGER_RETENTION_DAYS=<value> is not an integer" in line
+        assert not [part for part in ("head-part", "mid", "made-up-value") if part in line], line
+
+
 def test_the_plain_unset_detail_is_still_a_configured_absence():
     body = {"status": "no_estate_policy", "estate_retention_days": None,
             "detail": "no estate policy (FIELD_LEDGER_RETENTION_DAYS unset)"}
