@@ -181,9 +181,11 @@ _PLAIN_PREFIX = re.compile(r"(/[A-Za-z0-9._~-]+)*")
 def _cleartext_ok(host: str) -> bool:
     """May the perimeter secret travel over plain http to ``host``? Only a loopback address, ``localhost`` or a
     reserved ``.test`` / ``.localhost`` name: nothing that leaves the machine (or that could resolve publicly).
-    Trailing dots are stripped here, so a map entry may write one; the env rule decides about a trailing dot itself,
-    before it calls this."""
-    host = host.lower().rstrip(".")
+    A trailing dot is accepted on ``localhost`` only (``localhost.``): written that way a name is absolute, skips the
+    network's search path and may be looked up publicly, and an address has no such spelling."""
+    host = host.lower()
+    if host.endswith("."):
+        return host == "localhost."
     try:
         return ipaddress.ip_address(host).is_loopback
     except ValueError:
@@ -207,10 +209,9 @@ def _sender_read(url: str) -> tuple[str, str] | None:
 
 def env_url_secret_ok(url: str) -> bool:
     """May the shared secret travel to ``url``, built from a ``FIELD_*_URL`` value? https, or http to what
-    ``_cleartext_ok`` accepts, or to a single-label host name (a service name on the stack's own network). A trailing
-    dot is accepted on ``localhost`` only: written that way a name is absolute, skips the network's search path and may
-    be looked up publicly, and an address has no such spelling. The URL is read with the parser that sends the request;
-    one it cannot read is refused."""
+    ``_cleartext_ok`` accepts (a trailing dot on ``localhost`` only), or to a single-label host name (a service name
+    on the stack's own network). The URL is read with the parser that sends the request; one it cannot read is
+    refused."""
     read = _sender_read(url)
     if read is None:
         return False
@@ -219,8 +220,6 @@ def env_url_secret_ok(url: str) -> bool:
         return True
     if scheme != "http":
         return False
-    if host.endswith("."):
-        return host == "localhost."
     if _cleartext_ok(host):
         return True
     return bool(_SINGLE_LABEL.fullmatch(host)) and not _NUMERIC_HOST.fullmatch(host)

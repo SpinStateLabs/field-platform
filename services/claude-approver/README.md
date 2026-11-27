@@ -118,7 +118,8 @@ no perimeter header for that estate). The URL must not carry credentials (`user:
 entry is unusable and its calls are denied, because httpx logs request URLs. With a `secret_file` the URL must be
 https (http is accepted only to a loopback address, `localhost`, or a `.test` / `.localhost` name), because the secret
 travels as `x-field-auth` on every call: any other http URL makes the entry unusable and its calls are denied, without
-echoing the URL; so does a URL the sending client cannot read. http without a `secret_file` is unchanged. Without
+echoing the URL; so does a URL the sending client cannot read. Here too a trailing dot is accepted on `localhost` only.
+http without a `secret_file` is unchanged. Without
 it the env URLs and `field_core.authn.auth_headers()` apply (the GB10 stack). Structural garbage
 (invalid JSON, not an object) empties the whole map: nothing is touched, `/stats` says why.
 

@@ -57,6 +57,12 @@ def test_an_acceptable_url_with_a_secret_file_is_usable(url):
     "http://notlocalhost",
     "http://contest",
     "http://xtest",
+    "http://localhost..:9000",
+    "http://127.0.0.1.",
+    "http://127.0.0.1.:8000",
+    "http://estate.test.",
+    "http://a.b.test..:8080",
+    "http://svc.localhost.",
     "HTTP://fly.example.org",
     "Http://203.0.113.5",
 ], ids=repr)
