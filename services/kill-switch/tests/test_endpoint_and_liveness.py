@@ -1375,6 +1375,42 @@ def test_no_operation_starts_after_the_deadline():
     assert late.started == []
 
 
+def test_no_tls_handshake_or_connect_starts_after_the_deadline():
+    import httpcore
+
+    from kill_switch.endpoint_deadline import DeadlineBackend, DeadlineStream
+
+    class Inner:
+        """A stream and a backend that record every handshake and connect they are asked to start."""
+
+        def __init__(self):
+            self.started = []
+
+        def start_tls(self, ssl_context, server_hostname=None, timeout=None):
+            self.started.append(("start_tls", timeout))
+            return self
+
+        def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+            self.started.append(("connect_tcp", timeout))
+            return self
+
+    live = Inner()
+    soon = time.monotonic() + 0.5
+    wrapped = [DeadlineStream(live, soon).start_tls(None, "agent.test", 2.0),
+               DeadlineBackend(live, soon).connect_tcp("agent.test", 443, timeout=2.0)]
+    assert [name for name, _ in live.started] == ["start_tls", "connect_tcp"]
+    assert all(0 < timeout <= 0.5 for _, timeout in live.started)
+    assert all(isinstance(s, DeadlineStream) and s._deadline == soon for s in wrapped)   # still bounded afterwards
+
+    late = Inner()
+    past = time.monotonic() - 0.01
+    with pytest.raises(httpcore.ConnectTimeout):
+        DeadlineStream(late, past).start_tls(None, "agent.test", 2.0)
+    with pytest.raises(httpcore.ConnectTimeout):
+        DeadlineBackend(late, past).connect_tcp("agent.test", 443, timeout=2.0)
+    assert late.started == []
+
+
 def test_the_deadline_hook_is_checked_against_exactly_the_pinned_library_versions():
     """The hook relies on a private attribute of the HTTP library, so the shape test above must run on the versions the
     images install: a constraints bump runs it on the new ones, and a changed shape fails it."""

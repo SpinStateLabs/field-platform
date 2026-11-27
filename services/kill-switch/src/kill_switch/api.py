@@ -348,7 +348,7 @@ def _default_store_path() -> Path:
 
 def new_endpoint_client(deadline: float | None = None) -> Any:
     """The outbound halt-signal client: one per signal, with its own pool, so a signal that hangs holds nothing a later
-    one needs. With ``deadline`` (``time.monotonic``), every socket operation is bounded by it (``endpoint_deadline``).
+    one needs. With ``deadline`` (``time.monotonic``), no socket operation starts after it (``endpoint_deadline`` says what is bounded).
 
     ``follow_redirects=False`` is load-bearing, not decoration. The allowlist
     is checked against the URL in the manifest; if redirects were followed, an

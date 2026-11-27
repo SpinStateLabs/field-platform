@@ -171,11 +171,12 @@ Agents check in through the SDK (`FieldAgent.checkin()`, `fieldagent checkin
   registry write failed (the signal is then the only stop left), so a domain with
   many failed writes can take longer: up to the deadline for each of them. Only
   the status line and headers are read, never the body. Each signal has its own
-  client, and every connect, handshake, read and write ends at the deadline, so
-  an endpoint that keeps sending is cut off and holds nothing a later signal
-  needs. Outside that bound: a name lookup, and a connect that tries several
-  addresses; the kill-switch stops waiting at the deadline either way, and such
-  a request ends in its own background thread. The registry write that stops the
+  client; no connect, handshake, read or write starts after the deadline, and
+  each is given at most the time left, so an endpoint that keeps sending is cut
+  off and holds nothing a later signal needs. Outside that bound: a write already
+  started (it is sent in pieces, each with the same timeout), a name lookup, and a
+  connect that tries several addresses; the kill-switch stops waiting at the
+  deadline either way, and such a request ends in its own background thread. The registry write that stops the
   agent never waits on the signal's outcome.
 - **The allowlist gates the HOST, not the path or the method.** Naming a
   host there permits any path and any method the manifest declares on it.

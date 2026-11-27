@@ -1,9 +1,11 @@
-"""A wall-clock deadline on every socket operation of one outbound request.
+"""A wall-clock deadline over the socket operations of one outbound request.
 
 httpx's timeout is per phase and restarts on every chunk received, so an endpoint that keeps sending a byte inside it
-holds the connection for as long as it likes. Here each connect, TLS handshake, read and write is given at most the time
-left until the deadline, and fails once it has passed: the request ends and its connection is closed. Not bounded by
-this: the name lookup, and a connect that tries several addresses (each gets what was left when it began)."""
+holds the connection for as long as it likes. Here no connect, TLS handshake, read or write starts after the deadline,
+and each is given at most the time left until it as its timeout, so an endpoint that keeps sending is cut off at the
+deadline. Not bounded by this: a write already started (the library sends it in pieces and gives every piece the same
+timeout, so a peer that takes a little at a time can hold it past the deadline); the name lookup; and a connect that
+tries several addresses (each gets what was left when it began)."""
 from __future__ import annotations
 
 import time
