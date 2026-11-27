@@ -43,7 +43,8 @@ credentials.
 
 `/health` field `endpoint_deadline_unbound` counts halt signals whose HTTP client could not take the socket
 deadline (the library changed shape): the kill-switch still stops waiting at the deadline, but the request itself
-is then not cut off. Anything above 0 needs attention.
+is then not cut off. Anything above 0 needs attention. No monitor rule reads this field yet:
+in the watch hour after a deploy, read it from `/health` by eye.
 
 **Self-call guard (mandatory, two mechanisms).** Every manifest this service
 can resolve today points back at its own `/kill/{agent}`, so without a guard a
