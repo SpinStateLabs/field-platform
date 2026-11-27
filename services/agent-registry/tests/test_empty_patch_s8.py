@@ -3,8 +3,8 @@
 `{}` built an empty column list, skipped the UPDATE (updated_at did not move) and still appended
 `registry.updated {"fields": []}` and answered 200: audit noise that looks like a change. AgentUpdate now refuses a patch that
 sends no field other than the condition (a named message, no echo). A field sent as an explicit null counts as sent and is
-accepted as before; per-field omission stays allowed, and a patch equal to the current values is a real write that still
-moves updated_at."""
+accepted, changing nothing and writing no ledger row; per-field omission stays allowed, and a patch equal to the current
+values is a real write that still moves updated_at."""
 
 import time
 
@@ -62,8 +62,7 @@ def test_an_explicit_null_is_a_field_sent_accepted_and_changes_no_column(registr
     before = client.get("/agents/invoicing-agent").json()
     r = client.patch("/agents/invoicing-agent", json=body)
     assert r.status_code == 200 and r.json() == before            # updated_at included
-    # as before this rule: the accepted patch is ledgered with no field named
-    assert ledger.events == [("registry.updated", {"fields": []}, "invoicing-agent")]
+    assert ledger.events == []                                    # nothing changed: no registry.updated row
 
 
 def test_the_model_refuses_the_empty_patch_directly():
@@ -127,4 +126,11 @@ def test_an_explicit_null_with_a_condition_is_a_patch_200_when_it_matches_412_wh
     r = client.patch("/agents/invoicing-agent", json={"manifest_ref": None, "if_updated_at": seen})
     assert r.status_code == (412 if stale else 200)
     assert client.get("/agents/invoicing-agent").json() == before   # a null changes no column, updated_at included
-    assert ledger.events == ([] if stale else [("registry.updated", {"fields": []}, "invoicing-agent")])
+    assert ledger.events == []                                      # accepted or refused, no registry.updated row
+
+
+def test_a_null_beside_a_real_field_is_still_ledgered_with_that_field_only(registry):
+    client, ledger = registry
+    r = client.patch("/agents/invoicing-agent", json={"name": None, "domain": "ops"})
+    assert r.status_code == 200 and r.json()["domain"] == "ops"
+    assert ledger.events == [("registry.updated", {"fields": ["domain"]}, "invoicing-agent")]
