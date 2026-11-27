@@ -7,7 +7,7 @@ from conftest import KEY, config_for
 from field_mcp import catalog, client as cl
 from field_mcp.tools import Dispatcher, build_specs
 
-SURFACE_SHA256 = "cbbcdb94fbde0a1808c481961178863061107ec4abc60ae4b075587bb672c999"
+SURFACE_SHA256 = "f01949d6397f072207fbf2e6dd7854e01a0c6f5f364cfde36173635bacb33bc4"
 
 
 def disp(stub, *svcs):
