@@ -5,8 +5,11 @@ Now one spelling is accepted: the exact standard, padded base64 `sign_manifest` 
 from __future__ import annotations
 
 import base64
+import hashlib
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from field_core.signing import generate_keypair, sign_manifest, verify_manifest
 
@@ -47,11 +50,27 @@ def test_the_same_signature_in_another_spelling_is_refused(signed, spell):
     assert verify_manifest(DATA, spell(sig), pub) is False
 
 
-def test_a_url_safe_spelling_is_refused(signed):
-    sig, pub = signed
+def _signed_with_both_url_unsafe_characters() -> tuple[str, str]:
+    """A signature of DATA that holds both '+' and '/', with its public key. The keys come from a fixed list of seeds and
+    Ed25519 signatures are deterministic, so every run takes the same signature."""
+    for n in range(64):
+        private = Ed25519PrivateKey.from_private_bytes(hashlib.sha256(b"strict-b64 test key %d" % n).digest())
+        private_pem = private.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                            serialization.NoEncryption()).decode("ascii")
+        sig = sign_manifest(DATA, private_pem)
+        if "+" in sig and "/" in sig:
+            public_pem = private.public_key().public_bytes(serialization.Encoding.PEM,
+                                                           serialization.PublicFormat.SubjectPublicKeyInfo)
+            return sig, public_pem.decode("ascii")
+    raise AssertionError("no seed in the list gives a signature with both '+' and '/'")
+
+
+def test_a_url_safe_spelling_is_refused():
+    sig, pub = _signed_with_both_url_unsafe_characters()
+    assert "+" in sig and "/" in sig
+    assert verify_manifest(DATA, sig, pub) is True      # the standard spelling of this very signature verifies
     urlsafe = base64.urlsafe_b64encode(base64.b64decode(sig)).decode("ascii")
-    if urlsafe == sig:                          # this signature has no '+' or '/': nothing to distinguish
-        pytest.skip("signature has no URL-unsafe characters")
+    assert urlsafe != sig and "-" in urlsafe and "_" in urlsafe
     assert verify_manifest(DATA, urlsafe, pub) is False
 
 
