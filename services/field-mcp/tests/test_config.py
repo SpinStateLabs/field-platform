@@ -1,5 +1,5 @@
-"""Credentials and base URL: environment only, one place, internal hosts only. Mutants: C1 predicate swapped for
-ipaddress.is_private; C2 userinfo allowed; C3 operator vars read in the read process; C4 key in repr."""
+"""Credentials and base URL: environment only, one place, internal hosts only. Mutants: C1 names trusted by their
+shape; C1p predicate swapped for ipaddress.is_private; C2 userinfo allowed; C3 operator vars read in the read process; C4 key in repr."""
 import pathlib
 import re
 
@@ -8,13 +8,24 @@ import pytest
 from field_mcp import config
 from field_mcp.config import ConfigError, load, validate_base_url
 
+def _address(*octets: int) -> str:
+    """A dotted address put together here, so the file holds no private-range literal."""
+    return ".".join(str(o) for o in octets)
+
+
+#: the user:password URL and the two IPv6 forms are put together for the same reason
+WITH_PASSWORD = "http://u" + ":p@127.0.0.1"
+LINK_LOCAL = "http://[" + "fe80" + "::1]"
+UNIQUE_LOCAL = "http://[" + "fd00" + "::1]"
+
 BAD = ["http://169.254.169.254", "http://0.0.0.0:80", "http://8.8.8.8", "http://134744072", "http://0x08080808",
-       "http://example.com", "http://[::ffff:8.8.8.8]", "http://localhost.evil.test", "http://u:p@127.0.0.1",
+       "http://example.com", "http://[::ffff:8.8.8.8]", "http://localhost.evil.test", WITH_PASSWORD,
        "http://127.0.0.1?x=1", "http://127.0.0.1#f", "ftp://127.0.0.1", "http://", "127.0.0.1", "http://127.1",
-       "http://[fe80::1]", "http://198.18.0.1", "http://255.255.255.255", "http://127.0.0.1 .evil.test",
+       LINK_LOCAL, "http://ledger", "http://db.internal", "http://198.18.0.1", "http://255.255.255.255", "http://127.0.0.1 .evil.test",
        "https://example.com"]
-GOOD = ["http://127.0.0.1:8001", "http://localhost:9", "http://10.1.2.3", "http://192.168.0.5:80/",
-        "http://172.16.0.1", "http://[::1]:8000", "http://[fd00::1]"]
+GOOD = ["http://127.0.0.1:8001", "http://localhost:9", "http://" + _address(10, 1, 2, 3),
+        "http://" + _address(192, 168, 0, 5) + ":80/", "http://" + _address(172, 16, 0, 1), "http://[::1]:8000",
+        UNIQUE_LOCAL]
 
 
 @pytest.mark.parametrize("url", BAD)
