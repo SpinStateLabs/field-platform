@@ -201,9 +201,10 @@ class AgentUpdate(BaseModel):
 
     @model_validator(mode="after")
     def _at_least_one_field(self) -> "AgentUpdate":
-        """S8-15: a patch that edits nothing wrote no row yet was ledgered as ``registry.updated`` with no fields.
-        ``if_updated_at`` is a condition on the write, not a field to change, so alone it edits nothing."""
-        if all(getattr(self, f) is None for f in type(self).model_fields if f != "if_updated_at"):
+        """S8-15: a patch that sends no field wrote no row yet was ledgered as ``registry.updated`` with no fields.
+        ``if_updated_at`` is a condition on the write, not a field, so alone it is empty too. A field sent as an
+        explicit null counts as sent: such a patch is accepted, as before."""
+        if not self.model_fields_set - {"if_updated_at"}:
             raise ValueError("a patch must carry at least one field to change")
         return self
 
