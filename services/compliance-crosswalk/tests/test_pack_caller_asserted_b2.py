@@ -38,9 +38,8 @@ FORGED = {
     "tokens": [{"token_id": "t1", "revoked": True}],
     "governor_cap": {"cap": 10},
 }
-#: controls whose positive verdict reads one of the sources above (or the "something was collected" rule)
-SOURCE_BACKED = {"FC-R-01", "FC-I-01", "FC-L-01", "FC-E-01", "FC-E-02", "FC-D-01", "FC-D-02",
-                 "FC-E-03", "FC-F-01", "FC-L-02"}
+#: controls whose positive verdict reads one of the sources above (the declared-only controls read none: B3)
+SOURCE_BACKED = {"FC-R-01", "FC-I-01", "FC-L-01", "FC-E-01", "FC-E-02", "FC-D-01", "FC-D-02"}
 
 
 def resolved_manifest():

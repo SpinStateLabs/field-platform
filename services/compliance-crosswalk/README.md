@@ -87,7 +87,7 @@ is used as-is.
 | Column | Meaning |
 |---|---|
 | **Declared** | The manifest states it (placeholders count as *not* declared) |
-| **Evidenced** | A live platform artifact demonstrates it (✓/✗), or `—` if evidence wasn't collected |
+| **Evidenced** | A live platform artifact demonstrates it (✓/✗), `—` if evidence wasn't collected, or `declared only` where no artifact is read for the control (FC-E-03, FC-F-01, FC-L-02) |
 
 Declared ≠ evidenced is the honesty line, in table form.
 
@@ -284,6 +284,7 @@ detects **content change (normalised text), not semantics**.
 | No citation can ship without a reference, source URL and retrieval date | **Enforced in code** | adversarial guard test on the mapping table (checks the form only, not that the passage says what the note says) |
 | Placeholder values never count as declared | **Enforced in code** | REPLACE-ME detection |
 | Evidence verdicts come from real artifacts | **Enforced in code** | ledger verify / event counts / tokens / caps; broken chain ⇒ FC-L-01 ✗ |
+| A declaration is never reported as evidence | **Enforced in code** | FC-E-03, FC-F-01 and FC-L-02 are `evidenced: null` on every run; a declared one is listed in `declared_only`, shown as "declared only" and named under the gaps section (`test_declared_only_b3.py`) |
 | `POST /pack` body `sources` never count as evidence on the caller's word, and never hide a live finding | **Enforced in code** | every row starts from this run's live evaluation, and a live verdict always stands: evidenced, failed, and FC-L-01 `not-checked`. Body sources only fill a row the live run had nothing on: a caller positive reads `caller-asserted` (evidenced null) with a `caller-asserted` gap, and a caller negative reads failed with a `not-evidenced` gap. `evidence_status` is `caller-asserted` when the body names a source. A body that names none (`{}`) asserts nothing. With an `agent_id` the route always collects live, body sources or not (Backlog B2 and review F1: `test_pack_caller_asserted_b2.py`, incl. `test_f1_live_failed_verify_with_an_empty_body_is_a_gap_not_no_gaps`, `test_f1_partial_outage_keeps_the_not_checked_gap_with_an_empty_body`, `test_f1_live_false_beats_caller_true`) |
 | A pack whose live collection got no answer at all never headlines "No gaps" | **Enforced in code** | a non-empty `agent_id` given and no service answered (whatever the body sources hold) ⇒ `evidence_status: unknown`, the UNKNOWN headline and the FC-L-01 `not-checked` gap, on the HTTP and CLI paths (Backlog B2, `test_full_outage_with_agent_id_is_unknown_not_no_gaps`, `test_full_outage_is_unknown_on_the_cli_path_too`) |
 | Body `sources` are what the caller actually observed | **Declared only** | nothing authenticates the caller's evidence; it is printed as caller-asserted and only a live collection can confirm a verdict (B2) |
@@ -316,12 +317,14 @@ detects **content change (normalised text), not semantics**.
 - Evidence collection is point-in-time and best-effort (offline runs mark
   every control's evidence as not collected).
 - FC-F-01 and FC-L-02 are declaration-only in this service: `engine._evidenced` returns
-  "declaration-only control in v0.1" for both, and `EvidenceSources` has no federation or retention
+  "declared only: no evidence artifact is read for this control" for both, and `EvidenceSources` has no federation or retention
   field, so neither the federation broker's crossing events nor the ledger's retention check
   (`GET /retention/check`, built 2026-09-13, `field_core.clients.LedgerClient.retention_check`) is
   read here. The ledger has retention rotation, apply and check built (`sealed-ledger` `POST /rotate`,
   `POST /retention/apply`, `GET /retention/check`); this crosswalk does not evidence it, and says so
   rather than claim it.
+- FC-E-03 (the irreversible-action policy) is declared only too: escalation events show that a trigger fired, not that
+  the policy holds. Their counts are printed in the detail when event counts were read, and change no verdict.
 - FC-E-04, FC-E-05 and FC-E-06 (ADR-0074) cover the manifest keys the Claude Code
   Enforcement Gate enforces on the developer host: `enforcement.irreversible_actions`
   (E3/E5), `enforcement.protected_paths` (E2), the `tool_call` / `session` entry of
@@ -332,8 +335,8 @@ detects **content change (normalised text), not semantics**.
   FC-E-05 and FC-E-06 cites anything yet; every entry is pending (pending-text, or pending-purchase for ISO 42001).
   **Consequence for existing manifests:** the three keys are optional and only a Claude Code-governed
   agent sets them, so every other manifest now shows 10/13 declared (was 10/10), the evidence pack
-  lists three new `not-declared` gaps, and a healthy estate tops out at 10/13 evidenced (the three can
-  never be evidenced from the estate). That is the ADR's intent (a missing control under-states
+  lists three new `not-declared` gaps, and a healthy estate tops out at 7/13 evidenced (those three,
+  and the declared-only FC-E-03, FC-F-01 and FC-L-02, are never evidenced). That is the ADR's intent (a missing control under-states
   coverage) but it changes every pack; read "not declared" on these rows as "not governed by the gate".
 - **OSFI refuses this client today.** The first live run (2026-09-13, from
   the build laptop) got HTTP 403 from the OSFI E-23 page for `User-Agent:

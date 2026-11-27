@@ -70,6 +70,8 @@ class CoverageReport(BaseModel):
     declared_count: int
     evidenced_count: int
     evidence_collected: bool
+    #: declared controls for which no evidence artifact is read: neither evidenced nor a gap
+    declared_only: list[str] = []
     citation_status: str = (
         "Citations are source-grounded: each cited entry names the verified "
         "reference, source URL, and retrieval date (see INGESTION_LOG). "
@@ -116,6 +118,13 @@ LEDGER_NOT_CHECKED_GAP = (
 )
 GATE_NOTE_UNDECLARED = ("not declared in the manifest, so the Claude Code gate enforces nothing for this key "
                         "(a manifest that is not governed by the gate legitimately omits it); no estate evidence")
+
+
+#: Controls that rest on the manifest declaration: this service reads no artifact that shows they hold. They are never
+#: evidenced and never failed (``evidenced`` None); a declared one is listed in ``CoverageReport.declared_only``.
+DECLARED_ONLY_CONTROL_IDS = ("FC-E-03", "FC-F-01", "FC-L-02")
+DECLARED_ONLY_DETAIL = "declared only: no evidence artifact is read for this control"
+DECLARED_ONLY_UNDECLARED = "not declared in the manifest; no evidence artifact is read for this control"
 
 
 def _gate_declared(control: Control, manifest: dict[str, Any]) -> tuple[bool, str] | None:
@@ -167,6 +176,16 @@ def _evidenced(
         # None, not True: the estate holds no evidence for the gate, and not False: an absent
         # artifact the estate never receives is not a failed check (no evidence-pack gap).
         return None, GATE_NOTE
+    if control.control_id in DECLARED_ONLY_CONTROL_IDS:
+        # FC-E-03's escalation events show that the trigger fired, not that the policy holds: counted for the reader,
+        # never a verdict. No count is printed when no event counts were read (an unread ledger is not a zero).
+        events = sources.ledger_event_types
+        if control.control_id == "FC-E-03" and events is not None:
+            n = events.get("conformance.escalate", 0)
+            s = events.get("conformance.shadow_escalate", 0)
+            return None, (f"declared only; {n} enforced + {s} shadow (log-only) escalation event(s) observed; "
+                          "no evidence artifact shows the policy holds")
+        return None, DECLARED_ONLY_DETAIL
     collected = any(
         getattr(sources, f) is not None for f in EvidenceSources.model_fields
     )
@@ -216,15 +235,8 @@ def _evidenced(
         revoked = sum(1 for t in (sources.tokens or []) if t.get("revoked") is True)
         ok = n > 0 or revoked > 0
         return ok, f"{n} revoke event(s), {revoked} revoked token(s)"
-    if control.control_id == "FC-E-03":
-        # Shadow escalates (log-only estates) evidence the trigger firing;
-        # they are counted separately because no human was actually paused.
-        n = events.get("conformance.escalate", 0)
-        s = events.get("conformance.shadow_escalate", 0)
-        return True, (f"declared policy; {n} enforced + {s} shadow "
-                      f"(log-only) escalation event(s) observed")
-    # FC-F-01, FC-L-02: declaration-only controls in v0.1 (FC-E-04..06 return earlier, unevidenced)
-    return True, "declaration-only control in v0.1"
+    # a control with no rule above has nothing to read: never evidenced by default
+    return None, DECLARED_ONLY_DETAIL
 
 
 def evaluate(
@@ -240,6 +252,8 @@ def evaluate(
         evidenced, evidence_detail = _evidenced(control, sources, agent_id)
         if control.control_id in GATE_CONTROL_IDS and not declared:
             evidence_detail = GATE_NOTE_UNDECLARED  # never say "enforced" for a key the manifest does not declare
+        if control.control_id in DECLARED_ONLY_CONTROL_IDS and not declared:
+            evidence_detail = DECLARED_ONLY_UNDECLARED  # never say "declared only" for an undeclared key
         coverages.append(
             ControlCoverage(
                 control_id=control.control_id,
@@ -265,6 +279,8 @@ def evaluate(
         declared_count=sum(1 for c in coverages if c.declared),
         evidenced_count=sum(1 for c in coverages if c.evidenced),
         evidence_collected=evidence_collected,
+        declared_only=[c.control_id for c in coverages
+                       if c.control_id in DECLARED_ONLY_CONTROL_IDS and c.declared],
     )
 
 
@@ -291,6 +307,14 @@ def coverage_gaps(report: CoverageReport) -> list[dict[str, Any]]:
     return gaps
 
 
+def declared_only_note(report: CoverageReport) -> str:
+    """The sentence that goes with any headline when a declared control has no evidence behind it; "" when none."""
+    if not report.declared_only:
+        return ""
+    return (f"Declared only (the manifest declares it and no evidence artifact is read, so it is neither evidenced "
+            f"nor a gap): {', '.join(report.declared_only)}.")
+
+
 def render_markdown(report: CoverageReport) -> str:
     lines: list[str] = []
     add = lines.append
@@ -299,7 +323,8 @@ def render_markdown(report: CoverageReport) -> str:
     add(f"*Generated:* {report.generated_at} · *Manifest valid:* "
         f"{'yes' if report.manifest_valid else 'NO'}")
     add(f"*Coverage:* {report.declared_count}/{len(report.controls)} declared · "
-        f"{report.evidenced_count}/{len(report.controls)} evidenced"
+        f"{report.evidenced_count}/{len(report.controls)} evidenced · "
+        f"{len(report.declared_only)}/{len(report.controls)} declared only"
         + ("" if report.evidence_collected else " (evidence not collected)"))
     add("")
     add(f"> **Citation status:** {report.citation_status}")
@@ -309,6 +334,8 @@ def render_markdown(report: CoverageReport) -> str:
     for c in report.controls:
         # B7: an unanswered /verify is "✗" (not verified), never the "—" of a run that collected nothing
         evidenced = ("✗" if _not_checked(c) else "—") if c.evidenced is None else ("✓" if c.evidenced else "✗")
+        if c.control_id in report.declared_only:
+            evidenced = "declared only"
         add(
             f"| {c.control_id} | {c.letter} | {c.statement} | "
             f"{'✓' if c.declared else '✗'} | {evidenced} | {c.evidence_detail} |"
@@ -326,6 +353,9 @@ def render_markdown(report: CoverageReport) -> str:
         add("No gaps recorded on this run: every control is declared, and no collected evidence check failed.")
     else:
         add("No declaration gaps.")
+    if report.declared_only:
+        add("")
+        add(declared_only_note(report))
     if not report.evidence_collected:
         add("")
         add("Evidence was not collected (offline run): every \"—\" above is an unknown, not a pass.")

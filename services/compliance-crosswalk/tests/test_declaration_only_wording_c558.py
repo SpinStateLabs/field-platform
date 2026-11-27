@@ -32,7 +32,9 @@ def test_both_controls_are_evidenced_as_declaration_only_even_with_every_source_
     report = evaluate({}, sources=sources)
     rows = {c.control_id: c for c in report.controls}
     for control_id in ("FC-F-01", "FC-L-02"):
-        assert rows[control_id].evidence_detail == "declaration-only control in v0.1", control_id
+        assert rows[control_id].evidenced is None, control_id
+        expected = ("not declared in the manifest; no evidence artifact is read for this control")
+        assert rows[control_id].evidence_detail == expected, control_id
 
 
 def test_the_mapping_says_declaration_only_and_no_longer_says_enforcement_is_not_built():
@@ -46,7 +48,7 @@ def test_the_mapping_says_declaration_only_and_no_longer_says_enforcement_is_not
 def test_the_readme_names_the_code_behind_the_statement_and_drops_the_stale_phrases():
     assert "no retention enforcement" not in FLAT and "no federation events until Phase 4" not in FLAT
     assert "The enforcement exists in the platform" not in FLAT          # no assurance word (C-612 F-C612-1)
-    for needle in ("`engine._evidenced`", '"declaration-only control in v0.1"',
+    for needle in ("`engine._evidenced`", '"declared only: no evidence artifact is read for this control"',
                    "`EvidenceSources` has no federation or retention field",
                    "`GET /retention/check`", "`field_core.clients.LedgerClient.retention_check`",
                    "The ledger has retention rotation, apply and check built",
@@ -56,8 +58,8 @@ def test_the_readme_names_the_code_behind_the_statement_and_drops_the_stale_phra
 
 def test_the_string_the_readme_quotes_is_the_one_the_engine_returns():
     engine_src = (Path(__file__).resolve().parents[1] / "src" / "compliance_crosswalk" / "engine.py").read_text(encoding="utf-8")
-    assert 'return True, "declaration-only control in v0.1"' in engine_src
-    assert 'returns "declaration-only control in v0.1" for both' in FLAT
+    assert 'DECLARED_ONLY_DETAIL = "declared only: no evidence artifact is read for this control"' in engine_src
+    assert 'returns "declared only: no evidence artifact is read for this control" for both' in FLAT
 
 
 def test_the_ledger_routes_the_readme_names_exist_in_the_sealed_ledger_source():
