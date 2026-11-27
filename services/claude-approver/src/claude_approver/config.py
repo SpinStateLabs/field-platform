@@ -195,19 +195,20 @@ _NUMERIC_HOST = re.compile(r"[0-9]+|0x[0-9a-f]*")
 
 def env_url_secret_ok(url: str) -> bool:
     """May the shared secret travel to ``url``, built from a ``FIELD_*_URL`` value? https, or http to what
-    ``_cleartext_ok`` accepts, or to a single-label host name (a service name on the stack's own network). The URL
-    is read with the parser that sends the request; one it cannot read is refused."""
+    ``_cleartext_ok`` accepts, or to a single-label host name (a service name on the stack's own network) written
+    without a trailing dot: with one it is an absolute name, which skips the network's search path and may be looked
+    up publicly. The URL is read with the parser that sends the request; one it cannot read is refused."""
     try:
         parsed = httpx.URL(url)
         if parsed.scheme == "https":
             return True
         if parsed.scheme != "http":
             return False
-        host = parsed.raw_host.decode("ascii").lower().removesuffix(".")
+        host = parsed.raw_host.decode("ascii").lower()
     except Exception:
         return False
-    if _cleartext_ok(host):
-        return not host.endswith(".")
+    if _cleartext_ok(host.removesuffix(".")):    # one trailing dot is fine on localhost, a loopback address or .test
+        return not host.endswith("..")
     return bool(_SINGLE_LABEL.fullmatch(host)) and not _NUMERIC_HOST.fullmatch(host)
 
 
