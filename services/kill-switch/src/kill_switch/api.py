@@ -367,6 +367,7 @@ def new_endpoint_client(deadline: float | None = None) -> Any:
         from kill_switch.endpoint_deadline import bound_client
 
         if not bound_client(client, deadline):
+            client.field_deadline_unbound = True     # counted per signal: /health endpoint_deadline_unbound
             log.warning("halt-signal deadline could not be set on the HTTP client; only the caller's wait is bounded")
     return client
 
@@ -609,6 +610,7 @@ def create_app(
 
     app.state.ledger_note_failures = _GapCounter()    # rows whose first append failed
     app.state.ledger_rows_lost = _GapCounter()        # of those, the rows that were not written at all
+    app.state.endpoint_deadline_unbound = _GapCounter()  # halt signals whose client could not take the socket deadline
     # Per-agent bookkeeping of REAL kills that went through THIS process (R-PR1025 drill restore race): a generation
     # counter bumped when a kill begins and ends, and the number of kills in flight. It is the in-process FIRST line:
     # a drill refuses to start while a kill is in flight and skips its restore when the generation moved. The real
@@ -693,6 +695,8 @@ def create_app(
             try:
                 if client is None:
                     client, own = new_endpoint_client(deadline), True
+                    if getattr(client, "field_deadline_unbound", False):
+                        app.state.endpoint_deadline_unbound.add()
                 if hasattr(client, "stream"):
                     with client.stream(method, endpoint, headers=headers, timeout=ENDPOINT_TIMEOUT_S) as resp:
                         box["resp"] = resp
@@ -987,6 +991,7 @@ def create_app(
                 "build_sha": build_sha(),
                 "ledger_note_failures": app.state.ledger_note_failures.value,
                 "ledger_rows_lost": app.state.ledger_rows_lost.value,
+                "endpoint_deadline_unbound": app.state.endpoint_deadline_unbound.value,
                 "heartbeats_refused": app.state.heartbeats_refused.value,
                 "heartbeat_ids_refused": app.state.heartbeat_ids_refused.value,
                 "allowlist_entries_unusable": _allowlist_unusable(),

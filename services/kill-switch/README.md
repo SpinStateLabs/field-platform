@@ -41,6 +41,10 @@ host names or IP literals (`::1`, not `[::1]`). The endpoint URL is **never** ec
 the report or the ledger — host only, because a manifest URL can carry
 credentials.
 
+`/health` field `endpoint_deadline_unbound` counts halt signals whose HTTP client could not take the socket
+deadline (the library changed shape): the kill-switch still stops waiting at the deadline, but the request itself
+is then not cut off. Anything above 0 needs attention.
+
 **Self-call guard (mandatory, two mechanisms).** Every manifest this service
 can resolve today points back at its own `/kill/{agent}`, so without a guard a
 kill recurses. Both are implemented: the outbound call carries

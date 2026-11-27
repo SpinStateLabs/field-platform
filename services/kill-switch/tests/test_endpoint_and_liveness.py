@@ -1356,3 +1356,43 @@ def test_no_operation_starts_after_the_deadline():
         DeadlineStream(Inner(), time.monotonic() - 0.01).read(1, 2.0)
     with pytest.raises(httpcore.WriteTimeout):
         DeadlineStream(Inner(), time.monotonic() - 0.01).write(b"x", 2.0)
+
+
+def test_the_deadline_hook_is_checked_against_exactly_the_pinned_library_versions():
+    """The hook relies on a private attribute of the HTTP library, so the shape test above must run on the versions the
+    images install: a constraints bump runs it on the new ones, and a changed shape fails it."""
+    from importlib.metadata import version
+    from pathlib import Path
+
+    pins = {}
+    for line in (Path(__file__).resolve().parents[3] / "integration" / "constraints.txt").read_text("utf-8").splitlines():
+        name, eq, pinned = line.split("#", 1)[0].strip().partition("==")
+        if eq:
+            pins[name] = pinned.strip()
+    assert {name: version(name) for name in ("httpx", "httpcore")} == {name: pins[name] for name in ("httpx", "httpcore")}
+    client = kill_api.new_endpoint_client(time.monotonic() + 1)
+    try:
+        assert getattr(client, "field_deadline_unbound", False) is False
+        assert client._transport._pool._network_backend.__class__.__name__ == "DeadlineBackend"
+    finally:
+        client.close()
+
+
+def test_a_client_that_cannot_take_the_deadline_is_counted_on_health(tmp_path, monkeypatch):
+    from kill_switch import endpoint_deadline
+
+    monkeypatch.setenv("FIELD_KILL_ENDPOINT_ALLOWLIST", "127.0.0.1")
+    stack = Stack(tmp_path)
+    stack.kill.app.state.endpoint_client = None
+    closed = socket.socket()
+    closed.bind(("127.0.0.1", 0))
+    port = closed.getsockname()[1]
+    closed.close()                                           # nothing listens: the signal fails at once
+    stack.with_endpoint("gone-agent", f"http://127.0.0.1:{port}/halt")
+    stack.kill.post("/kill/gone-agent", json=OP)
+    assert stack.kill.get("/health").json()["endpoint_deadline_unbound"] == 0
+    monkeypatch.setattr(endpoint_deadline, "bound_client", lambda client, deadline: False)
+    for n in (1, 2):
+        r = stack.kill.post("/kill/gone-agent", json=OP)
+        assert r.status_code == 200 and r.json()["endpoint_result"]["outcome"] == "failed"
+        assert stack.kill.get("/health").json()["endpoint_deadline_unbound"] == n
