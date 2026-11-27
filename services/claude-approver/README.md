@@ -115,9 +115,26 @@ included, -> its own name, which the sentinel BLOCKs `D.scope` unless it is in s
 `<base>/sentinel`, `<base>/killswitch`, `<base>/governor` with `x-field-auth` read from
 `secret_file` on every request (each sentinel, heartbeat and usage call; absent `secret_file` =
 no perimeter header for that estate). The URL must not carry credentials (`user:pass@`): such an
-entry is unusable and its calls are denied, because httpx logs request URLs. Without
+entry is unusable and its calls are denied, because httpx logs request URLs. With a `secret_file` the URL must be
+https (http is accepted only to a loopback address, `localhost`, or a `.test` / `.localhost` name), because the secret
+travels as `x-field-auth` on every call: any other http URL makes the entry unusable and its calls are denied, without
+echoing the URL; so does a URL the sending client cannot read. Here too a trailing dot is accepted on `localhost` only.
+http without a `secret_file` is unchanged. Without
 it the env URLs and `field_core.authn.auth_headers()` apply (the GB10 stack). Structural garbage
 (invalid JSON, not an object) empties the whole map: nothing is touched, `/stats` says why.
+
+**The env URLs and the shared secret.** When `FIELD_SHARED_SECRET` is set, a request built from `FIELD_SENTINEL_URL`,
+`FIELD_KILLSWITCH_URL` or `FIELD_GOVERNOR_URL` is sent only over https, or over http to a loopback address,
+`localhost`, a `.test` / `.localhost` name, or a single-label host name (no dot, such as a compose service name).
+A trailing dot is accepted on `localhost` only; any other host written with one is refused, because such a name is
+absolute and skips the search path. A
+provider's private DNS names that contain a dot (such as `.internal`) are refused too, so running the approver where
+services are reached by such names needs a change to this rule. Any other http URL, including a number written in
+place of an address, is not called: the tool call is denied and the heartbeat and usage post are counted as
+failures, with fixed text that does not echo the URL. A misconfigured env URL therefore fails every heartbeat, and
+where the kill-switch deadman is on for an agent, that agent is halted: this fails closed on purpose. What stays open: a
+single-label name is resolved through the container's DNS search path, which the estate's operator controls, and an
+HTTP proxy set in the process environment receives plain-http requests unless `NO_PROXY` names the host.
 
 ## Running it on the GB10 (pilot S2; nothing armed by this change)
 
