@@ -50,6 +50,9 @@ def _main(tier: int) -> None:
     except ConfigError as exc:
         print(f"field-mcp: {exc}", file=sys.stderr)    # fixed text naming a variable, never a value
         raise SystemExit(2) from None
+    if tier > 1:
+        print("field-mcp: Tier 2 tools are not in this build", file=sys.stderr)
+        raise SystemExit(2)
     anyio.run(_serve, build_server(build_dispatcher(cfg)))
 
 
@@ -59,10 +62,4 @@ def main_read() -> None:
 
 def main_write() -> None:
     """Tier 2 is not in this build: this entry point exists so the switch is reviewed now, and refuses to start."""
-    try:
-        load(2)
-    except ConfigError as exc:
-        print(f"field-mcp: {exc}", file=sys.stderr)
-        raise SystemExit(2) from None
-    print("field-mcp: Tier 2 tools are not in this build", file=sys.stderr)
-    raise SystemExit(2)
+    _main(2)
