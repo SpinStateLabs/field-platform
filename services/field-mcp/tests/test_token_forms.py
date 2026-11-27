@@ -1,5 +1,5 @@
 """The redaction reads a token id as a dashed UUID. These pins fail if the platform starts writing it another way: the
-mint changes shape, or a service re-encodes an id. A shortened prefix of 8 characters is not the credential and is
+mint changes shape, or a service re-encodes an id. A shortened prefix of 8 characters is
 allowed.
 
 Limit: a source scan sees only code that names ``token_id`` on the same line.
