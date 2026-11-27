@@ -14,9 +14,14 @@ an object to ``close()``).
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import math
 import os
+import socket
+import time
+import uuid
+from pathlib import Path
 
 ENV = "FIELD_TEST_HARNESS_WAIT"
 
@@ -30,6 +35,31 @@ def harness_wait(default: float) -> float:
     if not math.isfinite(value) or value <= 0:
         return float(default)
     return value
+
+
+def new_port_file(directory) -> Path:
+    """A path nothing has written yet, for one start of estate_harness.py with ``0 DATA --port-file PATH``."""
+    return Path(directory) / f"harness-{uuid.uuid4().hex}.port"
+
+
+def port_the_process_took(port_file: Path, proc, deadline: float, what: str = "harness") -> int:
+    """The number a test server wrote after binding port 0 itself (``deadline`` is a ``time.time()`` value)."""
+    while time.time() < deadline:
+        if port_file.exists():
+            return int(port_file.read_text(encoding="ascii"))
+        if proc.poll() is not None:
+            raise RuntimeError(f"{what} exited early: {proc.returncode}")
+        time.sleep(0.1)
+    raise RuntimeError(f"{what} did not come up")
+
+
+@contextlib.contextmanager
+def nothing_listens():
+    """A URL with no server behind it. The port stays bound, without listen(), for as long as it is used, so a
+    connection fails and no other server can take the number."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        yield f"http://127.0.0.1:{s.getsockname()[1]}"
 
 
 def terminate(proc) -> None:

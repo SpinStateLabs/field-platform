@@ -68,12 +68,6 @@ make_fixture = _load("make_fixture")
 upgrade_flow = _load("upgrade_flow")
 
 
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
 def _capture(fn, *args) -> tuple[int, str]:
     out = io.StringIO()
     saved = sys.stdout, sys.stderr
@@ -102,8 +96,6 @@ class UpgradedEstate:
         shutil.rmtree(self.data / "manifests")
         self.manifest_ref = str(self.volume / "upgrade-smoke-agent.yaml")
         self.secret = secrets.token_hex(32)
-        self.port = _free_port()
-        self.base = f"http://127.0.0.1:{self.port}"
         env = dict(os.environ, FIELD_SHARED_SECRET=self.secret, FIELD_BUILD_SHA=BUILD_SHA)
         for var in ("FIELD_DOA_ROSTER", "FIELD_LIFECYCLE_ROSTER"):
             env.pop(var, None)
@@ -111,10 +103,13 @@ class UpgradedEstate:
             env["FIELD_DOA_ROSTER"] = str(self.data / "doa-roster.yaml")
             env["FIELD_LIFECYCLE_ROSTER"] = str(self.data / "owners.csv")
         wait = harness_wait.harness_wait(60)
-        self.proc = subprocess.Popen([sys.executable, str(HARNESS), str(self.port), str(self.data), "--secret"],
-                                     env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        port_file = harness_wait.new_port_file(self.data.parent)
+        self.proc = subprocess.Popen([sys.executable, str(HARNESS), "0", str(self.data), "--secret", "--port-file",
+                                      str(port_file)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         # same knob as test_estate_probe.py: the harness imports every service and is slow on a loaded box
         deadline = time.time() + wait
+        self.port = harness_wait.port_the_process_took(port_file, self.proc, deadline)
+        self.base = f"http://127.0.0.1:{self.port}"
         while time.time() < deadline:
             if self.proc.poll() is not None:
                 raise RuntimeError(f"harness exited early: {self.proc.returncode}")

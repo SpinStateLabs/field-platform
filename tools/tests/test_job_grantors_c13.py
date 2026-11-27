@@ -189,18 +189,16 @@ class JobEstate:
             p = tmp / f"{oid}.key"
             p.write_text(key + "\n", encoding="utf-8")
             self.key_files[oid] = p
-        sock = __import__("socket").socket()
-        sock.bind(("127.0.0.1", 0))
-        self.port = sock.getsockname()[1]
-        sock.close()
-        self.base = f"http://127.0.0.1:{self.port}"
         env = {k: v for k, v in os.environ.items() if not k.startswith("FIELD_")}
         env.update(FIELD_SHARED_SECRET=SECRET, FIELD_DOA_ROSTER=str(self.roster))
         self.env = env
         wait = harness_wait.harness_wait(90)
-        self.proc = subprocess.Popen([sys.executable, str(HARNESS), str(self.port), str(data), "--secret"],
-                                     env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        port_file = harness_wait.new_port_file(data.parent)
+        self.proc = subprocess.Popen([sys.executable, str(HARNESS), "0", str(data), "--secret", "--port-file",
+                                      str(port_file)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         deadline = time.time() + wait
+        self.port = harness_wait.port_the_process_took(port_file, self.proc, deadline)
+        self.base = f"http://127.0.0.1:{self.port}"
         while time.time() < deadline:
             if self.proc.poll() is not None:
                 raise RuntimeError(f"harness exited early: {self.proc.returncode}")

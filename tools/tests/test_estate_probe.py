@@ -45,12 +45,6 @@ RETIRED = "canary-gb10-retired"
 # --- plumbing ---------------------------------------------------------------------
 
 
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
 @contextlib.contextmanager
 def _nothing_listens():
     """A URL with no server behind it. The port stays bound, without listen(), for as long as it is used, so a
