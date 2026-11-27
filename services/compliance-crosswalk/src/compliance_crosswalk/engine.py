@@ -310,8 +310,9 @@ def evaluate(
         declared_count=sum(1 for c in coverages if c.declared),
         evidenced_count=sum(1 for c in coverages if c.evidenced),
         evidence_collected=evidence_collected,
-        declared_only=[c.control_id for c in coverages
-                       if c.control_id in DECLARED_ONLY_CONTROL_IDS and c.declared],
+        # listed in DECLARED_ONLY_CONTROL_IDS order (not the matrix order), so the note reads the same everywhere
+        declared_only=[cid for cid in DECLARED_ONLY_CONTROL_IDS
+                       if any(c.control_id == cid and c.declared for c in coverages)],
         not_answered=list(dict.fromkeys(sources.not_answered)),
     )
 
