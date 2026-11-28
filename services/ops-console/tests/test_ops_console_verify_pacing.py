@@ -147,6 +147,37 @@ def test_callers_arriving_during_a_check_do_not_start_another():
     assert len(calls) == 1 and [a["data"] for a in answers] == [INTACT] * 4
 
 
+def test_a_caller_during_a_later_check_gets_the_last_answer_without_waiting():
+    clock = Clock()
+    pacer, reading, release = VerifyPacer(clock=clock), threading.Event(), threading.Event()
+    pacer.answer(lambda: (200, INTACT, None), str)
+    clock.now += 30                                    # the next check is due
+
+    def slow():
+        reading.set()
+        assert release.wait(10)
+        return 200, BROKEN, None
+
+    def never():
+        raise AssertionError("a second check was started")
+
+    first, second = [], []
+    checker = threading.Thread(target=lambda: first.append(pacer.answer(slow, str)))
+    checker.start()
+    assert reading.wait(10)
+    other = threading.Thread(target=lambda: second.append(pacer.answer(never, str)))
+    other.start()
+    other.join(5)
+    returned_while_checking = not other.is_alive()
+    release.set()
+    checker.join(10)
+    other.join(10)
+    assert returned_while_checking, "the caller waited for the running check"
+    assert second == [{"available": True, "data": INTACT, "error": None}]
+    assert first[0]["data"] == BROKEN
+    assert pacer.answer(never, str)["data"] == BROKEN  # the finished check's answer from then on
+
+
 @pytest.fixture(scope="module")
 def seen(jsdom_dir) -> dict:
     p = subprocess.run(["node", str(HARNESS), str(jsdom_dir), str(HTML_PATH)], capture_output=True, text=True,
