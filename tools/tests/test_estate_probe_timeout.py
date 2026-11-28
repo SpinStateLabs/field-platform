@@ -53,6 +53,9 @@ class SlowProxy:
                         raw, status = resp.read(), resp.status
                 except urllib.error.HTTPError as exc:
                     raw, status = exc.read(), exc.code
+                except urllib.error.URLError:  # no estate to ask: end the request, print nothing
+                    self.close_connection = True
+                    return
                 try:
                     self.send_response(status)
                     self.send_header("Content-Type", "application/json")
@@ -70,7 +73,7 @@ class SlowProxy:
         self.requests = 0
         self.upstream = upstream
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self.server.daemon_threads = True
+        self.server.daemon_threads = False  # server_close() then waits for the handlers still holding an answer
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.base = f"http://127.0.0.1:{self.server.server_address[1]}"
 
@@ -90,6 +93,34 @@ def slow(estate):
 
 def _probe(slow: SlowProxy, *rest: str) -> tuple[int, str]:
     return _run(["--base", slow.base, *rest])
+
+
+# --- the proxy itself leaves nothing behind -----------------------------------------------------------------
+
+
+def _ask(base: str, timeout: float) -> None:
+    with pytest.raises(OSError):
+        urllib.request.urlopen(base + "/x", timeout=timeout)
+
+
+def test_close_waits_for_a_handler_that_is_still_holding_its_answer():
+    proxy = SlowProxy("http://127.0.0.1:1", 0.8)
+    try:
+        _ask(proxy.base, 0.2)          # the client gives up while the handler sleeps
+        assert proxy.requests == 0
+    finally:
+        proxy.close()
+    assert proxy.requests == 1         # the handler had finished sleeping when close() returned
+
+
+def test_an_estate_that_cannot_be_reached_prints_nothing(capsys):
+    proxy = SlowProxy("http://127.0.0.1:1", 0)
+    try:
+        _ask(proxy.base, 10)
+    finally:
+        proxy.close()
+    assert proxy.requests == 1
+    assert capsys.readouterr().err == ""
 
 
 # --- the default ------------------------------------------------------------------------------------------
