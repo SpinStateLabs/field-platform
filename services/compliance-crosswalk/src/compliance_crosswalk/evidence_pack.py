@@ -35,8 +35,10 @@ from typing import Any
 
 from compliance_crosswalk.engine import (
     GAP_LABELS,
+    EVIDENCE_FIELDS,
     LEDGER_NOT_CHECKED_GAP,  # moved to engine (B7); still importable from here, and used for the B2 outage gap
-    LEDGER_VERIFY_NOT_CHECKED,
+    not_answered_note,
+    not_checked,
     REFUSED_CATEGORIES,
     EvidenceSources,
     coverage_gaps,
@@ -169,7 +171,7 @@ def _yes_no(value: bool) -> str:
 
 
 def _any_source(sources: EvidenceSources | None) -> bool:
-    return sources is not None and any(getattr(sources, f) is not None for f in EvidenceSources.model_fields)
+    return sources is not None and any(getattr(sources, f) is not None for f in EVIDENCE_FIELDS)
 
 
 def _caller_asserted_coverage(
@@ -185,7 +187,7 @@ def _caller_asserted_coverage(
     asserted: set[str] = set()
     rows = []
     for row in checked.controls:
-        live_unknown = row.evidenced is None and row.evidence_detail != LEDGER_VERIFY_NOT_CHECKED
+        live_unknown = row.evidenced is None and not not_checked(row)    # "asked, no answer" is a live finding
         said = claimed[row.control_id]
         if live_unknown and said.evidenced is not None:
             detail = one_line(CALLER_ASSERTED_PREFIX + said.evidence_detail)
@@ -244,7 +246,7 @@ def generate_pack(
     else:
         coverage = evaluate(manifest, agent_id=agent_id, sources=sources)
         if _any_source(sources):
-            evidence_status = "collected"
+            evidence_status = "partial" if coverage.not_answered else "collected"
         elif requested:
             evidence_status = "unknown"  # collection was requested (agent_id) and no service answered
         else:
@@ -322,6 +324,9 @@ def generate_pack(
     add("")
     if evidence_status == "unknown":
         add(EVIDENCE_UNKNOWN_HEADLINE + ".")
+        add("")
+    if coverage.not_answered:
+        add(not_answered_note(coverage))
         add("")
     if gaps:
         add(
@@ -409,6 +414,7 @@ def generate_pack(
         ],
         "gaps": gaps,
         "evidence_status": evidence_status,
+        "not_answered": coverage.not_answered,
         "staleness": status,
         "manifest_valid": coverage.manifest_valid,
     }

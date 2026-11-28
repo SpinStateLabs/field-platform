@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unicodedata
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -37,6 +37,18 @@ def one_line(value: Any, limit: int = ONE_LINE_MAX) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
+SourceName = Literal["registry", "ledger events", "delegation", "spend governor"]
+
+#: control -> the sources its verdict reads. FC-L-01 (ledger /verify) has its own rule below.
+_READS: dict[str, tuple[str, ...]] = {
+    "FC-R-01": ("registry",), "FC-I-01": ("registry",), "FC-E-01": ("ledger events",),
+    "FC-E-02": ("spend governor",), "FC-E-03": ("ledger events",), "FC-D-01": ("delegation",),
+    "FC-D-02": ("ledger events", "delegation"),
+}
+UNREAD_PREFIX = "evidence not collected: "
+UNREAD_SUFFIX = " did not answer"
+
+
 class EvidenceSources(BaseModel):
     """Optional live artifacts, gathered by the caller/CLI. None = not collected."""
 
@@ -47,6 +59,13 @@ class EvidenceSources(BaseModel):
     ledger_event_types: dict[str, int] | None = None  # event_type -> count (agent)
     tokens: list[dict[str, Any]] | None = None
     governor_cap: dict[str, Any] | None = None
+    #: B2: the sources live collection asked and got no usable answer from. Not evidence: never counted as collected.
+    #: A source that answered "none" (no record, no cap, an empty list) is not listed.
+    not_answered: list[SourceName] = []
+
+
+#: the source fields that hold evidence
+EVIDENCE_FIELDS = tuple(f for f in EvidenceSources.model_fields if f != "not_answered")
 
 
 class ControlCoverage(BaseModel):
@@ -70,6 +89,8 @@ class CoverageReport(BaseModel):
     declared_count: int
     evidenced_count: int
     evidence_collected: bool
+    #: sources that gave no usable answer on this run (B2); the controls that read them are not checked
+    not_answered: list[str] = []
     citation_status: str = (
         "Citations are source-grounded: each cited entry names the verified "
         "reference, source URL, and retrieval date (see INGESTION_LOG). "
@@ -167,11 +188,14 @@ def _evidenced(
         # None, not True: the estate holds no evidence for the gate, and not False: an absent
         # artifact the estate never receives is not a failed check (no evidence-pack gap).
         return None, GATE_NOTE
-    collected = any(
-        getattr(sources, f) is not None for f in EvidenceSources.model_fields
-    )
+    collected = any(getattr(sources, f) is not None for f in EVIDENCE_FIELDS)
     if not collected:
         return None, "evidence not collected (offline run)"
+    missing = [name for name in _READS.get(control.control_id, ()) if name in sources.not_answered]
+    if missing and not (control.control_id == "FC-D-02" and _revocation_seen(sources)):
+        # a source that did not answer is not a finding: "agent not in registry" or "0 token(s)" would state a fact
+        # nothing read. FC-D-02 still passes on a revocation that was read from the other source.
+        return None, UNREAD_PREFIX + " and ".join(missing) + UNREAD_SUFFIX
     events = sources.ledger_event_types or {}
     if control.control_id == "FC-R-01":
         ok = sources.registry_record is not None
@@ -214,8 +238,10 @@ def _evidenced(
     if control.control_id == "FC-D-02":
         n = events.get("delegation.revoke", 0)
         revoked = sum(1 for t in (sources.tokens or []) if t.get("revoked") is True)
-        ok = n > 0 or revoked > 0
-        return ok, f"{n} revoke event(s), {revoked} revoked token(s)"
+        detail = f"{n} revoke event(s), {revoked} revoked token(s)"
+        if unread := [name for name in _READS["FC-D-02"] if name in sources.not_answered]:
+            detail += f" ({' and '.join(unread)}{UNREAD_SUFFIX})"
+        return _revocation_seen(sources), detail
     if control.control_id == "FC-E-03":
         # Shadow escalates (log-only estates) evidence the trigger firing;
         # they are counted separately because no human was actually paused.
@@ -225,6 +251,11 @@ def _evidenced(
                       f"(log-only) escalation event(s) observed")
     # FC-F-01, FC-L-02: declaration-only controls in v0.1 (FC-E-04..06 return earlier, unevidenced)
     return True, "declaration-only control in v0.1"
+
+
+def _revocation_seen(sources: EvidenceSources) -> bool:
+    return bool((sources.ledger_event_types or {}).get("delegation.revoke", 0) > 0
+                or any(t.get("revoked") is True for t in (sources.tokens or [])))
 
 
 def evaluate(
@@ -265,13 +296,29 @@ def evaluate(
         declared_count=sum(1 for c in coverages if c.declared),
         evidenced_count=sum(1 for c in coverages if c.evidenced),
         evidence_collected=evidence_collected,
+        not_answered=list(dict.fromkeys(sources.not_answered)),
     )
 
 
-def _not_checked(control: ControlCoverage) -> bool:
-    """FC-L-01 with evidence collected but no /verify answer: not checked (neither verified nor failed)."""
+def _source_unread(control: ControlCoverage) -> bool:
+    """A control whose source gave no usable answer on a run that collected something else."""
+    return (control.evidenced is None and control.evidence_detail.startswith(UNREAD_PREFIX)
+            and control.evidence_detail.endswith(UNREAD_SUFFIX))
+
+
+def not_checked(control: ControlCoverage) -> bool:
+    """Asked and not answered: FC-L-01 with no /verify answer, or a control whose source did not answer. Neither
+    verified nor failed, and never silent."""
     return (control.evidenced is None and control.control_id == "FC-L-01"
-            and control.evidence_detail == LEDGER_VERIFY_NOT_CHECKED)
+            and control.evidence_detail == LEDGER_VERIFY_NOT_CHECKED) or _source_unread(control)
+
+
+def not_answered_note(report: CoverageReport) -> str:
+    """The sentence naming what a run could not read; "" when every source asked gave an answer."""
+    if not report.not_answered:
+        return ""
+    return (f"Evidence not collected from: {', '.join(report.not_answered)}. The controls that depend on it were not "
+            f"checked: this is not a pass.")
 
 
 def coverage_gaps(report: CoverageReport) -> list[dict[str, Any]]:
@@ -284,10 +331,12 @@ def coverage_gaps(report: CoverageReport) -> list[dict[str, Any]]:
             gaps.append({"control_id": control.control_id, "kind": "not-declared", "detail": control.declared_detail})
         if control.evidenced is False:
             gaps.append({"control_id": control.control_id, "kind": "not-evidenced", "detail": control.evidence_detail})
-        elif _not_checked(control):
+        elif not_checked(control):
             # don.reviewer C1 (rebuild of PR 1093): not checked is not failed, but it is never silent; a provoked
             # 503 on /verify must not let a report say "No gaps recorded" as it would for a verified chain
-            gaps.append({"control_id": control.control_id, "kind": "not-checked", "detail": LEDGER_NOT_CHECKED_GAP})
+            detail = (f"{control.evidence_detail}, so this control was not checked on this run; this is not a pass: "
+                      "re-run the pack" if _source_unread(control) else LEDGER_NOT_CHECKED_GAP)
+            gaps.append({"control_id": control.control_id, "kind": "not-checked", "detail": detail})
     return gaps
 
 
@@ -308,7 +357,9 @@ def render_markdown(report: CoverageReport) -> str:
     add("|---|---|---|---|---|---|")
     for c in report.controls:
         # B7: an unanswered /verify is "✗" (not verified), never the "—" of a run that collected nothing
-        evidenced = ("✗" if _not_checked(c) else "—") if c.evidenced is None else ("✓" if c.evidenced else "✗")
+        evidenced = ("✗" if not_checked(c) else "—") if c.evidenced is None else ("✓" if c.evidenced else "✗")
+        if _source_unread(c):
+            evidenced = "not read"
         add(
             f"| {c.control_id} | {c.letter} | {c.statement} | "
             f"{'✓' if c.declared else '✗'} | {evidenced} | {c.evidence_detail} |"
@@ -316,6 +367,9 @@ def render_markdown(report: CoverageReport) -> str:
     add("")
     add("## Gaps")
     add("")
+    if report.not_answered:
+        add(not_answered_note(report))
+        add("")
     gaps = coverage_gaps(report)
     if gaps:
         add("Each gap stands until remediated and re-checked:")
