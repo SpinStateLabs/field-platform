@@ -352,3 +352,37 @@ def test_a_stalled_run_cannot_rearm_and_its_rollback_cannot_disarm_another_runs_
     except sc.Refused:
         pass
     assert not (est.a_armed and "delete_override" in est.calls)     # B never deletes the override run A wrote
+
+
+# ------------------------------------------------------------------ B-1054-HEALTH-TRUTHY (roley.reviewer, PR 1054)
+
+
+@pytest.mark.parametrize("answer", ["unhealthy", "false", "no", 1, [False], {"ok": False}, object()])
+@pytest.mark.parametrize("step", ["recreate_killswitch", "rollback_verify"])
+def test_a_truthy_non_true_health_answer_is_a_health_failure(answer, step):
+    """healthy() is checked against True or "ok" only: a truthy string such as "unhealthy" must not pass."""
+    class Odd(FakeEstate):
+        def healthy(self):
+            return answer
+
+    assert "health_failure" in drv.Stage2Actions(Odd()).check(2, step)
+
+
+@pytest.mark.parametrize("answer", [True, "ok"])
+@pytest.mark.parametrize("step", ["recreate_killswitch", "rollback_verify"])
+def test_true_or_ok_is_the_only_healthy_answer(answer, step):
+    class Fine(FakeEstate):
+        def healthy(self):
+            return answer
+
+    assert drv.Stage2Actions(Fine()).check(2, step) == []
+
+
+def test_a_truthy_unhealthy_estate_aborts_a_live_run_through_controller_run(tmp_path):
+    class Odd(FakeEstate):
+        def healthy(self):
+            return "unhealthy"
+
+    est, rec = Odd(), _records(tmp_path)
+    result = _run(rec, est)
+    assert result.abort == "health_failure" and "stage_done" not in _kinds(rec)
