@@ -255,3 +255,13 @@ def test_over_http_the_depth_boundary_is_64_including_the_manifest_dict_itself(r
                        headers=H)
     assert over.status_code == 422 and len(ledger.calls) == appended
 
+
+def test_a_tuple_is_walked_like_a_list():
+    """JSON never yields a tuple, but a caller that builds the model in Python can pass one."""
+    with pytest.raises(ValueError, match="lone surrogate"):
+        _check_manifest_text({"k": ("ok", "\ud800")}, "m")
+    deep = "x"
+    for _ in range(MANIFEST_MAX_DEPTH):            # with the outer dict this is one container too many
+        deep = (deep,)
+    with pytest.raises(ValueError, match="nests deeper"):
+        _check_manifest_text({"k": deep}, "m")
