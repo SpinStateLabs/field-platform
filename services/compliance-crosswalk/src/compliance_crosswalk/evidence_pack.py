@@ -36,6 +36,7 @@ from typing import Any
 from compliance_crosswalk.engine import (
     GAP_LABELS,
     LEDGER_NOT_CHECKED_GAP,  # moved to engine (B7); still importable from here, and used for the B2 outage gap
+    declared_only_note,
     LEDGER_VERIFY_NOT_CHECKED,
     REFUSED_CATEGORIES,
     EvidenceSources,
@@ -280,8 +281,10 @@ def generate_pack(
         f"Manifest valid: {_yes_no(coverage.manifest_valid)}. Declared means "
         "the manifest carries the field; evidenced means a live artifact was "
         "collected and checked; not-collected means no evidence was gathered "
-        "on this run — an honest unknown, not a pass; caller-asserted means "
-        "the caller supplied the evidence and this run did not confirm it."
+        "on this run — an honest unknown, not a pass; declared-only means the "
+        "manifest declares it and no evidence artifact is read for it, so it "
+        "is not evidenced; caller-asserted means the caller supplied the "
+        "evidence and this run did not confirm it."
     )
     add("")
     add("| control_id | manifest_path | declared | evidenced |")
@@ -289,6 +292,8 @@ def generate_pack(
     for control in coverage.controls:
         if control.control_id in asserted:
             evidenced = "caller-asserted"
+        elif control.control_id in coverage.declared_only:
+            evidenced = "declared-only"
         elif control.evidenced is None:
             evidenced = "not-collected"
         else:
@@ -338,6 +343,9 @@ def generate_pack(
             "collected evidence check failed. Controls marked not-collected "
             "above remain unknowns, not passes."
         )
+    if coverage.declared_only:
+        add("")
+        add(declared_only_note(coverage))
     add("")
     add("## Regulatory corpus staleness")
     add("")
@@ -408,6 +416,7 @@ def generate_pack(
             for control in coverage.controls
         ],
         "gaps": gaps,
+        "declared_only": coverage.declared_only,
         "evidence_status": evidence_status,
         "staleness": status,
         "manifest_valid": coverage.manifest_valid,
