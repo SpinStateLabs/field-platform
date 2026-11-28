@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import http.client
 import os
-import socket
+import re
 import subprocess
 import sys
 import threading
@@ -182,23 +182,33 @@ def _failed(status: int | str, seconds: float) -> bool:
     return status != 200 or seconds >= HEALTH_BUDGET_S
 
 
+def _port_the_server_took(log_path, proc, deadline: float) -> int:
+    """The port ``ledger serve --port 0`` bound, read from the line uvicorn logs once it listens."""
+    while time.monotonic() < deadline:
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+        found = re.search(r"Uvicorn running on http://127\.0\.0\.1:(\d+) ", text)
+        if found and int(found.group(1)):
+            return int(found.group(1))
+        assert proc.poll() is None, text[-2000:]
+        time.sleep(0.2)
+    raise AssertionError("the server did not say which port it took: " + text[-2000:])
+
+
 def _run_under_load(data_dir: Path, tmp_path: Path, route: str, *, pin: int | None = None,
                     quota: CfsQuota | None = None) -> dict:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        port = s.getsockname()[1]
     env = {k: v for k, v in os.environ.items() if not k.startswith("FIELD_")}
     env["FIELD_DATA_DIR"] = str(data_dir)
     preexec = (lambda: os.sched_setaffinity(0, {pin})) if pin is not None else None
     log = open(tmp_path / "server.log", "w", encoding="utf-8")
     srv = subprocess.Popen([sys.executable, "-m", "sealed_ledger.cli", "serve", "--host", "127.0.0.1",
-                            "--port", str(port)], env=env, stdout=log, stderr=subprocess.STDOUT,
+                            "--port", "0"], env=env, stdout=log, stderr=subprocess.STDOUT,
                            preexec_fn=preexec)
     stop = threading.Event()
     polls: list[tuple[float, int | str, float]] = []
     poller = threading.Thread(target=lambda: _poll(port, stop, polls), daemon=True)
     try:
         deadline = time.monotonic() + 120
+        port = _port_the_server_took(tmp_path / "server.log", srv, deadline)
         while _get(port, "/health", 2.0)[0] != 200:
             assert srv.poll() is None and time.monotonic() < deadline, (tmp_path / "server.log").read_text()[-2000:]
             time.sleep(0.3)

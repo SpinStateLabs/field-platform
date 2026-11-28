@@ -81,11 +81,11 @@ def _serve(secret: str):
     def data():
         return {"v": 1}
 
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        port = s.getsockname()[1]
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="critical"))
-    thread = threading.Thread(target=server.run, daemon=True)
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))                    # kept, and handed to the server
+    port = sock.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(app, log_level="critical"))
+    thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, daemon=True)
     thread.start()
     for _ in range(200):
         if server.started:

@@ -55,12 +55,6 @@ ENV_KEYS = ("FIELD_SHARED_SECRET", "FIELD_SECRET_FILE", "FIELD_PROXY_URL",
 # --- plumbing ----------------------------------------------------------------------
 
 
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
 UNSET = "unset"
 
 
@@ -208,15 +202,16 @@ def perimeter_estate(tmp_path_factory):
     perimeter is proven to accept it before the shim is involved)."""
     data = tmp_path_factory.mktemp("estate") / "data"
     (data / "manifests").mkdir(parents=True)
-    port = _free_port()
-    base = f"http://127.0.0.1:{port}"
+    port_file = harness_wait.new_port_file(data.parent)
     env = dict(os.environ)
     env["FIELD_SHARED_SECRET"] = SECRET
     wait = harness_wait.harness_wait(90)
-    proc = subprocess.Popen([sys.executable, str(HARNESS), str(port), str(data), "--secret"],
+    proc = subprocess.Popen([sys.executable, str(HARNESS), "0", str(data), "--secret", "--port-file", str(port_file)],
                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         deadline = time.time() + wait
+        port = harness_wait.port_the_process_took(port_file, proc, deadline)
+        base = f"http://127.0.0.1:{port}"
         while True:
             if proc.poll() is not None:
                 raise RuntimeError(f"harness exited early: {proc.returncode}")
@@ -619,9 +614,15 @@ def test_redaction_uses_the_secret_the_request_was_sent_with(tmp_path, reflector
     assert "status=s-<redacted> at=c-<redacted>" in out
 
 
+@pytest.fixture
+def dead_url():
+    with harness_wait.nothing_listens() as url:
+        yield url
+
+
 @pytest.mark.parametrize("source", ["file", "env"])
 @pytest.mark.parametrize("upstream", ["honest", "reflecting", "unreachable"])
-def test_set_psdebug_trace_2_prints_no_secret(tmp_path, capture, reflector, upstream, source):
+def test_set_psdebug_trace_2_prints_no_secret(tmp_path, capture, reflector, upstream, source, dead_url):
     """`Set-PSDebug -Trace 2` prints "! SET $name = value" for every variable
     assignment. The secret (and any response that could carry it back) must
     never sit in a named variable: file read, header build, redaction, the
@@ -632,7 +633,7 @@ def test_set_psdebug_trace_2_prints_no_secret(tmp_path, capture, reflector, upst
         secret_file, env_secret, sent = None, ENV_SECRET, ENV_SECRET
     (tmp_path / "tokens.json").write_text(json.dumps({AGENT: "tok-1"}), encoding="utf-8")
     proxy = {"honest": capture.base, "reflecting": reflector.base,
-             "unreachable": f"http://127.0.0.1:{_free_port()}"}[upstream]
+             "unreachable": dead_url}[upstream]
     out = run_shim(tmp_path, proxy, ALL_HOOKS, secret_file=secret_file, env_secret=env_secret,
                    prelude="Set-PSDebug -Trace 2; ")  # asserts BOTH secrets absent
     assert "DEBUG:" in out and "! SET $" in out  # tracing really was on

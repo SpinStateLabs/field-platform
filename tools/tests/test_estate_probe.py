@@ -45,10 +45,13 @@ RETIRED = "canary-gb10-retired"
 # --- plumbing ---------------------------------------------------------------------
 
 
-def _free_port() -> int:
+@contextlib.contextmanager
+def _nothing_listens():
+    """A URL with no server behind it. The port stays bound, without listen(), for as long as it is used, so a
+    connection fails and no other server can take the number."""
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
+        yield f"http://127.0.0.1:{s.getsockname()[1]}"
 
 
 def _http(method: str, url: str, body: dict | None = None, secret: str | None = None) -> tuple[int, object]:
@@ -100,8 +103,6 @@ class Estate:
         (data / "manifests").mkdir(parents=True)
         self.manifest = data / "manifests" / "canary-gb10.yaml"
         self.manifest.write_bytes(CANARY_MANIFEST.read_bytes())
-        self.port = _free_port()
-        self.base = f"http://127.0.0.1:{self.port}"
         self.secret = SECRET if secret else None
         self.env = dict(os.environ)
         self.env.pop("FIELD_SHARED_SECRET", None)
@@ -110,7 +111,8 @@ class Estate:
         self.caller_pub: str | None = None
         if caller_signed:
             self._require_caller_signatures(tmp_path / "caller-keys")
-        argv = [sys.executable, str(HARNESS), str(self.port), str(data)]
+        port_file = tmp_path / "harness.port"
+        argv = [sys.executable, str(HARNESS), "0", str(data), "--port-file", str(port_file)]
         if secret:
             argv.append("--secret")
             self.env["FIELD_SHARED_SECRET"] = SECRET
@@ -118,14 +120,20 @@ class Estate:
         self.proc = subprocess.Popen(argv, env=self.env, stdout=subprocess.DEVNULL,
                                      stderr=subprocess.DEVNULL)
         deadline = time.time() + wait
+        self.port: int | None = None
         while time.time() < deadline:
             if self.proc.poll() is not None:
                 raise RuntimeError(f"harness exited early: {self.proc.returncode}")
-            try:
-                urllib.request.urlopen(f"{self.base}/ledger/health", timeout=2).read()
-                break
-            except OSError:
-                time.sleep(0.3)
+            if self.port is None and port_file.exists():        # the harness bound it and keeps it
+                self.port = int(port_file.read_text(encoding="ascii"))
+                self.base = f"http://127.0.0.1:{self.port}"
+            if self.port is not None:
+                try:
+                    urllib.request.urlopen(f"{self.base}/ledger/health", timeout=2).read()
+                    break
+                except OSError:
+                    pass
+            time.sleep(0.3)
         else:
             raise RuntimeError("harness did not come up")
         self.token = self._provision()
@@ -1182,10 +1190,10 @@ def test_registry_401_with_the_wrong_secret_is_exit_3(scripted, monkeypatch):
 
 def test_registry_transport_error_is_exit_3(monkeypatch):
     monkeypatch.delenv("FIELD_SHARED_SECRET", raising=False)
-    base = f"http://127.0.0.1:{_free_port()}"            # nothing listens here
-    for extra in (["--agent", "a"], []):
-        code, out = _run(["--base", base, "registry", *extra])
-        assert code == 3 and "HTTP 0" in out and "ABSENT" not in out, out
+    with _nothing_listens() as base:
+        for extra in (["--agent", "a"], []):
+            code, out = _run(["--base", base, "registry", *extra])
+            assert code == 3 and "HTTP 0" in out and "ABSENT" not in out, out
 
 
 def test_registry_absent_is_exit_1_only_after_a_good_read(scripted):

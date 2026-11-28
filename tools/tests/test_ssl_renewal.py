@@ -80,12 +80,6 @@ UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
 # --- plumbing ---------------------------------------------------------------------------
 
 
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
 def _http(method: str, url: str, body: object | None = None) -> tuple[int, object]:
     req = urllib.request.Request(url, data=json.dumps(body).encode() if body is not None else None, method=method,
                                  headers={"Content-Type": "application/json", "x-field-auth": SECRET})
@@ -195,10 +189,17 @@ class ShimProxy:
 
 
 LOG_ONLY_SENTINEL = r'''
+import os
+import socket
 import sys
 import uvicorn
 from conformance_sentinel.api import create_app
-uvicorn.run(create_app(), host="127.0.0.1", port=int(sys.argv[1]), log_level="warning")
+listener = socket.socket()
+listener.bind(("127.0.0.1", 0))                     # held until the server takes it over
+with open(sys.argv[1] + ".tmp", "w", encoding="ascii") as f:
+    f.write(str(listener.getsockname()[1]))
+os.replace(sys.argv[1] + ".tmp", sys.argv[1])
+uvicorn.Server(uvicorn.Config(create_app(), log_level="warning")).run(sockets=[listener])
 '''
 
 
@@ -220,14 +221,17 @@ class SslEstate:
         self.roster.write_text(json.dumps({"grantors": [{"grantor": GRANTOR, "allowed_scope": SCOPE,
                                                          "max_ttl_days": 400, "max_spend_usd": 5,
                                                          "active": True}]}), encoding="utf-8")
-        self.tmp, port = tmp, _free_port()
-        self.base = f"http://127.0.0.1:{port}"
+        self.tmp = tmp
+        port_file = harness_wait.new_port_file(tmp)
         self.env = {k: v for k, v in os.environ.items() if not k.startswith("FIELD_")}
         if armed:
             self.env.update(FIELD_SHARED_SECRET=SECRET, FIELD_DOA_ROSTER=str(self.roster))
-        self.proc = subprocess.Popen([sys.executable, str(HARNESS), str(port), str(data)] + (["--secret"] * armed),
+        self.proc = subprocess.Popen([sys.executable, str(HARNESS), "0", str(data), "--port-file", str(port_file)]
+                                     + (["--secret"] * armed),
                                      env=self.env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.sentinel: subprocess.Popen | None = None
+        port = harness_wait.port_the_process_took(port_file, self.proc, time.time() + harness_wait.harness_wait(90))
+        self.base = f"http://127.0.0.1:{port}"
         _wait_up(f"{self.base}/ledger/health", self.proc, "harness")
         for prefix, var in (("registry", "FIELD_REGISTRY_URL"), ("ledger", "FIELD_LEDGER_URL"),
                             ("delegation", "FIELD_DELEGATION_URL"), ("governor", "FIELD_GOVERNOR_URL"),
@@ -245,13 +249,15 @@ class SslEstate:
         """A second, real conformance-sentinel over the same registry, delegation authority,
         governor, ledger and manifests, in the mode a sentinel starts in by default."""
         if self.sentinel is None:
-            port = _free_port()
+            port_file = harness_wait.new_port_file(self.tmp)
             script = self.tmp / "log_only_sentinel.py"
             script.write_text(LOG_ONLY_SENTINEL, encoding="utf-8")
             env = dict(self.env, FIELD_SENTINEL_MODE="log_only", FIELD_MANIFEST_DIR=str(self.manifests),
                        FIELD_DATA_DIR=str(self.tmp / "sentinel-data"))
-            self.sentinel = subprocess.Popen([sys.executable, str(script), str(port)], env=env,
+            self.sentinel = subprocess.Popen([sys.executable, str(script), str(port_file)], env=env,
                                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            port = harness_wait.port_the_process_took(port_file, self.sentinel,
+                                                      time.time() + harness_wait.harness_wait(90), "log_only sentinel")
             self.sentinel_base = f"http://127.0.0.1:{port}"
             _wait_up(f"{self.sentinel_base}/health", self.sentinel, "log_only sentinel")
             assert _http("GET", f"{self.sentinel_base}/health")[1]["mode"] == "log_only"

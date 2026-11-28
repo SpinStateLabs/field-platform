@@ -66,12 +66,13 @@ class _Listener:
         self.sock.close()
 
 
-def _closed_port_url() -> str:
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return f"http://127.0.0.1:{port}"
+@pytest.fixture
+def closed_port_url():
+    """A URL on which nothing listens. The port stays bound, without listen(), until the test ends, so a connection is
+    refused and no other server can take the number."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        yield f"http://127.0.0.1:{s.getsockname()[1]}"
 
 
 @pytest.fixture
@@ -80,14 +81,14 @@ def secret(monkeypatch):
 
 
 @pytest.mark.parametrize("service", SERVICES)
-def test_an_ambient_proxy_gets_no_connection_from_the_cli_client(monkeypatch, secret, service):
+def test_an_ambient_proxy_gets_no_connection_from_the_cli_client(monkeypatch, secret, service, closed_port_url):
     proxy = _Listener()
     try:
         for var in PROXY_VARS:
             monkeypatch.setenv(var, proxy.url)
         monkeypatch.delenv("NO_PROXY", raising=False)
         monkeypatch.delenv("no_proxy", raising=False)
-        monkeypatch.setenv(cli._SERVICE_URLS[service][0], _closed_port_url())
+        monkeypatch.setenv(cli._SERVICE_URLS[service][0], closed_port_url)
         _, client = cli._service_client(service, None, timeout=2.0)
         assert client.trust_env is False
         with pytest.raises(httpx.ConnectError):
