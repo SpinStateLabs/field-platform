@@ -29,19 +29,23 @@ import test_compose_static_pins as static  # noqa: E402
 
 REPO = "/srv-fixture/checkout"                      # a made-up checkout path (the repository root of the fixture)
 PROJECT = REPO + "/integration/demo"                # compose resolves relative paths against the compose file's directory
-KEYS = "/home/spinner/.field-local/caller-keys"
+KEYS = "/home/user/.field-local/caller-keys"
 
 
 def _resolve(text: str, env: dict[str, str]) -> str:
-    """`${NAME:-default}` / `${NAME-default}` / `${NAME}` with `env` (what `docker compose config` does, for the
-    forms the shipped files use)."""
+    """`${NAME:-default}` / `${NAME-default}` / `${NAME:?message}` / `${NAME}` with `env` (what `docker compose config`
+    does, for the forms the shipped files use)."""
     def sub(m):
         name, op, default = m.group(1), m.group(2), m.group(3)
         value = env.get(name)
+        if op == ":?":
+            if not value:
+                raise ValueError(f"{name} is required")
+            return value
         if value is None or (op == ":-" and value == ""):
             return default or ""
         return value
-    return re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:-|-)([^}]*))?\}", sub, text)
+    return re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:-|-|:\?)([^}]*))?\}", sub, text)
 
 
 def _absolute(path: str) -> str:
@@ -51,7 +55,7 @@ def _absolute(path: str) -> str:
 def resolved_model(env: dict[str, str] | None = None) -> dict:
     """What `docker compose -f base -f gb10 config` would print for the shipped files under `env`, for the keys the
     allowlist reads (long-syntax volumes with absolute sources, secrets, configs, build contexts)."""
-    env = env or {}
+    env = {"FIELD_CALLER_KEYS_DIR": KEYS, **(env or {})}     # required by the files: no default
     base, gb10 = (static.DEMO / "docker-compose.yml").read_text(encoding="utf-8"), (static.DEMO / "docker-compose.gb10.yml").read_text(encoding="utf-8")
     services = {}
     for name, svc in static._services(base, gb10).items():
@@ -107,7 +111,7 @@ ESTATE_VARIABLES = ["FIELD_OPERATORS_DIR", "FIELD_OPERATOR_KEY_DIR_REGISTRY", "F
 
 
 @pytest.mark.parametrize("variable", ESTATE_VARIABLES)
-@pytest.mark.parametrize("value", ["/etc", "/home/spinner/.ssh", "/", "/home/spinner", "/var/run/some-runtime"])
+@pytest.mark.parametrize("value", ["/etc", "/home/user/.ssh", "/", "/home/user", "/var/run/some-runtime"])
 def test_a_forbidden_value_of_an_estate_variable_is_red_where_the_static_check_is_green(variable, value):
     base, gb10 = static._texts()[1:]
     static.check_compose(base, gb10)                               # the static check sees only the defaults: green
@@ -123,9 +127,9 @@ def test_an_allowed_value_of_an_estate_variable_stays_green(variable):
 
 
 def test_an_estate_variable_that_replaces_the_allowed_root_with_another_directory_is_red():
-    # the class Lane 10 named: ${FIELD_CALLER_KEYS_DIR:-<allowed root>}/registry passes on its default
+    # the class Lane 10 named: the static check reads the required variable as the allowed root and passes
     assert crc.check_model(resolved_model({"FIELD_CALLER_KEYS_DIR": "/opt/elsewhere"}), REPO) != []
-    assert crc.check_model(resolved_model({"FIELD_CALLER_KEYS_DIR": "/home/spinner/.field-local/other"}), REPO) != []
+    assert crc.check_model(resolved_model({"FIELD_CALLER_KEYS_DIR": "/home/user/.field-local/other"}), REPO) != []
 
 
 # ---- the rule, source by source -----------------------------------------------------------------------------------
@@ -142,7 +146,7 @@ def test_these_sources_are_allowed(source):
     ("", "empty"), ("operators", "not absolute"), ("./operators", "not absolute"), ("~/x", "not absolute"),
     ("/srv-fixture/checkout/$X", "not a resolved literal path"), ("/a`b", "not a resolved literal path"),
     ("/etc", "denylist"), ("/etc/ssl", "denylist"), ("/", "denylist"), ("/home", "denylist"),
-    ("/home/spinner", "denylist"), ("/home/spinner/.ssh", "denylist"), ("/home/spinner/.config", "denylist"),
+    ("/home/user", "denylist"), ("/home/user/.ssh", "denylist"), ("/home/user/.config", "denylist"),
     ("/var/run/docker.sock", "denylist"), ("/run/containerd/containerd.sock", "denylist"),
     ("/opt/elsewhere", "outside"), ("/srv-fixture/other", "outside"), ("/srv-fixture/checkout-evil/x", "outside"),
     (KEYS, "outside"), (KEYS + "-evil/x", "outside"), (KEYS + "/../x", "outside"),

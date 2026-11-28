@@ -30,11 +30,11 @@ def name_problem(names):
 
 
 # C-453: the one allowed absolute root (a user's caller-key directories); a new estate bind needs a reviewed line here.
-# C-500 (reviewer C-454 F-C454-3): in ONE named constant. It is what the compose files themselves default
-# `FIELD_CALLER_KEYS_DIR` to (a test keeps the two in step), so a different user or directory is one reviewed edit here
-# and in the compose defaults, never a second spelling elsewhere. C-617: it lives here, with the other shared rules,
-# so the static pins and the resolved-model check cannot drift.
-CALLER_KEYS_ROOT = "/home/spinner/.field-local/caller-keys"
+# C-500 (reviewer C-454 F-C454-3): in ONE named constant. The compose files give `FIELD_CALLER_KEYS_DIR` NO default
+# (every caller-key bind requires it, so an unset estate cannot mount empty directories); this placeholder is what the
+# static pins read the required variable as. An estate's real directory is accepted by the resolved-model check only
+# when it is under an allowed root. C-617: it lives here, with the other shared rules, so the two checks cannot drift.
+CALLER_KEYS_ROOT = "/home/user/.field-local/caller-keys"
 ALLOWED_ABSOLUTE_ROOTS = (CALLER_KEYS_ROOT,)
 
 # C-500 (reviewer C-454 F-C454-1): the path rule is an allowlist, so the keys that can carry a path are one too. A service
