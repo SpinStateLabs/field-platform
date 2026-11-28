@@ -125,9 +125,9 @@ def test_without_a_key_nothing_is_sent(mod, servers, monkeypatch):
     assert "not set" in str(e.value) and srv.requests == []
 
 
-def test_an_http_error_exits_with_the_status_and_a_cut_body(mod, servers, monkeypatch):
+def test_an_http_error_exits_with_the_status_and_never_the_body(mod, servers, monkeypatch):
     bad = servers(lambda h: (400, {}, b"x" * 1000))
     monkeypatch.setattr(mod, "API_BASE", bad.url)
     with pytest.raises(SystemExit) as e:
         mod.call("/v1/sessions", {})
-    assert str(e.value).startswith("HTTP 400: ") and len(str(e.value)) <= len("HTTP 400: ") + 400
+    assert str(e.value).startswith("HTTP 400: ") and "xxxx" not in str(e.value)   # was: a 400-character cut of the body (S-2-12)

@@ -1,5 +1,5 @@
 """Start a Managed Agents session for one ssl-fp role agent. Needs ANTHROPIC_API_KEY (workspace key) in env."""
-import argparse, json, os, sys, urllib.error, urllib.request
+import argparse, json, os, re, sys, urllib.error, urllib.request
 
 AGENTS = {
     "red-team": ("agent_01VfLQMGVpqwF6cnoiEX1wbm", "ssl-fp-red-team"),
@@ -33,15 +33,42 @@ def call(path, payload):
         with _OPENER.open(req, timeout=60) as r:
             return json.loads(r.read())
     except urllib.error.HTTPError as e:
-        sys.exit(f"HTTP {e.code}: {e.read().decode()[:400]}")
+        # the status and a fixed phrase: an upstream body is never part of an error message (C-503)
+        sys.exit(f"HTTP {e.code}: the API refused the request (body not shown)")
+    except (OSError, ValueError) as e:
+        # URLError, timeouts and resets are OSError; a reply that is not UTF-8 JSON is a ValueError: the class name
+        # only, because the text can carry the URL or part of the reply
+        sys.exit(f"request failed: {type(e).__name__}")
+
+
+MAX_BUDGET_CENTS = 100_000_000      # 1,000,000 USD: a typo guard, not a policy; the workspace budget is the real limit
+
+
+def _budget_cents(text: str) -> str:
+    """A positive integer of at most MAX_BUDGET_CENTS, as text (the API takes the amount as a string)."""
+    if not (text.isascii() and text.isdigit()) or not 0 < int(text) <= MAX_BUDGET_CENTS:
+        raise argparse.ArgumentTypeError(f"must be a whole number of cents from 1 to {MAX_BUDGET_CENTS}")
+    return str(int(text))
+
+
+_SESSION_NAME = re.compile(r"[A-Za-z0-9_-]{1,64}")
+#: the shape a returned session id must have before it is printed or put into a URL
+_SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
+
+
+def _session_name(text: str) -> str:
+    """1 to 64 characters of letters, digits, '_' and '-' (the help says no personal name; none is detected)."""
+    if not _SESSION_NAME.fullmatch(text):
+        raise argparse.ArgumentTypeError("must be 1 to 64 characters of letters, digits, '_' or '-'")
+    return text
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("role", choices=sorted(AGENTS))
-    p.add_argument("session_name", help="unique among live sessions; no personal name")
+    p.add_argument("session_name", type=_session_name, help="unique among live sessions; no personal name")
     p.add_argument("lane", choices=["A", "B"])
-    p.add_argument("--budget-cents", default="100")
+    p.add_argument("--budget-cents", type=_budget_cents, default="100")
     a = p.parse_args()
     agent_id, field_id = AGENTS[a.role]
     s = call("/v1/sessions", {
@@ -50,9 +77,17 @@ def main():
         "metadata": {"field_agent_id": field_id, "role": a.role}})
     text = (f"Session name: {a.session_name}\nLane: {a.lane}\n"
             "Run the ROLE LOOP from your system prompt now and keep running it.")
-    call(f"/v1/sessions/{s['id']}/events",
-         {"events": [{"type": "user.message", "content": [{"type": "text", "text": text}]}]})
-    print(s["id"])
+    sid = s.get("id") if isinstance(s, dict) else None
+    if not isinstance(sid, str) or not _SESSION_ID.fullmatch(sid):
+        sys.exit("unexpected reply: no session id; no event sent")
+    # the session exists and is billable from here: say its id BEFORE the kickoff, so a failed kickoff cannot lose it (S8-32)
+    print(f"session {sid} created; sending the kickoff", file=sys.stderr)
+    try:
+        call(f"/v1/sessions/{sid}/events",
+             {"events": [{"type": "user.message", "content": [{"type": "text", "text": text}]}]})
+    except SystemExit as exc:
+        sys.exit(f"session {sid} was created but not started: {exc.code}")
+    print(sid)
 
 
 if __name__ == "__main__":
