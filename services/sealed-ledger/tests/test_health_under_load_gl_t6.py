@@ -70,7 +70,8 @@ def _cfs_cgroup_parent() -> tuple[str, Path] | tuple[None, str]:
 
 
 class CfsQuota:
-    """A throwaway cgroup with a CFS quota. ``available()`` is a real probe: it creates and removes one."""
+    """A throwaway cgroup with a CFS quota. ``probe()`` is a real probe: it creates one, sets the quota, moves a
+    throwaway child process into it and removes it."""
 
     def __init__(self, parent_kind: str, parent: Path) -> None:
         self.kind, self.dir = parent_kind, parent / f"ledger-t6-{os.getpid()}-{time.monotonic_ns()}"
@@ -80,15 +81,18 @@ class CfsQuota:
         kind, parent = _cfs_cgroup_parent()
         if kind is None:
             return None, str(parent)
+        step = "create a cgroup with a CFS quota"
         try:
             q = cls(kind, parent)
             q.dir.mkdir()
             try:
                 q._set_quota()
+                step = "move a process into a cgroup with a CFS quota"  # a host can allow the first and refuse this
+                q._try_attach()
             finally:
                 q.dir.rmdir()
         except OSError as exc:
-            return None, f"cannot create a cgroup with a CFS quota under {parent} ({type(exc).__name__}: {exc})"
+            return None, f"cannot {step} under {parent} ({type(exc).__name__}: {exc})"
         return cls(kind, parent), ""
 
     def _set_quota(self) -> None:
@@ -99,10 +103,23 @@ class CfsQuota:
         else:
             (self.dir / "cpu.max").write_text(f"{quota} {CFS_PERIOD_US}")
 
+    def _move(self, pid: int) -> None:
+        (self.dir / "cgroup.procs").write_text(str(pid))  # whole thread group, every thread
+
+    def _try_attach(self) -> None:
+        """Move a throwaway child into the group, as ``attach`` will move the server; the child is always ended."""
+        child = subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.read()"], stdin=subprocess.PIPE)
+        try:
+            self._move(child.pid)
+        finally:
+            child.kill()
+            child.wait(30)  # reaped: the group is empty again and can be removed
+            child.stdin.close()
+
     def attach(self, pid: int) -> None:
         self.dir.mkdir()
         self._set_quota()
-        (self.dir / "cgroup.procs").write_text(str(pid))  # whole thread group, every thread
+        self._move(pid)
 
     def nr_throttled(self) -> int:
         for ln in (self.dir / "cpu.stat").read_text().splitlines():
@@ -234,6 +251,70 @@ def _check(res: dict, route: str, method: str) -> None:
         f"request (need {MIN_OVERLAP_POLLS}); max /health {res['max_health']:.2f} s. A blocked event loop stops "
         f"new polls from starting")
     assert len(res["before"]) >= 3 and not any(_failed(p[1], p[2]) for p in res["before"]), "idle /health failed"
+
+
+def _probe_on_a_stand_in(monkeypatch, parent: Path, *, set_error: OSError | None = None,
+                         move_error: OSError | None = None):
+    """Runs the real ``probe()`` against a plain directory: only the two cgroup file writes are stood in."""
+    moved: list[int] = []
+    children: list[subprocess.Popen] = []
+    real_popen = subprocess.Popen
+
+    def popen(*args, **kwargs):
+        children.append(real_popen(*args, **kwargs))
+        return children[-1]
+
+    def set_quota(self) -> None:
+        if set_error is not None:
+            raise set_error
+
+    def move(self, pid: int) -> None:
+        assert children[-1].poll() is None, "the process to move must still be running"
+        moved.append(pid)
+        if move_error is not None:
+            raise move_error
+
+    monkeypatch.setattr(sys.modules[__name__], "_cfs_cgroup_parent", lambda: ("v2", parent))
+    monkeypatch.setattr(CfsQuota, "_set_quota", set_quota)
+    monkeypatch.setattr(CfsQuota, "_move", move)
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    quota, reason = CfsQuota.probe()
+    return quota, reason, moved, children
+
+
+def test_probe_is_unavailable_when_a_process_cannot_be_moved_into_the_group(monkeypatch, tmp_path):
+    refused = OSError(95, "Operation not supported")
+    quota, reason, moved, children = _probe_on_a_stand_in(monkeypatch, tmp_path, move_error=refused)
+    assert quota is None
+    assert reason.startswith("cannot move a process into a cgroup with a CFS quota under ")
+    assert "Operation not supported" in reason
+    assert moved == [children[0].pid] and moved[0] != os.getpid()  # a throwaway child, never the test process
+    assert len(children) == 1 and children[0].poll() is not None, "the throwaway child was left running"
+    assert list(tmp_path.iterdir()) == [], "the probe left its group behind"
+
+
+def test_probe_is_available_after_moving_a_throwaway_child(monkeypatch, tmp_path):
+    quota, reason, moved, children = _probe_on_a_stand_in(monkeypatch, tmp_path)
+    assert isinstance(quota, CfsQuota) and reason == ""
+    assert moved == [children[0].pid] and moved[0] != os.getpid()
+    assert len(children) == 1 and children[0].poll() is not None
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_probe_starts_no_child_when_the_quota_cannot_be_set(monkeypatch, tmp_path):
+    quota, reason, moved, children = _probe_on_a_stand_in(monkeypatch, tmp_path,
+                                                          set_error=PermissionError(13, "Permission denied"))
+    assert quota is None
+    assert reason.startswith("cannot create a cgroup with a CFS quota under ")
+    assert moved == [] and children == []
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_the_process_is_moved_by_writing_its_id_to_cgroup_procs(tmp_path):
+    q = CfsQuota("v2", tmp_path)
+    q.dir.mkdir()
+    q._move(4321)
+    assert (q.dir / "cgroup.procs").read_text() == "4321"
 
 
 @pytest.mark.parametrize("route", ROUTES)
