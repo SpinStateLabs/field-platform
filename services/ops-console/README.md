@@ -68,6 +68,12 @@ console serve [--port 8011]     # FIELD_*_URL env vars point at the services
 - Push to the browser, poll upstream: no service publishes changes, so each
   stream rebuilds the overview every 2 s server-side and pushes only
   changes. A kill issued elsewhere shows up within ~2 s (stream) or 5 s (poll).
+- The chain check (`GET /verify`) reads the whole ledger, so it is paced: one
+  check per 30 s for the console, shared by every page and stream, so the
+  integrity tile can be that old. A `503` with `Retry-After` shows `busy,
+  retrying` beside the last result and is not asked again before that time
+  (followed up to 300 s). A hidden page closes its stream and stops polling,
+  the platform strip included; a page that becomes visible reads both again.
 - The stream cap is soft (a burst of simultaneous opens can pass it by a few).
 - Ledger paging: the ledger has no offset cursor, so "load older" re-queries
   with `until=<oldest shown>` and drops duplicates.

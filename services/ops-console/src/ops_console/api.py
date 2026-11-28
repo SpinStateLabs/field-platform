@@ -48,7 +48,7 @@ from field_core.clients import (
     ManifestResolver,
     signed_append_body,
 )
-from ops_console import __version__
+from ops_console import __version__, verify_pacer
 
 #: Phase G C-14: the console never holds an operator identity of its own. Any
 #: of these set (non-blank) in its environment and it refuses to start; its
@@ -601,6 +601,7 @@ def create_app(
     app.state.max_streams = (max_streams if max_streams is not None
                              else _max_streams_from_env())
     app.state.open_streams = 0
+    app.state.verify_pacer = verify_pacer.VerifyPacer()
 
     def _section(client: ServiceClient, path: str, label: str,
                  **kw) -> Section:
@@ -685,6 +686,16 @@ def create_app(
             notes.append(f"only the first {MAX_USAGE_ROWS} agents with usage are shown")
         return Section(available=True, source=source, data=rows, error="; ".join(notes) or None)
 
+    def _read_verify() -> tuple[int, Any, str | None]:
+        """The ledger's chain check, with the ``Retry-After`` value of the answer (None when it has none)."""
+        try:
+            resp = get_retrying_once(app.state.ledger._client, "/verify")
+            status, data = _decode(resp)
+        except Exception as exc:
+            return 0, type(exc).__name__, None
+        headers = getattr(resp, "headers", None)
+        return status, data, None if headers is None else headers.get("Retry-After")
+
     def _build_overview() -> Overview:
         agents = _section(app.state.registry, "/agents", "agents")
         return Overview(
@@ -692,7 +703,8 @@ def create_app(
             agents=agents,
             tokens=_section(app.state.delegation, "/tokens", "tokens"),
             escalations=_section(app.state.governor, "/escalations", "escalations"),
-            ledger_verify=_section(app.state.ledger, "/verify", "verify"),
+            ledger_verify=Section(source="GET /verify",
+                                  **app.state.verify_pacer.answer(_read_verify, _error_text)),
             recent_events=_section(
                 app.state.ledger, "/events", "events", params={"limit": 25}
             ),
