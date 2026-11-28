@@ -103,6 +103,16 @@ give agents a heartbeat to poll, and prove readiness with timed drills.
   outcome `skipped_retired`). Without the first two, a kill followed by a
   revive turns a decommissioned agent back into an `active` one.
 
+  **Order.** The operator's key and the route's scope are checked first (401 / 403, whatever the target). Then a
+  `retired` record answers 409 **before** the manifest's `authorized_operators` list is read: an authenticated
+  operator that holds the scope but is not named for the agent (the list-bound machine verifier included) gets the
+  same 409 as a named one, and so learns that the id is retired. Nothing is written to the registry or signalled. The
+  attempt is ledgered, with no `operator.refused`: `/kill` leaves `kill.agent.failed` (409, `retired`), `/revive`
+  leaves `kill.revive.refused` and `/drill` leaves `kill.drill.refused` (both `operator` and the reason
+  `agent is retired`). The row is best effort: a ledger that cannot be written never changes the 409. Neither refused
+  type pairs with a registry status change. A non-retired agent is unchanged (403 for an operator its list does not
+  name).
+
   `/drill` was covered last and is the reason the other three were
   bypassable. The tempting argument — *a drill restores the prior status, so
   a retirement survives it* — is wrong: the drill flips the record to

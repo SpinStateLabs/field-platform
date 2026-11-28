@@ -75,7 +75,7 @@ Subcommands (all take --base):
   catalogue    the Phase A + B live catalogue on the canary; the canary's registry
                status changes during its kill, revive and drill must pair with
                kill.* events (RT1-3, check_status_pairing)
-  refused-kill a kill of a retired canary is refused 409 and ledgers nothing
+  refused-kill a kill of a retired canary is refused 409 and ledgers no kill.agent
   revoke       revoke the canary's token (end of every gate's live checks)
   collateral   every ledger event after --since that is not a canary's; and every
                registry status change after --since, of any agent, must pair with
