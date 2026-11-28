@@ -10,6 +10,10 @@ from pathlib import Path
 
 from attestation_reporter.engine import BoardPack
 
+#: B2: the headline of a pack that could not read everything it reports on
+INCOMPLETE_HEADLINE = "INCOMPLETE: this pack could not read everything it reports on."
+INCOMPLETE_ADVICE = "Do not read a missing finding as \"no gaps\"."
+
 #: F4 provenance sentences, printed in the footer after the key fingerprint.
 #: The estate-key sentence is the plan's wording, verbatim (README row).
 ESTATE_KEY_PROVENANCE = (
@@ -35,6 +39,7 @@ td.value { font-size: 1.05rem; font-weight: 600; white-space: nowrap; }
 td.query { font-family: Consolas, monospace; font-size: .78rem; color: #555; overflow-wrap: anywhere; }
 td.query a { color: #0b5cad; }
 .unavailable { color: #a33; font-weight: 600; }
+.incomplete { border: 3px solid #a31111; padding: .6rem .8rem; margin: 1rem 0; }
 .integrity-INTACT { color: #1a7a1a; }
 .integrity-BROKEN { color: #a31111; }
 footer { margin-top: 2.5rem; font-size: .8rem; color: #666;
@@ -85,6 +90,11 @@ def render_html(pack: BoardPack) -> str:
     add(f"<p><b>Period:</b> {esc(pack.period)} · <b>Window ({esc(w.kind)}):</b> "
         f"{bounds} <i>({esc(w.note)})</i> · <b>Generated:</b> "
         f"{esc(pack.generated_at)}</p>")
+    if pack.not_read:
+        add(f"<div class='incomplete'><b>{esc(INCOMPLETE_HEADLINE)}</b> {esc(INCOMPLETE_ADVICE)}<ul>")
+        for line in pack.not_read:
+            add(f"<li>{esc(line)}</li>")
+        add("</ul></div>")
     add("<p><i>Every figure below prints the query it came from. "
         "No number without a source.</i></p>")
     for section in pack.sections:
