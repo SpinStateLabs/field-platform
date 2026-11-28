@@ -6,6 +6,8 @@ a RecursionError (500)."""
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -15,6 +17,9 @@ from federation_broker.engine import (MANIFEST_MAX_DEPTH, MANIFEST_MAX_NODES, Br
 from test_federation_broker import COUNTERPARTY
 
 H = {"content-type": "application/json"}
+# CPython 3.11's JSON parser counts nesting against the recursion limit (1000 by default), so at 2000 deep FastAPI
+# answers 400 before any model runs; from 3.12 the body parses and the manifest depth bound answers 422.
+AT_2000_DEEP = 422 if sys.version_info >= (3, 12) else 400
 MARK = "MADE-UP-MARKER-0123456789"
 LONE = '"' + MARK + '\\ud800"'              # the raw JSON text of a string holding a lone surrogate
 
@@ -94,11 +99,11 @@ def test_a_422_names_the_field_and_never_the_text(rig):
 
 # ---- iterative walk and bounds: deep is a 422, never a 500 ----------------------------------------------------------
 
-@pytest.mark.parametrize("depth", [100, 500, 2000])
-def test_a_deeply_nested_manifest_is_422_not_500(rig, depth):
+@pytest.mark.parametrize("depth, status", [(100, 422), (500, 422), (2000, AT_2000_DEEP)])
+def test_a_deeply_nested_manifest_is_422_not_500(rig, depth, status):
     c, _, ledger = rig
     r = c.post("/crossing", content=crossing_json(counterparty_manifest='{"k": ' + nested(depth) + "}"), headers=H)
-    assert r.status_code == 422, (depth, r.status_code, r.text[:160])
+    assert r.status_code == status, (depth, r.status_code, r.text[:160])
     assert ledger.calls == []
 
 
@@ -114,7 +119,7 @@ def test_a_deeply_nested_outbound_manifest_is_422_not_500(rig):
     c, _, ledger = rig
     raw = ('{"direction":"outbound","counterparty_org":"%s","agent_id":"me","manifest":{"k":%s},"scope":"s",'
            '"data_class":"d"}' % (COUNTERPARTY, nested(2000)))
-    assert c.post("/crossing", content=raw, headers=H).status_code == 422 and ledger.calls == []
+    assert c.post("/crossing", content=raw, headers=H).status_code == AT_2000_DEEP and ledger.calls == []
 
 
 def test_the_model_walk_survives_a_depth_that_would_exhaust_the_recursion_limit():
