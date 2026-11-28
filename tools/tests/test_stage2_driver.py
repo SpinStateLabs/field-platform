@@ -386,3 +386,26 @@ def test_a_truthy_unhealthy_estate_aborts_a_live_run_through_controller_run(tmp_
     est, rec = Odd(), _records(tmp_path)
     result = _run(rec, est)
     assert result.abort == "health_failure" and "stage_done" not in _kinds(rec)
+
+
+class _EqualsAnything:
+    def __eq__(self, other):
+        return True
+
+    __hash__ = object.__hash__
+
+
+class _OkSubclass(str):
+    pass
+
+
+@pytest.mark.parametrize("answer", [_EqualsAnything(), _OkSubclass("ok"), "OK", "Ok", "okay", "ok, degraded", "ok "],
+                         ids=["equals-anything", "str-subclass", "upper", "capital", "prefix-word", "prefix-text",
+                              "trailing-space"])
+def test_only_the_exact_plain_string_ok_is_healthy(answer):
+    """Exactly ``True`` or the plain ``str`` "ok": not another type that compares equal, not other case, not a prefix."""
+    class Odd(FakeEstate):
+        def healthy(self):
+            return answer
+
+    assert "health_failure" in drv.Stage2Actions(Odd()).check(2, "recreate_killswitch")
