@@ -171,7 +171,7 @@ def test_gate_controls_never_claim_estate_evidence():
         assert offline[cid].evidenced is None and live[cid].evidenced is None, cid
         assert GATE_NOTE in offline[cid].evidence_detail and GATE_NOTE in live[cid].evidence_detail
     # the evidenced count is the pre-existing controls only
-    assert live_report.evidenced_count == sum(1 for c in live_report.controls if c.evidenced) == 10
+    assert live_report.evidenced_count == sum(1 for c in live_report.controls if c.evidenced) == 7
 
 
 def test_gate_controls_add_no_evidence_pack_gap_when_declared():

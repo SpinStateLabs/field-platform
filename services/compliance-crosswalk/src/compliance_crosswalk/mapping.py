@@ -200,7 +200,8 @@ CONTROLS: list[Control] = [
         manifest_path="enforcement.irreversible_action_policy",
         statement="One-way actions are forbidden, human-gated, or "
         "ledger-logged.",
-        evidence_kind="manifest declaration + conformance.escalate events",
+        evidence_kind="manifest declaration only (conformance escalation events are counted for information, not "
+        "read as evidence)",
         citations={
             "osfi-e23": _pending(),
             "eu-ai-act": _eu("Article 14 (Human Oversight) ¶1 — effective "
