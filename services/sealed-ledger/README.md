@@ -552,6 +552,12 @@ from before Phase G, so an HTTP caller holding the perimeter secret can still
 append an `operator.*` event there, and nothing in the stored event tells it
 apart from one the observer wrote. Read these events from an armed ledger.
 
+**Alerts.** An alert that could not be sent is kept and sent again: after 30 s, then doubling up to every 15 minutes,
+and it is removed only when a send is confirmed. There is one waiting alert per event type and service (a newer reading
+replaces the waiting one). Waiting alerts are kept in `ledger-observer/pending-alerts.json` under `FIELD_DATA_DIR`
+across a restart; without `FIELD_DATA_DIR` they are held in memory only. `/health` shows `alerts_pending`; failed
+attempts are counted in `alerts_failed`, and a failed save of the waiting alerts in `alerts_pending_save_failures`. Delivery is at least once: a send whose confirmation is lost is repeated.
+
 ## Enforced vs. Declared
 
 | Guarantee | Status | How |
