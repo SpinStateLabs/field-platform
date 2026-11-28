@@ -23,6 +23,7 @@ C4 — the window, the canary row and the signature fields:
 from __future__ import annotations
 
 import os
+import re
 import time
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
@@ -42,6 +43,25 @@ from attestation_reporter.window import InvalidWindow, Window, normalise_bound, 
 CANARY_AGENTS = frozenset({"canary-gb10", "canary-fly", "canary-gb10-retired", "canary-fly-retired"})
 
 POINT_IN_TIME = "point-in-time: at generation"
+#: a figure with no value because the estate sets no policy was not "unread": it is not listed in ``not_read``
+NO_ESTATE_POLICY = "no estate policy"
+#: the integrity row's two notes that mean the period's events may not all be counted
+_PERIOD_MARKERS = ("window starts before the earliest live event", "earliest-live check unavailable")
+PERIOD_NOT_CHECKED = ("Period not checked: the ledger integrity check gave no result, so whether every event of the "
+                      "period is in the live ledger is unknown")
+_LOWER_BOUND = re.compile(r"a lower bound: [0-9]+ manifest ref\(s\) could not be read")
+#: the ledger's detail when the estate simply sets no retention policy; any other detail with no_estate_policy is a fault
+_POLICY_UNSET = f"{NO_ESTATE_POLICY} (FIELD_LEDGER_RETENTION_DAYS unset)"
+#: a value the ledger quotes after "=" in its detail (a setting's content): not repeated in a pack
+_QUOTED_VALUE = re.compile(r"""=('(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|-?[0-9]+)""")
+
+
+def ledger_reason(detail: object) -> str:
+    """The ledger's detail as one printable line without any quoted setting value, at most 200 characters."""
+    if not isinstance(detail, str):
+        return "no readable reason given"
+    line = " ".join("".join(c if c.isprintable() else " " for c in detail).split())
+    return _QUOTED_VALUE.sub("=<value>", line)[:200]
 UNREACHABLE = "service not configured/reachable at generation time"
 
 
@@ -75,12 +95,38 @@ class Section(BaseModel):
     metrics: list[Metric]
 
 
+def unread(sections: list[Section], integrity: Metric, retention_count: Metric) -> list[str]:
+    """What a pack could not read, one line each: every figure with no value (bar one the estate sets no policy for),
+    a period that may reach past the live ledger, and a count that is only a lower bound. Empty = nothing known."""
+    lines = [f"{m.name}: no value ({m.note or 'no reason recorded'})"
+             for s in sections for m in s.metrics
+             if m.status == "unavailable" and not (m.note or "").startswith(NO_ESTATE_POLICY)]
+    if integrity.status == "unavailable":
+        lines.append(PERIOD_NOT_CHECKED)
+    else:
+        note = integrity.note or ""
+        for marker in _PERIOD_MARKERS:
+            if marker in note:
+                lines.append(f"Period not fully read: {note[note.index(marker):]}")
+                break
+    if retention_count.status == "ok" and (found := _LOWER_BOUND.findall(retention_count.note or "")):
+        lines.append(f"{retention_count.name}: {found[-1]}")
+    return lines
+
+
 class BoardPack(BaseModel):
     org: str
     period: str
     window: Window
     generated_at: str
     sections: list[Section]
+    not_read: list[str] = Field(
+        default_factory=list,
+        description=(
+            "B2: what this pack could not read, inside the signed bytes. Absent — never an empty list — when nothing "
+            "is known to be unread, and on a pack made before the field."
+        ),
+    )
     method: str = (
         "every figure is a live query result from the named endpoint at "
         "generation time; basis=window figures count ledger events inside the "
@@ -128,6 +174,8 @@ class BoardPack(BaseModel):
         data = handler(self)
         if isinstance(data, dict) and data.get("signed_via") is None:
             data.pop("signed_via", None)
+        if isinstance(data, dict) and not data.get("not_read"):
+            data.pop("not_read", None)      # B2: the same rule, so earlier packs keep their signed bytes
         return data
 
     def all_metrics(self) -> list[Metric]:
@@ -385,8 +433,21 @@ class PackEngine:
         if not ok or not isinstance(data, dict):
             return unavailable(policy_name, "days", UNREACHABLE), unavailable(count_name, "manifests", UNREACHABLE)
         estate = data.get("estate_retention_days")
-        if data.get("status") == "no_estate_policy" or not isinstance(estate, int) or isinstance(estate, bool):
-            note = "no estate policy (FIELD_LEDGER_RETENTION_DAYS unset)"
+        status = data.get("status")
+        if status == "no_estate_policy" or not isinstance(estate, int) or isinstance(estate, bool):
+            # B2: only the ledger's own "no_estate_policy" is a configured absence. Anything else with no usable
+            # figure was not read, and must reach the pack's not_read list.
+            if status == "no_estate_policy" and data.get("detail") in (None, "", _POLICY_UNSET):
+                note = _POLICY_UNSET
+            elif status == "no_estate_policy":
+                # a policy that is set but unusable: not a configured absence, so it must reach not_read
+                note = ("the estate retention policy is not usable; the ledger says: "
+                        f"{ledger_reason(data.get('detail'))}")
+            elif status == "unavailable":
+                note = "the ledger reports its retention check as unavailable and gives no policy figure"
+            else:
+                note = ("the ledger's /retention/check answer carries no whole number of days for the estate policy "
+                        "— figure not published")
             return unavailable(policy_name, "days", note), unavailable(count_name, "manifests", note)
         policy = Metric(
             name=policy_name, value=estate, unit="days", source_query=query,
@@ -740,7 +801,7 @@ class PackEngine:
         integrity = self._integrity(window)
         retention_policy, retention_offending = self._retention_metrics()
 
-        return BoardPack(
+        pack = BoardPack(
             org=self.org,
             period=label,
             window=window,
@@ -764,3 +825,5 @@ class PackEngine:
                         metrics=[self._gate_verification_row(window)]),
             ],
         )
+        pack.not_read = unread(pack.sections, integrity, retention_offending)
+        return pack
